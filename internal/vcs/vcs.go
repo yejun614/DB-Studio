@@ -190,7 +190,7 @@ func asAPIError(err error) (*APIError, bool) {
 //
 // 이 함수는 SSRF를 완전히 막지 못한다(DNS는 나중에 바뀔 수 있다). 연동 설정은
 // 어드민만 할 수 있고 그들은 이미 DB 자격증명을 다루므로, 이 지점의 신뢰 경계는
-// "어드민을 신뢰한다"이며 README에 그렇게 적어 둔다.
+// "어드민을 신뢰한다"이며 docs/design/permissions.md에 그렇게 적어 둔다.
 func ValidateBaseURL(raw string) error {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
