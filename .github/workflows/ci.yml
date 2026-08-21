@@ -11,8 +11,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
-  pull_request:
+    tags: ["v*"]
   workflow_dispatch:
 
 # 같은 브랜치에 연달아 푸시하면 앞의 실행을 취소한다.
