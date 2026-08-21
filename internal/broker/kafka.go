@@ -448,13 +448,13 @@ func (k *Kafka) Collect(ctx context.Context) (*Metrics, error) {
 	}
 
 	m := &Metrics{
-		Health: ov.Health,
-		Backlog: ov.Backlog,
+		Health:    ov.Health,
+		Backlog:   ov.Backlog,
 		Consumers: ov.Consumers,
-		Topics: int64(len(topics)),
-		Groups: int64(len(groups)),
-		Nodes: int64(len(brokers)),
-		MaxLag: -1,
+		Topics:    int64(len(topics)),
+		Groups:    int64(len(groups)),
+		Nodes:     int64(len(brokers)),
+		MaxLag:    -1,
 	}
 	for _, t := range topics {
 		for _, p := range t.Partitions {

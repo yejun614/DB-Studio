@@ -102,17 +102,17 @@ type rabbitNode struct {
 }
 
 type rabbitQueue struct {
-	Name                   string  `json:"name"`
-	VHost                  string  `json:"vhost"`
-	State                  string  `json:"state"`
-	Messages               int64   `json:"messages"`
-	MessagesReady          int64   `json:"messages_ready"`
-	MessagesUnacknowledged int64   `json:"messages_unacknowledged"`
-	Consumers              int64   `json:"consumers"`
-	Memory                 int64   `json:"memory"`
-	Node                   string  `json:"node"`
-	Durable                bool    `json:"durable"`
-	IdleSince              string  `json:"idle_since"`
+	Name                   string `json:"name"`
+	VHost                  string `json:"vhost"`
+	State                  string `json:"state"`
+	Messages               int64  `json:"messages"`
+	MessagesReady          int64  `json:"messages_ready"`
+	MessagesUnacknowledged int64  `json:"messages_unacknowledged"`
+	Consumers              int64  `json:"consumers"`
+	Memory                 int64  `json:"memory"`
+	Node                   string `json:"node"`
+	Durable                bool   `json:"durable"`
+	IdleSince              string `json:"idle_since"`
 	MessageStats           struct {
 		PublishDetails    rateDetail `json:"publish_details"`
 		DeliverGetDetails rateDetail `json:"deliver_get_details"`
@@ -318,7 +318,7 @@ func (r *Rabbit) Exchanges(ctx context.Context) ([]Exchange, error) {
 		}
 		out = append(out, Exchange{
 			Name: name, VHost: e.VHost, Type: e.Type, Durable: e.Durable,
-			InRate: e.MessageStats.PublishInDetails.Rate,
+			InRate:  e.MessageStats.PublishInDetails.Rate,
 			OutRate: e.MessageStats.PublishOutDetails.Rate,
 		})
 	}
@@ -328,15 +328,15 @@ func (r *Rabbit) Exchanges(ctx context.Context) ([]Exchange, error) {
 // Connections는 붙어 있는 클라이언트 목록이다.
 func (r *Rabbit) Connections(ctx context.Context) ([]Conn, error) {
 	var raw []struct {
-		Name      string `json:"name"`
-		User      string `json:"user"`
-		VHost     string `json:"vhost"`
-		State     string `json:"state"`
-		Channels  int    `json:"channels"`
-		PeerHost  string `json:"peer_host"`
-		PeerPort  int    `json:"peer_port"`
-		Protocol  string `json:"protocol"`
-		ConnectedAt int64 `json:"connected_at"`
+		Name        string `json:"name"`
+		User        string `json:"user"`
+		VHost       string `json:"vhost"`
+		State       string `json:"state"`
+		Channels    int    `json:"channels"`
+		PeerHost    string `json:"peer_host"`
+		PeerPort    int    `json:"peer_port"`
+		Protocol    string `json:"protocol"`
+		ConnectedAt int64  `json:"connected_at"`
 	}
 	if err := r.get(ctx, "/api/connections", nil, &raw); err != nil {
 		return nil, err

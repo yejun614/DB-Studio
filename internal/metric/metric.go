@@ -153,22 +153,22 @@ const (
 	// 큐 깊이·랙은 그 자체로 좋지도 나쁘지도 않다 — 소비자가 따라오고 있으면
 	// 정상이고, 따라오지 못하면 장애의 전조다. 그래서 항상 "쌓인 양"과
 	// "그것을 줄이는 쪽"을 함께 본다.
-	NameBrokerHealth   = "broker.health"     // 0=정상 1=주의 2=위험 (-1=모름)
-	NameBrokerBacklog  = "broker.backlog"    // 밀린 메시지 (RabbitMQ: 큐 합, Kafka: 총 랙)
-	NameBrokerUnacked   = "broker.unacked"    // 나갔지만 확인되지 않은 메시지 (RabbitMQ)
-	NameBrokerConsumers = "broker.consumers" // 소비자 수 (RabbitMQ) / 그룹 멤버 수 (Kafka)
-	NameBrokerStarved   = "broker.starved"    // 메시지는 있는데 소비자가 없는 큐·그룹 수
-	NameBrokerQueues    = "broker.queues"     // 큐 수 (RabbitMQ)
-	NameBrokerTopics    = "broker.topics"     // 토픽 수 (Kafka)
-	NameBrokerGroups    = "broker.groups"     // 컨슈머 그룹 수 (Kafka)
-	NameBrokerNodes     = "broker.nodes"      // 노드 수
-	NameBrokerNodesDown = "broker.nodes.down" // 죽은 노드 수
-	NameBrokerPublish   = "broker.publish_rate" // 초당 발행 (RabbitMQ)
-	NameBrokerDeliver   = "broker.deliver_rate" // 초당 소비 (RabbitMQ)
-	NameBrokerMaxLag    = "broker.max_lag"      // 그룹 하나의 최대 랙 (Kafka)
-	NameBrokerOffline   = "broker.offline"      // 리더 없는 파티션 수 (Kafka)
+	NameBrokerHealth    = "broker.health"           // 0=정상 1=주의 2=위험 (-1=모름)
+	NameBrokerBacklog   = "broker.backlog"          // 밀린 메시지 (RabbitMQ: 큐 합, Kafka: 총 랙)
+	NameBrokerUnacked   = "broker.unacked"          // 나갔지만 확인되지 않은 메시지 (RabbitMQ)
+	NameBrokerConsumers = "broker.consumers"        // 소비자 수 (RabbitMQ) / 그룹 멤버 수 (Kafka)
+	NameBrokerStarved   = "broker.starved"          // 메시지는 있는데 소비자가 없는 큐·그룹 수
+	NameBrokerQueues    = "broker.queues"           // 큐 수 (RabbitMQ)
+	NameBrokerTopics    = "broker.topics"           // 토픽 수 (Kafka)
+	NameBrokerGroups    = "broker.groups"           // 컨슈머 그룹 수 (Kafka)
+	NameBrokerNodes     = "broker.nodes"            // 노드 수
+	NameBrokerNodesDown = "broker.nodes.down"       // 죽은 노드 수
+	NameBrokerPublish   = "broker.publish_rate"     // 초당 발행 (RabbitMQ)
+	NameBrokerDeliver   = "broker.deliver_rate"     // 초당 소비 (RabbitMQ)
+	NameBrokerMaxLag    = "broker.max_lag"          // 그룹 하나의 최대 랙 (Kafka)
+	NameBrokerOffline   = "broker.offline"          // 리더 없는 파티션 수 (Kafka)
 	NameBrokerUnderRep  = "broker.under_replicated" // 복제본 부족 파티션 수 (Kafka)
-	NameBrokerAlarms    = "broker.alarms"            // 메모리·디스크 알람 수 (RabbitMQ)
+	NameBrokerAlarms    = "broker.alarms"           // 메모리·디스크 알람 수 (RabbitMQ)
 )
 
 // Meta는 지표의 표시 정보다.
@@ -253,7 +253,7 @@ var catalog = map[string]Meta{
 	NameBrokerQueues: {Label: "큐", Unit: UnitCount, Help: "RabbitMQ 큐 개수"},
 	NameBrokerTopics: {Label: "토픽", Unit: UnitCount, Help: "Kafka 토픽 개수"},
 	NameBrokerGroups: {Label: "컨슈머 그룹", Unit: UnitCount, Help: "Kafka 컨슈머 그룹 개수"},
-	NameBrokerNodes: {Label: "노드", Unit: UnitCount, Help: "클러스터를 이루는 노드 수"},
+	NameBrokerNodes:  {Label: "노드", Unit: UnitCount, Help: "클러스터를 이루는 노드 수"},
 	NameBrokerNodesDown: {Label: "비정상 노드", Unit: UnitCount, Primary: true,
 		Help: "멈춰 있는 노드 수. 0이 아니면 복제본이 줄어든 상태입니다"},
 	NameBrokerPublish: {Label: "초당 발행", Unit: UnitPerSec,

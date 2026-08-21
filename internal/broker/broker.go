@@ -53,8 +53,8 @@ type Overview struct {
 	// 숫자는 "밀린 게 얼마나 되나"이고, 그 답은 브로커 종류와 무관하게 같은 뜻이다.
 	Backlog int64 `json:"backlog"`
 	// Consumers는 그 적체를 줄이고 있는 쪽의 수다(소비자 또는 컨슈머 그룹 멤버).
-	Consumers int64  `json:"consumers"`
-	Facts     []Fact `json:"facts"`
+	Consumers int64    `json:"consumers"`
+	Facts     []Fact   `json:"facts"`
 	Notes     []string `json:"notes,omitempty"`
 }
 
@@ -64,13 +64,13 @@ type Queue struct {
 	VHost string `json:"vhost"`
 	State string `json:"state"`
 	// Ready는 소비자에게 아직 나가지 않은 메시지, Unacked는 나갔지만 확인되지 않은 메시지다.
-	Ready     int64   `json:"ready"`
-	Unacked   int64   `json:"unacked"`
-	Total     int64   `json:"total"`
-	Consumers int64   `json:"consumers"`
-	Memory    int64   `json:"memory"`
-	Node      string  `json:"node,omitempty"`
-	Durable   bool    `json:"durable"`
+	Ready       int64   `json:"ready"`
+	Unacked     int64   `json:"unacked"`
+	Total       int64   `json:"total"`
+	Consumers   int64   `json:"consumers"`
+	Memory      int64   `json:"memory"`
+	Node        string  `json:"node,omitempty"`
+	Durable     bool    `json:"durable"`
 	PublishRate float64 `json:"publishRate"`
 	DeliverRate float64 `json:"deliverRate"`
 	IdleSince   string  `json:"idleSince,omitempty"`
@@ -138,8 +138,8 @@ type Group struct {
 	Members  int    `json:"members"`
 	Protocol string `json:"protocol,omitempty"`
 	// Lag은 이 그룹이 아직 읽지 못한 메시지 수의 합이다. 브로커 운영에서 가장 중요한 숫자다.
-	Lag    int64       `json:"lag"`
-	Topics []GroupLag  `json:"topics,omitempty"`
+	Lag    int64      `json:"lag"`
+	Topics []GroupLag `json:"topics,omitempty"`
 }
 
 // GroupLag는 그룹이 구독 중인 토픽 하나의 랙이다.
@@ -150,13 +150,13 @@ type GroupLag struct {
 
 // Conn은 브로커에 붙어 있는 클라이언트 연결 하나다(RabbitMQ).
 type Conn struct {
-	Name      string `json:"name"`
-	User      string `json:"user"`
-	VHost     string `json:"vhost"`
-	State     string `json:"state"`
-	Channels  int    `json:"channels"`
-	Peer      string `json:"peer"`
-	Protocol  string `json:"protocol,omitempty"`
+	Name        string    `json:"name"`
+	User        string    `json:"user"`
+	VHost       string    `json:"vhost"`
+	State       string    `json:"state"`
+	Channels    int       `json:"channels"`
+	Peer        string    `json:"peer"`
+	Protocol    string    `json:"protocol,omitempty"`
 	ConnectedAt time.Time `json:"connectedAt,omitempty"`
 }
 
@@ -181,11 +181,11 @@ type Metrics struct {
 	// Starved는 "메시지는 있는데 소비자가 없는" 큐·그룹의 수다.
 	Starved int64
 	// Queues/Topics/Groups/Nodes는 규모다.
-	Queues     int64
-	Topics     int64
-	Groups     int64
-	Nodes      int64
-	NodesDown  int64
+	Queues    int64
+	Topics    int64
+	Groups    int64
+	Nodes     int64
+	NodesDown int64
 	// PublishRate/DeliverRate는 초당 메시지다(RabbitMQ).
 	PublishRate float64
 	DeliverRate float64
