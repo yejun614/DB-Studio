@@ -1,0 +1,4116 @@
+/* DB Studio — 프레임워크 없는 단일 스타일시트
+ *
+ * 디자인 토큰과 컴포넌트 형태는 shadcn/ui 규약을 따른다.
+ *
+ * 1) 색은 HSL 3요소만 `--h-*`에 적어 두고 `hsl(var(--h-x) / 0.5)`로 조합한다.
+ *    hover·선택·비활성처럼 "배경 위에 얹는 상태"를 색을 새로 정의하지 않고 만들 수 있다.
+ * 2) 팔레트는 무채색이 기본이고, 색은 의미가 있을 때만 쓴다 —
+ *    파괴적 동작, 상태(정상/경고/오류), 차트 계열.
+ * 3) 화면 전체에서 쓰는 완성 색(`--bg`, `--text` …)은 아래에서 한 번만 만든다.
+ *    페이지별 규칙은 그것만 참조하므로 테마를 바꿀 때 이 블록만 손대면 된다.
+ */
+
+:root {
+  color-scheme: light;
+
+  --h-background: 0 0% 100%;
+  --h-foreground: 240 10% 3.9%;
+  --h-card: 0 0% 100%;
+  --h-muted: 240 4.8% 95.9%;
+  --h-muted-foreground: 240 3.8% 46.1%;
+  --h-primary: 240 5.9% 10%;
+  --h-primary-foreground: 0 0% 98%;
+  --h-border: 240 5.9% 90%;
+  --h-ring: 240 5.9% 10%;
+
+  /* 의미색. 밝은 배경에서 글자로도 읽혀야 하므로 명도를 낮게 잡는다. */
+  --h-destructive: 0 72% 51%;
+  --h-destructive-foreground: 0 0% 98%;
+  --h-danger: 0 72% 42%;
+  --h-success: 142 72% 29%;
+  --h-warning: 25 90% 37%;
+  --h-info: 201 90% 33%;
+  --h-violet: 263 70% 50%;
+
+  /* 차트 색. 컨트롤은 무채색이므로 데이터에만 색을 쓴다. */
+  --h-chart-1: 221 83% 53%;
+
+  /* DB 브랜드 색. 로고를 알아보는 단서의 절반은 색이므로 원본 값을 쓴다.
+   * (팔레트 규칙의 예외다 — 여기서 색은 장식이 아니라 식별 정보다.) */
+  --db-mysql: #4479a1;
+  --db-postgres: #4169e1;
+  --db-mssql: #cc2927;
+  --db-oracle: #e02a20;
+  --db-sqlite: #003b57;
+  --db-mongodb: #47a248;
+  --db-redis: #ff4438;
+
+  /* ---- 완성 색 (화면 전체에서 이 이름만 쓴다) ---- */
+  --bg: hsl(var(--h-background));
+  --bg-alt: hsl(var(--h-muted) / 0.4);
+  --surface: hsl(var(--h-card));
+  --surface-2: hsl(var(--h-muted));
+  --border: hsl(var(--h-border));
+  --border-soft: hsl(var(--h-border) / 0.6);
+  --text: hsl(var(--h-foreground));
+  --text-dim: hsl(var(--h-muted-foreground));
+  --text-mute: hsl(var(--h-muted-foreground) / 0.85);
+  --primary: hsl(var(--h-primary));
+  --primary-dim: hsl(var(--h-primary) / 0.9);
+  --accent: hsl(var(--h-violet));
+  --success: hsl(var(--h-success));
+  --warn: hsl(var(--h-warning));
+  --danger: hsl(var(--h-danger));
+  --info: hsl(var(--h-info));
+  --chart-1: hsl(var(--h-chart-1));
+
+  --radius: 0.75rem;
+  --radius-sm: 0.375rem;
+  --radius-lg: 0.875rem;
+  --shadow-sm: 0 1px 2px 0 hsl(var(--h-foreground) / 0.06);
+  --shadow: 0 10px 15px -3px hsl(var(--h-foreground) / 0.1),
+            0 4px 6px -4px hsl(var(--h-foreground) / 0.1);
+
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  /* 본문 폰트는 함께 담아 서빙하는 Pretendard JP다(/fonts/pretendard-jp/).
+   * 뒤의 목록은 폰트를 못 받았을 때를 위한 것이라 그대로 남긴다 — 한글이
+   * 시스템 기본 고딕으로라도 읽혀야 한다. */
+  --sans: "Pretendard JP Variable", "Pretendard JP", "Pretendard", "Inter",
+    system-ui, -apple-system, "Segoe UI", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
+}
+
+/* 다크 팔레트를 두 곳에 적는 이유: 시스템 설정을 기본으로 따르되,
+ * 사용자가 직접 고른 테마(data-theme)가 항상 이긴다. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { color-scheme: dark; }
+  :root:not([data-theme="light"]) {
+    --h-background: 240 10% 3.9%;
+    --h-foreground: 0 0% 98%;
+    --h-card: 240 10% 5.5%;
+    --h-muted: 240 3.7% 15.9%;
+    --h-muted-foreground: 240 5% 64.9%;
+    --h-primary: 0 0% 98%;
+    --h-primary-foreground: 240 5.9% 10%;
+    --h-border: 240 3.7% 17%;
+    --h-ring: 240 4.9% 83.9%;
+    --h-destructive: 0 63% 47%;
+    --h-destructive-foreground: 0 0% 98%;
+    --h-danger: 0 84% 68%;
+    --h-success: 142 69% 58%;
+    --h-warning: 38 92% 60%;
+    --h-info: 199 89% 64%;
+    --h-violet: 263 85% 74%;
+    --h-chart-1: 217 91% 65%;
+
+    /* 어두운 배경에서 묻히는 브랜드 색만 밝은 쪽으로 옮긴다.
+     * SQLite의 남색(#003b57)은 배경과 거의 같은 명도라 아예 보이지 않는다. */
+    --db-mysql: #6aa8d4;
+    --db-postgres: #7b96f0;
+    --db-mssql: #e8635b;
+    --db-sqlite: #59a8cf;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --h-background: 240 10% 3.9%;
+  --h-foreground: 0 0% 98%;
+  --h-card: 240 10% 5.5%;
+  --h-muted: 240 3.7% 15.9%;
+  --h-muted-foreground: 240 5% 64.9%;
+  --h-primary: 0 0% 98%;
+  --h-primary-foreground: 240 5.9% 10%;
+  --h-border: 240 3.7% 17%;
+  --h-ring: 240 4.9% 83.9%;
+  --h-destructive: 0 63% 47%;
+  --h-destructive-foreground: 0 0% 98%;
+  --h-danger: 0 84% 68%;
+  --h-success: 142 69% 58%;
+  --h-warning: 38 92% 60%;
+  --h-info: 199 89% 64%;
+  --h-violet: 263 85% 74%;
+  --h-chart-1: 217 91% 65%;
+
+  --db-mysql: #6aa8d4;
+  --db-postgres: #7b96f0;
+  --db-mssql: #e8635b;
+  --db-sqlite: #59a8cf;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* 제목은 자간을 좁힌다(tracking-tight). 같은 크기라도 밀도가 높아 보인다. */
+h1, h2, h3, h4 { letter-spacing: -0.015em; font-weight: 600; }
+
+a { color: inherit; text-decoration: none; text-underline-offset: 4px; }
+a:hover { text-decoration: underline; }
+code { font-family: var(--mono); font-size: 0.9em; }
+
+/* 포커스 링을 한 곳에서 정의한다. 컴포넌트마다 다르게 그리면
+ * 키보드로 이동할 때 어디에 있는지 놓치게 된다. */
+:where(a, button, summary, [tabindex]):focus-visible {
+  outline: 2px solid hsl(var(--h-ring));
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+#app { min-height: 100vh; }
+
+.app-loading {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  color: var(--text-mute);
+}
+
+.muted { color: var(--text-mute); }
+.nowrap { white-space: nowrap; }
+.icon { flex: none; }
+
+/* ---------- 인증 화면 ---------- */
+
+.auth-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--bg);
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 380px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 32px;
+  box-shadow: var(--shadow-sm);
+  text-align: center;
+}
+
+.auth-brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--text);
+}
+
+.auth-brand h1 { font-size: 22px; margin: 0; color: var(--text); }
+.auth-sub { color: var(--text-dim); margin: 6px 0 24px; font-size: 13.5px; }
+.auth-form { display: flex; flex-direction: column; gap: 14px; text-align: left; }
+
+/* ---------- 셸 레이아웃 ---------- */
+
+.shell {
+  display: grid;
+  /* minmax(0, 1fr): 1fr 트랙의 최소 크기는 기본이 auto(=내용의 min-content)여서,
+   * 넓은 표가 하나라도 있으면 트랙이 뷰포트보다 커지고 페이지 전체가 가로로 밀린다.
+   * 0으로 고정하면 본문이 항상 남은 폭에 맞고, 넘치는 표는 카드 안에서 스크롤한다. */
+  grid-template-columns: var(--sidebar-w, 240px) minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.sidebar {
+  background: var(--bg-alt);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: 16px 12px;
+  gap: 20px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  /* 폭 조절 손잡이의 기준점. 손잡이는 경계선 위에 겹쳐 놓는다. */
+  isolation: isolate;
+}
+
+/* 폭 조절 손잡이. 경계선 위에 얇게 겹쳐 두고, 잡을 수 있는 영역은 그보다 넓게 준다
+ * (1px짜리 목표는 마우스로 정확히 잡기 어렵다). */
+.sidebar-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -3px;
+  width: 7px;
+  cursor: col-resize;
+  z-index: 5;
+  background: transparent;
+  transition: background 0.12s;
+}
+.sidebar-resize:hover,
+.sidebar-resize:focus-visible,
+body.is-resizing .sidebar-resize { background: hsl(var(--h-ring) / 0.35); }
+.sidebar-resize:focus-visible { outline: none; }
+/* 드래그 중에는 문서 전체가 커서를 유지하고 글자가 선택되지 않게 한다.
+ * 그러지 않으면 사이드바 밖으로 나가는 순간 텍스트 선택이 시작된다. */
+body.is-resizing { cursor: col-resize; user-select: none; }
+
+/* 좁은 화면 전용 상단 막대. 넓은 화면에서는 자리를 차지하지 않는다. */
+.topbar { display: none; }
+.nav-backdrop { display: none; }
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 600;
+  font-size: 15px;
+  letter-spacing: -0.015em;
+  color: var(--text);
+  padding: 6px 8px;
+}
+.brand:hover { text-decoration: none; }
+
+.nav { display: flex; flex-direction: column; gap: 2px; flex: 1; overflow-y: auto; }
+
+/* 묶음 제목. 항목보다 눈에 띄면 안 된다 — 찾는 것은 항목이고 제목은 그 위치를
+ * 알려주는 표지일 뿐이다. 그래서 작고 흐리게 두고, 위에 선을 그어 경계만 만든다. */
+.nav-section {
+  margin: 14px 10px 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-soft);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-mute);
+}
+/* 첫 묶음 위에는 선을 긋지 않는다. 브랜드 바로 아래에 선이 하나 더 생기면
+ * 그 사이 공간이 의미 없이 끊겨 보인다. */
+.nav-section:first-child { margin-top: 2px; padding-top: 0; border-top: 0; }
+
+/* 내비게이션 항목은 shadcn의 ghost 버튼과 같은 규칙을 쓴다:
+ * 평소에는 배경이 없고, hover·선택 시 accent 배경만 얹는다. */
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font-size: 13.5px;
+  font-weight: 500;
+  transition: background-color 0.15s, color 0.15s;
+}
+.nav-item:hover { background: hsl(var(--h-muted) / 0.7); color: var(--text); text-decoration: none; }
+/* 팝업으로 여는 도구는 링크가 아니라 버튼이다. 생김새는 같아야 한다 —
+ * 여기서 모양이 달라지면 "이건 왜 다르지"를 먼저 생각하게 된다. */
+.nav-tool {
+  background: none; border: none; width: 100%; text-align: left;
+  font-family: inherit; cursor: pointer;
+}
+.nav-item.active { background: var(--surface-2); color: var(--text); }
+.nav-item .icon { color: var(--text-mute); }
+.nav-item.active .icon, .nav-item:hover .icon { color: var(--text); }
+
+.sidebar-foot { display: flex; flex-direction: column; gap: 8px; }
+
+.user-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  text-decoration: none;
+}
+.user-chip:hover { background: var(--surface-2); border-color: var(--text-mute); }
+
+.avatar {
+  width: 32px; height: 32px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--text);
+  display: grid;
+  place-items: center;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+/* 아이콘 아바타는 이니셜보다 한 톤 흐리게 둔다. 사이드바에서 이름보다 먼저
+ * 눈에 들어오면 안 된다 — 신원 표시이고 강조 요소가 아니다. */
+.avatar-icon { color: var(--text-mute); }
+.avatar-icon .icon { display: block; }
+
+.user-meta { min-width: 0; }
+.user-name { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.user-role { font-size: 11.5px; color: var(--text-mute); }
+
+/* 화면 폭을 그대로 쓴다. 관리 도구는 표와 카드가 많아 폭이 넓을수록
+ * 한 화면에 들어오는 정보가 늘어난다 — 읽기 폭 제한은 글 중심 화면의 규칙이다. */
+/* 본문 여백을 변수로 둔다. 뷰포트 높이를 꽉 채워야 하는 화면(어시스턴트)이
+ * 이 값을 빼서 자기 높이를 계산하므로, 두 곳에 같은 숫자를 적으면 언젠가 어긋난다. */
+:root { --content-pad-top: 28px; --content-pad-bottom: 64px; }
+.content { padding: var(--content-pad-top) 32px var(--content-pad-bottom); }
+
+/* ---------- 페이지 헤더 ---------- */
+
+.page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+}
+.page-head h1 { font-size: 22px; margin: 0; }
+.page-sub { color: var(--text-dim); margin: 5px 0 0; font-size: 13.5px; }
+.page-actions { display: flex; gap: 8px; align-items: center; }
+
+/* ---------- 카드 / 테이블 ---------- */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  margin-bottom: 16px;
+  box-shadow: var(--shadow-sm);
+  /* 넓은 표는 카드 안에서 가로 스크롤한다. 표는 min-content 아래로 줄어들지 않으므로
+   * 이것이 없으면 좁은 화면에서 페이지 전체가 가로로 밀린다. */
+  overflow-x: auto;
+}
+
+.card-title { font-size: 15px; margin: 0 0 16px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* 표 머리글은 대문자·자간 대신 옅은 색과 중간 굵기로 구분한다.
+ * 한글에는 대문자가 없어 uppercase가 아무 효과도 내지 못한다. */
+.table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.table th {
+  text-align: left;
+  font-weight: 500;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  padding: 0 12px 10px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.table td { padding: 11px 12px; border-bottom: 1px solid var(--border-soft); vertical-align: middle; }
+.table tbody tr:last-child td { border-bottom: none; }
+.table tbody tr:hover { background: hsl(var(--h-muted) / 0.5); }
+.table .row-muted { opacity: 0.5; }
+
+.cell-main { display: flex; align-items: center; gap: 7px; font-weight: 500; }
+.cell-sub { color: var(--text-mute); font-size: 12px; margin-top: 2px; }
+/* 셀 안의 동작 버튼 줄.
+ *
+ * .cell-sub(보조 텍스트 스타일)에 버튼을 담으면 12px/18px 글줄 위에 인라인 요소로
+ * 얹혀 서로 다른 높이의 버튼이 baseline에 걸리고, 아이콘이 있는 버튼만 아래로 밀린다.
+ * 버튼 줄은 텍스트가 아니라 배치의 문제이므로 flex로 따로 둔다. */
+.cell-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.col-actions { width: 1%; }
+.col-check { width: 1%; text-align: center; }
+.row-actions { display: flex; gap: 2px; justify-content: flex-end; }
+
+/* ---------- 버튼 ---------- */
+
+/* 기본 버튼은 shadcn의 outline 변형이다: 테두리 + 배경색 없음.
+ * 화면에 버튼이 많은 관리 도구에서 solid 버튼을 남발하면
+ * "지금 눌러야 하는 것"이 어느 것인지 알 수 없게 된다. */
+/* 버튼 줄. 지금까지 규칙이 없어 버튼들이 붙어 있었고, 아이콘이 있는 것과
+ * 없는 것의 기준선도 어긋나 보였다. */
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+/* 줄 안의 버튼은 높이를 맞춘다 — 하나만 커 보이면 그것만 다른 종류로 읽힌다. */
+.form-actions > .btn { height: 36px; }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s, opacity 0.15s;
+  white-space: nowrap;
+}
+.btn:hover:not(:disabled) { background: var(--surface-2); text-decoration: none; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: hsl(var(--h-primary-foreground));
+}
+.btn-primary:hover:not(:disabled) { background: var(--primary-dim); border-color: var(--primary-dim); }
+
+.btn-danger {
+  background: hsl(var(--h-destructive));
+  border-color: hsl(var(--h-destructive));
+  color: hsl(var(--h-destructive-foreground));
+}
+.btn-danger:hover:not(:disabled) { background: hsl(var(--h-destructive) / 0.9); border-color: hsl(var(--h-destructive) / 0.9); }
+
+.btn-danger-ghost { color: var(--danger); }
+.btn-danger-ghost:hover:not(:disabled) {
+  background: hsl(var(--h-danger) / 0.1);
+  border-color: hsl(var(--h-danger) / 0.4);
+}
+
+.btn-small { height: 32px; padding: 0 12px; font-size: 12.5px; gap: 6px; }
+.btn-block { width: 100%; }
+
+.icon-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 32px; height: 32px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+.icon-btn:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
+.icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.icon-btn.danger:hover:not(:disabled) { color: var(--danger); background: hsl(var(--h-danger) / 0.1); }
+
+/* ---------- 폼 ---------- */
+
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field-label { font-size: 13px; font-weight: 500; color: var(--text); }
+.field-help { font-size: 12.5px; color: var(--text-mute); line-height: 1.5; }
+.warn-text { color: var(--warn); }
+
+.field-inline { flex-direction: row; align-items: center; gap: 8px; }
+.field-inline .field-label { white-space: nowrap; color: var(--text-dim); }
+
+.input {
+  width: 100%;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13.5px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.input::placeholder { color: var(--text-mute); }
+.input:focus-visible {
+  outline: none;
+  border-color: hsl(var(--h-ring));
+  box-shadow: 0 0 0 3px hsl(var(--h-ring) / 0.15);
+}
+.input:disabled { opacity: 0.5; cursor: not-allowed; }
+/* textarea는 rows로 높이를 정한다. .input의 고정 높이가 그것을 덮으면
+ * 여러 줄 입력이 한 줄로 눌린다. */
+textarea.input { height: auto; min-height: 66px; padding: 8px 12px; line-height: 1.5; }
+.textarea { resize: vertical; font-size: 13.5px; }
+
+select.input { cursor: pointer; appearance: none; padding-right: 30px;
+  /* 화살표를 배경 이미지로 그린다. 외부 아이콘 파일 없이 단일 바이너리를 유지한다.
+   *
+   * 세로 위치를 위에서 15px이 아니라 **가운데 기준**으로 잡는 이유: 이 앱에는
+   * 기본 높이(36px)가 아닌 select가 여럿 있다(트리거 파라미터, ERD·어시스턴트 헤더).
+   * 고정값으로 두면 그런 자리에서 화살표가 아래로 밀려 반쯤 잘리거나 보이지 않는다. */
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+                    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 15px) calc(50% - 1px), calc(100% - 11px) calc(50% - 1px);
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
+}
+option { background: var(--surface); color: var(--text); }
+
+.checkbox { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13.5px; }
+.checkbox input { width: 16px; height: 16px; accent-color: hsl(var(--h-primary)); cursor: pointer; }
+
+/* 서로 배타적인 선택지를 세로로 늘어놓는다. 가로로 놓으면 문장이 길 때 줄이
+ * 접히면서 어느 설명이 어느 버튼의 것인지 알 수 없게 된다. */
+.radio-list { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.option-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+.form-section {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+}
+.form-section summary { cursor: pointer; font-size: 13px; font-weight: 500; color: var(--text-dim); }
+.form-section > .option-grid { margin-top: 12px; }
+
+.filter-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 14px 18px; }
+
+/* ---------- 모달 (shadcn Dialog) ---------- */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: hsl(0 0% 0% / 0.8);
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  z-index: 100;
+  animation: overlay-in 0.15s ease-out;
+}
+
+.modal {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 48px);
+  animation: dialog-in 0.15s ease-out;
+}
+
+@keyframes overlay-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes dialog-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: none; }
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 20px 20px 12px;
+}
+.modal-head h2 { font-size: 16px; margin: 0; }
+
+.modal-body {
+  padding: 8px 20px 20px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.modal-message { margin: 0; color: var(--text-dim); line-height: 1.6; font-size: 13.5px; }
+
+.modal-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--border);
+}
+
+.secret-box {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.secret-box code { font-size: 15px; letter-spacing: 0.04em; user-select: all; word-break: break-all; }
+
+/* ---------- 배지 / 칩 ---------- */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 9px;
+  border-radius: 9999px;
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.5;
+  border: 1px solid;
+  white-space: nowrap;
+}
+.badge-neutral { color: var(--text-dim); border-color: var(--border); background: var(--surface-2); }
+.badge-info { color: var(--info); border-color: hsl(var(--h-info) / 0.3); background: hsl(var(--h-info) / 0.1); }
+.badge-accent { color: var(--accent); border-color: hsl(var(--h-violet) / 0.3); background: hsl(var(--h-violet) / 0.1); }
+.badge-success { color: var(--success); border-color: hsl(var(--h-success) / 0.3); background: hsl(var(--h-success) / 0.1); }
+.badge-warn { color: var(--warn); border-color: hsl(var(--h-warning) / 0.3); background: hsl(var(--h-warning) / 0.1); }
+.badge-danger { color: var(--danger); border-color: hsl(var(--h-danger) / 0.3); background: hsl(var(--h-danger) / 0.1); }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  background: var(--surface-2);
+  border: 1px solid transparent;
+  color: var(--text-dim);
+}
+.chip b { font-variant-numeric: tabular-nums; color: var(--text); }
+.chip-info { color: var(--info); }
+.chip-accent { color: var(--accent); }
+.chip-warn { color: var(--warn); }
+
+.tag-row { display: flex; gap: 5px; flex-wrap: wrap; }
+
+/* ---------- 커넥션 카드 ---------- */
+
+.conn-groups { display: flex; flex-direction: column; gap: 26px; }
+
+.group-title {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-mute);
+  margin: 0 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.group-count {
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 20px;
+  padding: 0 7px;
+  font-size: 11px;
+}
+
+.conn-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+  gap: 14px;
+}
+
+.conn-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 15px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+.conn-card-locked { opacity: 0.62; }
+
+.conn-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+/* ---------- DB 종류 로고 ---------- */
+
+/* 로고는 줄 안에서 절대 늘어나거나 줄지 않는다. flex 안에서 크기가 흔들리면
+   이름 길이에 따라 줄마다 로고 크기가 달라 보인다. */
+.db-logo { flex: none; color: var(--text-dim); }
+.db-logo-mysql { color: var(--db-mysql); }
+.db-logo-postgres { color: var(--db-postgres); }
+.db-logo-mssql { color: var(--db-mssql); }
+.db-logo-oracle { color: var(--db-oracle); }
+.db-logo-sqlite { color: var(--db-sqlite); }
+.db-logo-mongodb { color: var(--db-mongodb); }
+.db-logo-redis { color: var(--db-redis); }
+
+/* 글줄 안에 섞여 들어갈 때만 기준선을 맞춘다(표 셀, 문장 중간).
+   flex 컨테이너 안에서는 align-items가 이미 맞춰 주므로 건드리지 않는다. */
+.db-logo-inline { vertical-align: -0.18em; margin-right: 6px; }
+
+.conn-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.conn-title h3 { font-size: 14.5px; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.dot-ok { background: var(--success); box-shadow: 0 0 0 3px hsl(var(--h-success) / 0.2); }
+.dot-fail { background: var(--danger); box-shadow: 0 0 0 3px hsl(var(--h-danger) / 0.2); }
+.dot-unknown { background: var(--text-mute); }
+
+.conn-meta { margin: 0; display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; }
+.meta-row { display: grid; grid-template-columns: 74px 1fr; gap: 8px; align-items: center; }
+.meta-row dt { color: var(--text-mute); font-size: 11.5px; }
+.meta-row dd { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 12px; }
+
+.conn-note { margin: 0; font-size: 12px; color: var(--text-dim); }
+.conn-error {
+  margin: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--danger);
+  background: hsl(var(--h-danger) / 0.08);
+  border-radius: var(--radius-sm);
+  padding: 7px 9px;
+  word-break: break-word;
+}
+
+.conn-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-soft);
+}
+.cap-hints { display: flex; gap: 4px; margin-left: auto; }
+
+.test-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.test-result { font-size: 12.5px; }
+.ok-text { color: var(--success); display: inline-flex; align-items: center; gap: 5px; }
+.err-text { color: var(--danger); display: inline-flex; align-items: flex-start; gap: 5px; }
+
+/* ---------- 권한 화면 ---------- */
+
+.access-head { display: flex; flex-direction: column; gap: 16px; }
+.access-user { display: flex; gap: 6px; align-items: center; }
+/* 전역 권한은 DB와 무관한 축이다. 아래의 DB 기본값과 선을 그어 구분한다 —
+   붙여 두면 "이 DB에 대한 매크로 권한"으로 읽힌다. */
+.access-global { border-bottom: 1px solid var(--border-soft); padding-bottom: 16px; }
+.access-summary { border-top: 1px solid var(--border-soft); padding-top: 14px; }
+.summary-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.summary-label { font-size: 12px; color: var(--text-mute); margin-right: 4px; }
+.access-table td { padding: 9px 12px; }
+
+/* 알림은 shadcn Alert 형태다: 테두리 + 옅은 배경, 아이콘은 왼쪽 위에 고정.
+ * 색만으로 구분하지 않고 제목을 굵게 써서 색을 구분하기 어려운 경우에도 읽힌다. */
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 13px 15px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13.5px;
+  line-height: 1.55;
+  /* 알림 문단은 다음 블록과 붙지 않게 카드와 같은 아래 간격을 둔다. */
+  margin: 0 0 16px;
+}
+/* 말풍선 안(AI 도구 오류 등)처럼 알림이 마지막 요소일 때는 아래 여백이 군더더기가 된다. */
+.notice:last-child { margin-bottom: 0; }
+.notice > .icon { margin-top: 2px; }
+.notice strong { font-weight: 500; }
+.notice-info {
+  background: hsl(var(--h-info) / 0.08);
+  color: var(--info);
+  border-color: hsl(var(--h-info) / 0.25);
+}
+
+/* ---------- 대시보드 ---------- */
+
+.stat-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(164px, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.stat {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  box-shadow: var(--shadow-sm);
+}
+.stat-icon {
+  width: 36px; height: 36px;
+  flex: none;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  display: grid;
+  place-items: center;
+}
+.stat-value {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+.stat-label { font-size: 12.5px; color: var(--text-dim); }
+.stat-warn .stat-icon { color: var(--warn); background: hsl(var(--h-warning) / 0.12); }
+.stat-danger .stat-icon { color: var(--danger); background: hsl(var(--h-danger) / 0.12); }
+
+
+/* ---------- 감사 로그 ---------- */
+
+.audit-table { font-size: 12.5px; }
+.action-code { color: var(--accent); font-size: 11.5px; }
+.detail-cell {
+  max-width: 340px;
+  color: var(--text-mute);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pager { display: flex; align-items: center; justify-content: flex-end; gap: 8px; font-size: 12px; }
+
+/* ---------- 스키마 탐색기 ---------- */
+
+.filter-sep { width: 1px; align-self: stretch; background: var(--border); }
+.field-inline.grow { flex: 1; min-width: 200px; }
+.field-inline.grow .input { flex: 1; }
+
+.schema-meta {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+  font-size: 12.5px;
+}
+.fingerprint {
+  font-size: 11px;
+  color: var(--text-mute);
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 2px 7px;
+}
+
+.note-list { margin: 6px 0 0; padding-left: 18px; font-size: 12.5px; line-height: 1.6; }
+.note-list li { margin-bottom: 3px; }
+
+.notice-warn {
+  background: hsl(var(--h-warning) / 0.08);
+  color: var(--warn);
+  border-color: hsl(var(--h-warning) / 0.25);
+}
+.notice-danger {
+  background: hsl(var(--h-danger) / 0.08);
+  color: var(--danger);
+  border-color: hsl(var(--h-danger) / 0.25);
+}
+.notice-warn strong, .notice-danger strong { display: block; margin-bottom: 2px; }
+
+.table-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; }
+
+.table-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.table-card[open] { border-color: var(--text-mute); }
+
+.table-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 15px;
+  cursor: pointer;
+  list-style: none;
+  flex-wrap: wrap;
+}
+.table-summary::-webkit-details-marker { display: none; }
+.table-summary:hover { background: var(--surface-2); }
+.table-name { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 13.5px; }
+.table-name .icon { color: var(--text-mute); }
+.table-badges { display: flex; align-items: center; gap: 8px; font-size: 11.5px; flex-wrap: wrap; }
+
+.table-detail { padding: 4px 15px 15px; border-top: 1px solid var(--border-soft); }
+.table-comment { margin: 10px 0; font-size: 12.5px; color: var(--text-dim); }
+
+.column-table { font-size: 12.5px; margin-top: 8px; }
+.column-table td { padding: 7px 10px; }
+.column-table th { padding: 8px 10px 8px; }
+.col-key { width: 62px; white-space: nowrap; }
+
+.key-mark {
+  display: inline-block;
+  font-size: 9.5px;
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 3px;
+  margin-right: 3px;
+  letter-spacing: 0.02em;
+}
+.key-pk { background: hsl(var(--h-warning) / 0.15); color: var(--warn); border: 1px solid hsl(var(--h-warning) / 0.3); }
+.key-fk { background: hsl(var(--h-info) / 0.15); color: var(--info); border: 1px solid hsl(var(--h-info) / 0.3); }
+
+.type-cell { color: var(--accent); font-size: 11.5px; }
+.default-cell { color: var(--text-dim); font-size: 11.5px; }
+
+.constraint-block { margin-top: 16px; }
+.constraint-block h4 {
+  margin: 0 0 7px;
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-mute);
+}
+.constraint-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.constraint-list li { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.constraint-list code { color: var(--text); }
+.constraint-inline { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.expr { color: var(--text-dim); font-family: var(--mono); font-size: 11.5px; }
+
+.view-list, .enum-list { display: flex; flex-direction: column; gap: 8px; }
+.view-item summary { cursor: pointer; font-size: 13px; font-family: var(--mono); padding: 5px 0; }
+.enum-item { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12.5px; }
+
+.sql-block {
+  margin: 0;
+  padding: 12px 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.65;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.sql-scroll { max-height: 52vh; overflow-y: auto; }
+.sql-line { padding: 1px 0; }
+.sql-danger { color: var(--danger); }
+.sql-comment { color: var(--text-mute); font-style: italic; }
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.panel-head .card-title { margin: 0; display: flex; align-items: center; gap: 8px; }
+
+.ddl-body { min-height: 200px; }
+
+/* ---------- 비교 화면 ---------- */
+
+.compare-head { display: flex; flex-direction: column; gap: 14px; }
+.compare-sides { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+.compare-side { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.compare-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-mute);
+}
+.compare-arrow { color: var(--text-mute); font-size: 18px; }
+.compare-counts { display: flex; gap: 6px; padding-top: 12px; border-top: 1px solid var(--border-soft); }
+
+.change-table { font-size: 12.5px; }
+.change-table .row-danger { background: hsl(var(--h-danger) / 0.06); }
+.lossy-detail {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--danger);
+}
+
+/* ---------- 모니터링 ---------- */
+
+.monitor-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 14px;
+}
+
+.monitor-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  cursor: pointer;
+  transition: border-color 0.12s, transform 0.12s;
+}
+.monitor-card:hover { border-color: var(--primary); transform: translateY(-1px); }
+.monitor-card-down { border-left: 3px solid var(--danger); }
+
+.monitor-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.monitor-card-badges { display: flex; gap: 4px; flex-wrap: wrap; }
+.monitor-card-meta { display: flex; justify-content: space-between; gap: 10px; font-size: 11.5px; }
+
+.metric-chips { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; }
+.metric-chip { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
+.metric-chip-label { color: var(--text-mute); }
+.metric-chip-value { font-family: var(--mono); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+
+/* 카드 하단 추이 그래프. margin-top:auto 로 카드 높이가 달라도 바닥에 붙인다. */
+.monitor-spark {
+  border-top: 1px solid var(--border-soft);
+  padding-top: 9px;
+  margin-top: auto;
+}
+.monitor-spark-body { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.monitor-spark-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.monitor-spark-name { font-size: 11px; color: var(--text-mute); }
+.monitor-spark-value { font-size: 13.5px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.monitor-spark .sparkline { display: block; width: 100%; height: 40px; }
+
+.collect-notes summary { font-size: 11.5px; color: var(--warn); cursor: pointer; }
+
+.detail-head { display: flex; flex-direction: column; gap: 14px; }
+.detail-title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.detail-title h2 { margin: 0; font-size: 17px; }
+.detail-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.detail-stats {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-soft);
+}
+.kv { display: flex; flex-direction: column; gap: 2px; }
+.kv-label { font-size: 11px; color: var(--text-mute); text-transform: uppercase; letter-spacing: 0.03em; }
+.kv-value { font-size: 13px; font-variant-numeric: tabular-nums; }
+
+/* ---------- 차트 ---------- */
+
+.chart-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.chart-card { margin-bottom: 0; }
+.chart-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.chart-title { font-size: 13.5px; margin: 0; }
+.chart-help { font-size: 11px; color: var(--text-mute); margin: 3px 0 0; line-height: 1.4; }
+.chart-current { display: flex; align-items: center; gap: 6px; flex: none; }
+.chart-value {
+  font-size: 17px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--mono);
+}
+
+.chart { position: relative; width: 100%; }
+.chart-svg { width: 100%; height: 100%; display: block; overflow: visible; }
+/* 빈 구간 안내. 차트 위에 겹쳐 두어 데이터가 들어오면 그대로 사라진다
+   (차트를 통째로 다시 만들지 않기 때문에 자리를 미리 잡아 둔다). */
+.chart-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--text-mute);
+  font-size: 12px;
+  background: var(--bg);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.chart-grid-line, .chart-grid { stroke: var(--border-soft); stroke-width: 1; }
+.chart-axis-label { fill: var(--text-mute); font-size: 10px; font-family: var(--mono); }
+.chart-band { fill: var(--chart-1); opacity: 0.14; }
+.chart-area { fill: var(--chart-1); opacity: 0.12; }
+.chart-line { fill: none; stroke: var(--chart-1); stroke-width: 1.8; }
+.chart-threshold { stroke: var(--danger); stroke-width: 1.2; stroke-dasharray: 4 3; opacity: 0.8; }
+.chart-hover-line { stroke: var(--text-mute); stroke-width: 1; stroke-dasharray: 3 2; }
+.chart-hover-dot { fill: var(--chart-1); stroke: var(--surface); stroke-width: 2; }
+
+.chart-tooltip {
+  position: absolute;
+  top: 2px;
+  padding: 5px 9px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-family: var(--mono);
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 2;
+  box-shadow: var(--shadow);
+  /* 차트보다 넓어지지 않게 한다. 위치는 JS가 차트 안으로 가두지만, 툴팁 자체가
+     차트보다 넓으면(좁은 카드 + 긴 라벨) 가둘 자리가 없어 결국 삐져나온다.
+     그 한 번의 삐져나옴이 가로 스크롤바를 만들고 본문 폭을 흔든다. */
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sparkline { display: inline-block; width: 120px; height: 28px; }
+.sparkline-svg { width: 100%; height: 100%; }
+.sparkline-line { fill: none; stroke: var(--chart-1); stroke-width: 1.5; }
+
+/* ---------- 이벤트 / 룰 ---------- */
+
+.event-table { font-size: 12.5px; }
+.event-metric { font-size: 10.5px; color: var(--accent); margin-left: 6px; }
+.event-detail summary { cursor: pointer; font-size: 11px; color: var(--text-dim); margin-top: 4px; }
+
+.rule-table { font-size: 12.5px; }
+.rule-condition { font-size: 11.5px; color: var(--accent); }
+
+.input-with-suffix { display: flex; align-items: center; gap: 8px; }
+.input-with-suffix .input { flex: 1; }
+.input-suffix { font-size: 12px; color: var(--text-mute); white-space: nowrap; min-width: 30px; }
+
+/* ---------- 로그 탐색기 ---------- */
+
+.log-filters { gap: 12px 16px; }
+
+.source-card { display: flex; flex-direction: column; gap: 10px; padding: 12px 16px; }
+.source-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.source-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 11px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--surface-2);
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.source-chip input { accent-color: var(--primary); cursor: pointer; }
+.source-chip:hover { border-color: var(--text-mute); }
+.source-chip-off { opacity: 0.5; cursor: not-allowed; }
+.source-chip-off input { cursor: not-allowed; }
+
+.source-hints summary {
+  cursor: pointer;
+  font-size: 11.5px;
+  color: var(--warn);
+}
+.source-hints .note-list { margin-top: 8px; }
+
+.tabs {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+.tab {
+  padding: 9px 16px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 13.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s;
+}
+.tab:hover { color: var(--text); }
+.tab-active { color: var(--primary); border-bottom-color: var(--primary); }
+/* 탭 옆의 개수. 탭을 눌러 보기 전에 "저쪽에 뭐가 있긴 한가"를 알려준다. */
+.tab-count {
+  margin-left: 6px; padding: 1px 6px; border-radius: 999px;
+  background: hsl(var(--h-muted) / 0.8); color: var(--text-dim);
+  font-size: 11px; font-weight: 600;
+}
+.tab-active .tab-count { background: hsl(var(--h-primary) / 0.16); color: var(--primary); }
+
+.log-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+  font-size: 12.5px;
+}
+
+.log-table { font-size: 12.5px; }
+.log-table td { vertical-align: top; padding: 9px 12px; }
+.log-message { max-width: 620px; }
+
+/* 커넥션 목록에서 빠진 것들을 알리는 줄 */
+.log-excluded {
+  display: flex; align-items: center; gap: 6px;
+  margin: -6px 0 12px;
+}
+.log-excluded .icon { flex: none; color: var(--text-mute); }
+
+/* 이어 붙이기 표식과 상태 줄.
+   표식은 보이지 않지만 자리는 차지해야 한다 — 높이가 0이면 관찰이 불안정하다. */
+.log-sentinel { height: 1px; }
+.log-more {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  padding-top: 12px; margin-top: 4px;
+  border-top: 1px solid var(--border-soft);
+  font-size: 12px;
+}
+
+.log-query { margin-top: 6px; }
+.log-query summary {
+  cursor: pointer;
+  font-size: 11.5px;
+  color: var(--primary);
+}
+.log-query-body { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+.log-subhead {
+  margin: 4px 0 0;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-mute);
+}
+.sql-muted { opacity: 0.75; }
+
+/* ---------- 쿼리 통계 ---------- */
+
+.stats-table { font-size: 12.5px; }
+.stats-table td { vertical-align: middle; padding: 9px 12px; }
+.col-rank { width: 1%; color: var(--text-mute); font-variant-numeric: tabular-nums; }
+.stat-query { max-width: 560px; }
+.stat-query details summary { cursor: pointer; list-style: none; }
+.stat-query details summary::-webkit-details-marker { display: none; }
+.stat-preview {
+  font-size: 11.5px;
+  color: var(--accent);
+  word-break: break-word;
+}
+.stat-details {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 4px 16px;
+  margin: 4px 0 0;
+  font-size: 11.5px;
+}
+.stat-details .meta-row { grid-template-columns: 120px 1fr; }
+
+.share-bar {
+  position: relative;
+  width: 92px;
+  height: 16px;
+  background: var(--surface-2);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.share-fill { height: 100%; background: var(--primary); opacity: 0.35; }
+.share-label {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.small { font-size: 11.5px; }
+
+/* ---------- 상태 표시 ---------- */
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 52px 24px;
+  color: var(--text-mute);
+  text-align: center;
+}
+.empty p { margin: 0; }
+
+.loading { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 48px; color: var(--text-mute); }
+.spinner {
+  width: 18px; height: 18px;
+  border: 2px solid var(--border);
+  border-top-color: var(--text-dim);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.error-panel { display: flex; align-items: flex-start; gap: 12px; color: var(--danger); }
+.error-panel p { margin: 4px 0 0; color: var(--text-dim); font-size: 12.5px; }
+/* 빠져나갈 수단. 버튼은 본문 색을 따라야 한다 — 오류 색을 물려받으면
+   되돌리기 버튼까지 위험한 동작처럼 보인다. */
+.error-actions {
+  display: flex; gap: 8px; flex-wrap: wrap;
+  margin-top: 12px; color: var(--text);
+}
+
+/* 스키마 비교 패널 — 평소에는 접혀 있다 */
+.compare-panel { display: flex; flex-direction: column; gap: 8px; }
+.compare-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.btn.is-on { border-color: var(--primary); color: var(--primary); }
+/* 컬럼 이름으로 걸린 검색 결과 표시 */
+.col-hit {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; color: var(--accent);
+  max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* 삭제 대화상자의 "무엇이 사라지는가" 목록 */
+.impact-box {
+  display: flex; flex-direction: column; gap: 12px;
+  padding: 12px 14px; margin: 4px 0 2px;
+  border: 1px solid hsl(var(--h-danger) / 0.35);
+  border-radius: var(--radius-sm);
+  background: hsl(var(--h-danger) / 0.06);
+}
+.impact-head {
+  display: flex; align-items: center; gap: 6px;
+  margin: 0 0 6px; font-size: 12.5px; font-weight: 600; color: var(--danger);
+}
+.impact-head.is-kept { color: var(--text-dim); font-weight: 500; }
+.impact-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.impact-list li {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  font-size: 12.5px; color: var(--text-dim);
+}
+.impact-list b { color: var(--text); font-variant-numeric: tabular-nums; }
+
+/* ---------- 토스트 ---------- */
+
+.toasts {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 200;
+  max-width: min(420px, calc(100vw - 40px));
+}
+
+/* 토스트는 sonner 형태다: 색 띠 없이 테두리 있는 카드, 색은 아이콘에만.
+ * 알림이 여러 개 쌓여도 화면이 색으로 어지러워지지 않는다. */
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 13px 15px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  font-size: 13.5px;
+  animation: slide-in 0.16s ease-out;
+}
+.toast span { flex: 1; word-break: break-word; }
+.toast > .icon { margin-top: 2px; }
+.toast-success > .icon { color: var(--success); }
+.toast-error > .icon { color: var(--danger); }
+.toast-info > .icon { color: var(--info); }
+
+.toast-close {
+  border: none;
+  background: transparent;
+  color: var(--text-mute);
+  cursor: pointer;
+  font-size: 17px;
+  line-height: 1;
+  padding: 0 2px;
+}
+.toast-close:hover { color: var(--text); }
+
+@keyframes slide-in {
+  from { opacity: 0; transform: translateX(14px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* ---------- 프로필 ---------- */
+
+.profile-form { display: flex; flex-direction: column; gap: 18px; }
+.profile-head { display: flex; }
+.profile-preview { display: flex; align-items: center; gap: 14px; }
+.profile-preview .avatar { border: 1px solid var(--border); }
+.profile-preview-name { font-size: 15px; font-weight: 600; }
+
+.avatar-pick-wrap { display: flex; flex-direction: column; gap: 10px; }
+.avatar-pick { display: flex; flex-direction: column; gap: 14px; }
+.avatar-group { display: flex; flex-direction: column; gap: 8px; }
+.avatar-group-title {
+  font-size: 11px; color: var(--text-mute);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+/* 고정 열 수를 쓰지 않는다. 아이콘이 늘어나도 줄바꿈만 달라진다. */
+.avatar-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
+  gap: 8px;
+}
+.avatar-option {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 10px 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-mute);
+  cursor: pointer;
+  font: inherit;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.avatar-option:hover { background: var(--surface-2); border-color: var(--text-mute); }
+/* 선택은 테두리와 배경으로만 표시한다. 체크 표시를 겹쳐 그리면 22px 아이콘이 가려진다. */
+.avatar-option.is-on {
+  border-color: var(--primary);
+  background: hsl(var(--h-primary) / 0.06);
+  color: var(--text);
+}
+.avatar-option.is-on .avatar-sample { border-color: var(--primary); }
+.avatar-option-label {
+  font-size: 11px;
+  color: var(--text-mute);
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+.avatar-option.is-on .avatar-option-label { color: var(--text); }
+.avatar-sample {
+  width: 34px; height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--surface-2);
+  font-size: 13px; font-weight: 600;
+}
+
+/* ---------- 반응형 ---------- */
+
+@media (max-width: 900px) {
+  /* 좁은 화면에서 사이드바는 서랍이 된다.
+   *
+   * 이전에는 가로로 스크롤되는 띠였다. 메뉴가 14개라 화면에는 두어 개만 보이고
+   * 나머지는 옆으로 밀어야 찾을 수 있었다 — 있는 줄도 모르는 메뉴가 대부분이었다.
+   * 서랍은 열었을 때 전체 목록을 세로로 보여주고, 닫으면 본문이 폭을 다 쓴다. */
+  .shell { grid-template-columns: minmax(0, 1fr); }
+
+  .topbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 40;
+  }
+  .topbar-toggle {
+    display: grid;
+    place-items: center;
+    width: 38px; height: 38px;
+    flex: none;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    cursor: pointer;
+  }
+  .topbar-toggle:hover { background: var(--surface-2); }
+  .topbar-brand {
+    display: flex; align-items: center; gap: 8px;
+    font-weight: 600; font-size: 15px;
+    color: var(--text); text-decoration: none;
+  }
+
+  .sidebar {
+    position: fixed;
+    top: 0; bottom: 0; left: 0;
+    width: min(290px, 84vw);
+    height: 100dvh;
+    z-index: 60;
+    overflow-y: auto;
+    border-right: 1px solid var(--border);
+    background: var(--bg);
+    box-shadow: var(--shadow);
+    /* 닫혀 있을 때는 화면 밖에 두고 visibility로 초점 순서에서도 빼낸다.
+     * transform만으로 밀어내면 탭 키가 보이지 않는 메뉴를 훑고 지나간다.
+     *
+     * visibility는 **전환하지 않는다**(0s). 전환 중인 값은 스타일을 강제로 계산해도
+     * 아직 hidden이라, 서랍을 열면서 첫 메뉴에 초점을 주는 코드가 조용히 무시된다.
+     * 대신 닫을 때만 미끄러지는 시간(0.18s)만큼 숨김을 미뤄 애니메이션을 보존한다. */
+    transform: translateX(-100%);
+    visibility: hidden;
+    transition: transform 0.18s ease, visibility 0s linear 0.18s;
+  }
+  body.nav-open .sidebar {
+    transform: none;
+    visibility: visible;
+    transition: transform 0.18s ease, visibility 0s;
+  }
+
+  .nav-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    background: hsl(var(--h-foreground) / 0.45);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.18s;
+  }
+  body.nav-open .nav-backdrop { opacity: 1; pointer-events: auto; }
+  body.nav-open { overflow: hidden; }
+
+  /* 서랍에서는 폭 조절이 의미가 없다. */
+  .sidebar-resize { display: none; }
+
+  .content { padding: 20px 16px 48px; }
+  .form-grid, .option-grid { grid-template-columns: 1fr; }
+  .table { font-size: 12.5px; }
+  .modal { width: min(100%, 96vw); }
+
+  /* 좁은 화면의 표.
+   *
+   * 폭이 모자라면 브라우저는 칸을 글자 단위로 쪼갠다 — 한 칸에 글자가 세로로
+   * 한 줄씩 쌓여 읽을 수 없게 된다. 표의 최소 폭을 정해 두고 통을 옆으로 밀게
+   * 하는 편이 낫다: 읽는 순서(행)가 유지되고, 필요한 칸만 보면 된다. */
+  .card:has(> .table), .card:has(> .table-wrap) { overflow-x: auto; }
+  .table { min-width: 560px; }
+  /* 로그·감사처럼 내용 칸이 긴 표는 조금 더 넓게 잡는다. */
+  .log-table, .audit-table { min-width: 640px; }
+
+  /* 표 안의 긴 값은 줄바꿈이 아니라 잘라서 보여준다. 줄바꿈하면 행 높이가
+   * 제각각이 되어 눈이 행을 따라가지 못한다. */
+  .table td { overflow-wrap: anywhere; }
+
+  /* 화면 제목과 버튼이 한 줄에 다 들어가지 않으면 버튼이 다음 줄로 내려간다.
+   * 그때 버튼이 화면 폭을 넘지 않도록 감싼다. */
+  .page-actions { flex-wrap: wrap; }
+  .page-actions .btn { flex: 1 1 auto; }
+  /* 빈 상태는 여백이 커서 좁은 화면에서 화면을 다 차지한다. */
+  .empty { padding: 32px 12px; }
+}
+
+/* ---------- ERD: 문서 목록 ---------- */
+
+.erd-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 14px;
+}
+.erd-card { display: flex; flex-direction: column; gap: 10px; }
+.erd-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.erd-card-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  text-decoration: none;
+}
+.erd-card-title:hover { text-decoration: underline; }
+.erd-card-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; }
+.erd-card-note { color: var(--text-dim); font-size: 13px; margin: 0; }
+.erd-card-stats { display: flex; gap: 18px; margin: 0; }
+.erd-card-stats dt { font-size: 11px; color: var(--text-mute); text-transform: uppercase; }
+.erd-card-stats dd { margin: 2px 0 0; font-size: 14px; font-weight: 600; }
+.erd-card-live { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 12.5px; color: var(--success); }
+.live-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--success);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+.erd-card-actions { display: flex; gap: 8px; margin-top: auto; }
+
+/* ---------- ERD: 편집기 ---------- */
+
+.erd-editor {
+  display: flex;
+  flex-direction: column;
+  /* 콘텐츠 영역의 세로 여백을 제외한 전체 높이를 쓴다.
+     캔버스는 스크롤이 아니라 팬/줌으로 탐색하므로 높이가 고정되어야 한다. */
+  height: calc(100vh - 96px);
+  min-height: 520px;
+  gap: 10px;
+}
+.erd-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
+}
+.erd-head-main { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.erd-head-side { display: flex; align-items: center; gap: 12px; }
+.erd-back {
+  display: inline-flex; align-items: center; gap: 4px;
+  color: var(--text-dim); text-decoration: none; font-size: 12.5px;
+  padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.erd-back:hover { color: var(--text); background: var(--surface-2); text-decoration: none; }
+.erd-title { font-size: 19px; margin: 0; }
+.erd-participants { display: flex; }
+.erd-avatar {
+  width: 26px; height: 26px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 600; color: hsl(0 0% 100%);
+  border: 2px solid var(--bg);
+  margin-left: -6px;
+  /* 이제 버튼이다: 누르면 그 사람을 따라간다. */
+  padding: 0; cursor: pointer; font-family: inherit; position: relative;
+}
+.erd-avatar:disabled { cursor: default; }
+.erd-avatar.is-following { border-color: var(--primary); }
+/* 이름 popover. 도구 막대의 것과 같은 방식이되 아래가 아니라 위에 붙는다 —
+ * 아바타는 화면 맨 위 줄에 있어서 아래로 띄우면 도구 막대를 가린다. */
+.erd-avatar::after {
+  content: attr(data-tip);
+  position: absolute; top: calc(100% + 6px); right: 0;
+  padding: 4px 8px; border-radius: var(--radius-sm);
+  background: var(--surface); border: 1px solid var(--border);
+  box-shadow: 0 6px 18px hsl(0 0% 0% / 0.25);
+  font-size: 11.5px; font-weight: 400; white-space: nowrap; color: var(--text);
+  opacity: 0; pointer-events: none; transition: opacity 0.1s; z-index: 40;
+}
+.erd-avatar:hover::after, .erd-avatar:focus-visible::after { opacity: 1; }
+.erd-conn-status {
+  font-size: 12px; padding: 3px 9px; border-radius: 999px;
+  border: 1px solid var(--border); color: var(--text-dim);
+  white-space: nowrap;
+}
+.erd-conn-status.is-ok { color: var(--success); border-color: var(--success); }
+.erd-conn-status.is-warn { color: var(--warn); border-color: var(--warn); }
+.erd-conn-status.is-bad { color: var(--danger); border-color: var(--danger); }
+
+.erd-toolbar {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding: 8px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.erd-tool-group { display: flex; align-items: center; gap: 6px; }
+.erd-tool-spacer { flex: 1; }
+.btn-active { background: var(--surface-2); border-color: var(--text-mute); }
+
+.erd-body {
+  display: grid;
+  /* 인스펙터 폭은 사람이 정한다(--erd-panel-width). 컬럼이 많은 테이블에서는
+   * 340px에 타입까지 들어가지 않고, 캔버스를 넓게 보고 싶은 사람에게는 넓다. */
+  grid-template-columns: minmax(0, 1fr) 6px var(--erd-panel-width, 340px);
+  gap: 4px;
+  flex: 1;
+  min-height: 0;
+}
+.erd-panel-resize {
+  cursor: col-resize;
+  border-radius: 3px;
+  background: transparent;
+  transition: background-color 0.15s;
+}
+.erd-panel-resize:hover, .erd-panel-resize:focus-visible { background: var(--primary); }
+/* 사이드바를 접으면 캔버스가 그 폭을 가져간다. 테이블이 많아지면 340px가
+ * "한 화면에 다 보이는가"를 가른다. */
+.erd-editor.is-panel-hidden .erd-body { grid-template-columns: 1fr; }
+.erd-editor.is-panel-hidden .erd-panel,
+.erd-editor.is-panel-hidden .erd-panel-resize { display: none; }
+
+/* 도구 막대 버튼: 아이콘만 두고 이름은 올렸을 때 뜬다.
+ * 이름을 글자로 늘어놓으면 막대가 두 줄이 되고 캔버스가 그만큼 낮아진다. */
+.erd-tool-btn { position: relative; }
+.erd-tool-btn::after {
+  content: attr(data-tip);
+  position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%);
+  padding: 4px 8px; border-radius: var(--radius-sm);
+  background: var(--surface); border: 1px solid var(--border);
+  box-shadow: 0 6px 18px hsl(0 0% 0% / 0.25);
+  font-size: 11.5px; white-space: nowrap; color: var(--text);
+  opacity: 0; pointer-events: none; transition: opacity 0.1s;
+  z-index: 40;
+}
+.erd-tool-btn:hover::after,
+.erd-tool-btn:focus-visible::after { opacity: 1; }
+/* 비활성 버튼의 이름은 띄우지 않는다. 눌러도 아무 일이 없는 것을 설명하는 것이
+ * 아니라, 왜 비활성인지는 화면 다른 곳(읽기 전용 배지)이 이미 말하고 있다. */
+.erd-tool-btn:disabled::after { display: none; }
+/* 캔버스와 그 위에 겹치는 것들(채팅 알림·따라가기 표시)을 담는 자리. */
+.erd-canvas-area { position: relative; min-width: 0; min-height: 0; display: flex; }
+.erd-canvas-area > .erd-canvas-wrap { flex: 1; }
+
+/* 채팅 알림 스택. 오른쪽 위에 쌓이고 스스로 사라진다. */
+.erd-chat-stack {
+  position: absolute; top: 10px; right: 10px; z-index: 20;
+  display: flex; flex-direction: column; gap: 8px;
+  max-width: 300px; pointer-events: none;
+}
+.erd-chat-toast {
+  pointer-events: auto; text-align: left; cursor: pointer;
+  padding: 8px 10px; border-radius: var(--radius-sm);
+  background: var(--surface); border: 1px solid var(--border);
+  box-shadow: 0 8px 24px hsl(0 0% 0% / 0.3);
+  font-family: inherit; color: var(--text);
+  animation: erd-toast-in 0.16s ease-out;
+}
+.erd-chat-toast:hover { border-color: var(--primary); }
+.erd-chat-toast-head { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; font-size: 12px; }
+.erd-chat-toast p { margin: 0; font-size: 12.5px; color: var(--text-dim); line-height: 1.45; }
+@keyframes erd-toast-in { from { opacity: 0; transform: translateY(-4px); } }
+
+/* 따라가기 표시. 지금 화면이 내 조작이 아니라 남을 따라 움직이고 있다는 사실은
+ * 계속 보여야 한다 — 모르면 "화면이 저절로 움직인다"가 된다. */
+.erd-follow-bar {
+  position: absolute; left: 10px; bottom: 10px; z-index: 20;
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; border-radius: 999px;
+  background: var(--surface); border: 1px solid var(--primary);
+  box-shadow: 0 6px 18px hsl(0 0% 0% / 0.28);
+  font-size: 12px;
+}
+.erd-follow-dot { width: 10px; height: 10px; border-radius: 50%; }
+
+.erd-canvas-wrap {
+  position: relative;
+  background-color: hsl(var(--h-muted) / 0.55);
+  background-image: radial-gradient(hsl(var(--h-muted-foreground) / 0.28) 1px, transparent 1px);
+  background-size: 18px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.erd-canvas {
+  width: 100%; height: 100%;
+  display: block;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.erd-canvas:active { cursor: grabbing; }
+.erd-hint { fill: var(--text-mute); font-size: 15px; font-family: var(--sans); }
+
+/* 관계선 */
+.erd-link { fill: none; stroke: var(--text-mute); stroke-width: 1.4; pointer-events: none; }
+.erd-link.is-selected { stroke: var(--primary); stroke-width: 2.4; }
+/* 누르기용 투명 선. 보이는 선은 1.4px이라 마우스로 맞히기 어렵다 —
+ * 보이는 선을 굵게 하는 대신 잡는 면적만 넓힌다. */
+.erd-link-hit {
+  fill: none; stroke: transparent; stroke-width: 12; cursor: pointer;
+}
+.erd-link-many { fill: var(--text-dim); pointer-events: none; }
+.erd-link-one { fill: var(--text-dim); pointer-events: none; }
+
+/* 테이블 카드 */
+.erd-card-g { cursor: move; }
+.erd-card-bg {
+  fill: var(--surface);
+  stroke: var(--border);
+  stroke-width: 1;
+}
+.erd-card-g.is-selected .erd-card-bg { stroke: var(--chart-1); stroke-width: 2; }
+.erd-card-holder { fill: none; stroke-width: 2; stroke-dasharray: 4 3; }
+.erd-card-head { fill: hsl(var(--h-muted)); }
+.erd-card-name { fill: var(--text); font: 600 12.5px var(--sans); }
+.erd-card-count { fill: var(--text-mute); font: 11px var(--mono); }
+.erd-col { fill: var(--text-dim); font: 11.5px var(--mono); }
+.erd-col.is-pk { fill: var(--warn); font-weight: 600; }
+.erd-col-type { fill: var(--text-mute); font: 10.5px var(--mono); }
+.erd-col-more { fill: var(--text-mute); font: italic 11px var(--sans); }
+
+.erd-card-icon { color: var(--text-dim); }
+/* 색을 지정한 카드는 머리띠로 표시한다. 카드 전체를 칠하면 컬럼 글씨가 읽히지 않는다. */
+.erd-card-g[style*="--card-accent"] .erd-card-head { fill: var(--card-accent); fill-opacity: 0.22; }
+.erd-card-g[style*="--card-accent"] .erd-card-bg { stroke: var(--card-accent); }
+
+/* 그룹 — 테이블 묶음을 감싸는 반투명 사각형 */
+.erd-group-g { cursor: move; --group-accent: hsl(210 85% 60%); }
+.erd-group-bg {
+  fill: var(--group-accent); fill-opacity: 0.07;
+  stroke: var(--group-accent); stroke-width: 1.5; stroke-dasharray: 8 5;
+}
+.erd-group-label { fill: var(--group-accent); font: 600 13px var(--sans); }
+.erd-group-grip { fill: var(--group-accent); fill-opacity: 0.6; cursor: nwse-resize; }
+/* 고른 것은 테두리로 표시한다. 색을 바꾸면 그룹·메모의 자기 색과 섞인다. */
+.erd-group-g.is-selected .erd-group-bg { stroke-width: 2.5; stroke-dasharray: none; }
+
+/* 메모 */
+/* 메모도 색을 고를 수 있다. 기본은 노란 쪽지다.
+ * 그룹과 같은 방식으로 묶음(g)에 실린 변수를 쓴다 — 변수를 정의만 하고 쓰지 않으면
+ * 색을 골라도 아무 일이 일어나지 않는다. */
+.erd-note-g { cursor: move; --note-accent: hsl(var(--h-warning)); }
+.erd-note-bg {
+  fill: var(--note-accent); fill-opacity: 0.12;
+  stroke: var(--note-accent); stroke-opacity: 0.5;
+  stroke-width: 1;
+}
+.erd-note-text { fill: var(--text); font: 11.5px var(--sans); }
+.erd-note-g.is-selected .erd-note-bg { stroke: var(--primary); stroke-width: 2; }
+
+/* 원격 커서 */
+.erd-cursor { pointer-events: none; }
+.erd-cursor-label { fill: hsl(0 0% 100%); font: 600 10px var(--sans); }
+.erd-cursor-label-bg { opacity: 0.92; }
+
+/* 사이드 패널 */
+.erd-panel {
+  display: flex; flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  min-height: 0;
+  overflow: hidden;
+}
+.erd-panel-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.erd-panel-head h2 { font-size: 14px; margin: 0; }
+.erd-panel-body { padding: 12px; overflow-y: auto; flex: 1; }
+.erd-panel-empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 8px; padding: 32px 20px; text-align: center; color: var(--text-dim);
+  flex: 1;
+}
+.erd-panel-empty p { margin: 0; font-size: 13px; }
+.erd-sub {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--text-mute); margin: 18px 0 8px;
+}
+.erd-panel-danger { margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--border-soft); }
+
+.erd-col-list { display: flex; flex-direction: column; gap: 6px; }
+.erd-col-row {
+  padding: 7px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-alt);
+}
+/* 컬럼 한 줄: [기본키] [이름] [타입] [타입 고르기].
+ * 고르개 버튼은 타입 칸 바로 옆이어야 "이 칸을 고르는 버튼"으로 읽힌다. */
+.erd-col-row-main {
+  display: grid; grid-template-columns: auto 1fr 1fr auto;
+  gap: 6px; align-items: center;
+}
+.erd-col-row-main .input { min-width: 0; }
+
+/* 기본키 토글. 컬럼 줄 안에 있어야 "이 컬럼이 키인가"를 한자리에서 본다. */
+.erd-pk-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: none; color: var(--text-mute); cursor: pointer;
+}
+.erd-pk-toggle:hover:not(:disabled) { color: var(--text); border-color: var(--text-mute); }
+.erd-pk-toggle.is-on {
+  color: var(--warn); border-color: hsl(var(--h-warning) / 0.5);
+  background: hsl(var(--h-warning) / 0.12);
+}
+.erd-pk-toggle:disabled { opacity: 0.5; cursor: not-allowed; }
+.erd-col-order { display: inline-flex; gap: 2px; margin-left: auto; }
+.erd-move-arrow { font-size: 9px; line-height: 1; }
+.erd-col-row-sub {
+  display: flex; align-items: center; gap: 8px; margin-top: 6px; flex-wrap: wrap;
+}
+.erd-col-row .input { padding: 4px 7px; font-size: 12px; }
+.erd-col-name { font-family: var(--mono); }
+.erd-col-type-input { font-family: var(--mono); color: var(--text-dim); }
+.erd-col-default { font-family: var(--mono); flex: 1; min-width: 80px; }
+.erd-col-comment { margin: 6px 0 0; font-size: 11.5px; color: var(--text-mute); }
+.erd-col-add { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+
+/* 테이블 표시(아이콘·색) 고르기 */
+.erd-appearance { display: flex; flex-direction: column; gap: 8px; }
+/* 아이콘이 스무 개를 넘으므로 높이를 제한하고 그 안에서 스크롤한다.
+ * 그러지 않으면 고르개가 인스펙터의 절반을 차지한다. */
+.erd-icon-picker {
+  display: flex; flex-wrap: wrap; gap: 4px;
+  max-height: 104px; overflow-y: auto;
+}
+.erd-icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; padding: 0;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: none; color: var(--text-dim); cursor: pointer;
+}
+.erd-icon-btn:hover { color: var(--text); border-color: var(--text-mute); }
+.erd-icon-btn.is-on { color: var(--primary); border-color: var(--primary); background: var(--surface-2); }
+.erd-icon-none { font-size: 12px; }
+.tint-none { color: var(--text-mute); background: var(--surface-2) !important; }
+.erd-sub-hint { margin-left: auto; font-size: 10.5px; color: var(--text-mute); font-weight: 400; }
+.erd-chip-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.erd-chip {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 6px 8px; font-size: 12px;
+  border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+  background: var(--bg-alt);
+}
+.erd-chip > span:first-child { font-family: var(--mono); }
+
+/* 채팅 */
+.erd-chat-list {
+  flex: 1; overflow-y: auto; padding: 12px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.erd-chat-empty { text-align: center; padding: 20px 0; }
+.erd-chat-msg { display: flex; flex-direction: column; gap: 3px; }
+.erd-chat-msg.is-system { opacity: 0.75; font-style: italic; }
+.erd-chat-meta { display: flex; align-items: center; gap: 6px; font-size: 11.5px; flex-wrap: wrap; }
+.erd-chat-body { margin: 0; font-size: 13px; white-space: pre-wrap; word-break: break-word; }
+.erd-chat-input {
+  display: flex; gap: 6px; padding: 10px;
+  border-top: 1px solid var(--border);
+}
+.erd-chat-input .input { flex: 1; }
+.erd-chat-note { margin: 0; padding: 8px 12px 0; }
+
+/* AI 세션. 전체 대화와 같은 패널을 쓰되, 누가 말했는지가 한눈에 보이도록
+   내 말은 오른쪽으로 붙이고 AI 답변은 카드로 감싼다. */
+.erd-chat-pick { display: flex; gap: 6px; align-items: center; }
+.erd-chat-pick .input { max-width: 190px; font-size: 12.5px; }
+.erd-chat-msg.is-me {
+  align-self: flex-end; max-width: 85%;
+  background: hsl(var(--h-primary) / 0.14); border-radius: 10px 10px 2px 10px; padding: 7px 10px;
+}
+.erd-chat-msg.is-ai {
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 10px 10px 10px 2px; padding: 9px 11px; gap: 6px;
+}
+.erd-chat-md { font-size: 13px; line-height: 1.6; word-break: break-word; }
+.erd-chat-md > :first-child { margin-top: 0; }
+.erd-chat-md > :last-child { margin-bottom: 0; }
+.erd-chat-md pre { max-width: 100%; overflow-x: auto; }
+.erd-share { align-self: flex-start; opacity: 0.7; }
+.erd-chat-msg.is-ai:hover .erd-share { opacity: 1; }
+.erd-ai-tools { display: flex; flex-direction: column; gap: 4px; }
+.erd-ai-tool {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--text-dim);
+}
+.erd-ai-tool code { font-size: 11.5px; }
+.erd-ai-tool.is-error { color: var(--danger); }
+.erd-ai-tool.is-notice { font-style: italic; }
+.erd-ai-error { margin: 0; font-size: 12.5px; color: var(--danger); }
+
+.erd-diff-summary { display: flex; align-items: center; gap: 10px; font-weight: 600; }
+.erd-diff-sql { margin-top: 14px; }
+
+/* ---- 구조 화면 ----
+ *
+ * ERD 편집기의 골격(.erd-editor)을 그대로 쓴다. 다른 것은 위쪽에 커넥션·시점
+ * 선택 줄이 하나 더 있다는 것과, 사이드 패널이 읽기 전용이라는 것뿐이다.
+ */
+.structure-view .filter-bar { margin-bottom: 10px; }
+
+/* 저장 상태. 자동 저장이므로 "지금 어디까지 남았는가"가 늘 보여야 한다. */
+.structure-save { font-size: 12px; color: var(--text-dim); }
+.structure-save.is-pending { color: var(--text-dim); }
+.structure-save.is-ok { color: var(--success); }
+.structure-save.is-bad { color: var(--danger); font-weight: 600; }
+
+/* DB가 남긴 알림 자리. 알릴 것이 없으면 flex 열의 gap까지 없애야 빈 줄이 안 생긴다. */
+.structure-notes:empty { display: none; }
+.structure-notes > .notice { margin-bottom: 0; }
+
+/* 로딩·오류를 캔버스 위에 덮는다. 캔버스를 비우지 않으므로 리스너가 살아 있다. */
+.structure-overlay {
+  position: absolute; inset: 0; z-index: 2;
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+  background: hsl(var(--h-muted) / 0.82);
+  backdrop-filter: blur(1px);
+  overflow: auto;
+}
+
+.structure-cols { display: flex; flex-direction: column; gap: 2px; }
+.structure-col {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 5px 6px; border-radius: 6px; font-size: 12.5px;
+}
+.structure-col:nth-child(odd) { background: var(--surface-2); }
+/* 키 표식 자리는 폭을 고정한다. 없는 줄과 있는 줄의 이름이 어긋나면 목록이 읽히지 않는다. */
+.structure-col-mark {
+  width: 14px; flex-shrink: 0; text-align: center;
+  color: var(--text-dim); line-height: 1;
+}
+.structure-col-name { font-weight: 500; min-width: 0; word-break: break-all; }
+.structure-col-type {
+  color: var(--text-dim);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+}
+
+/* ---- SQL 주고받기 ---- */
+
+.erd-export-actions { display: flex; align-items: center; gap: 6px; }
+
+.erd-import-file { font-size: 13px; }
+.erd-import-preview:empty { display: none; }
+.erd-import-preview { margin-top: 12px; }
+
+.erd-import-plan { display: flex; flex-direction: column; gap: 10px; }
+.erd-import-rows { display: flex; flex-direction: column; gap: 6px; }
+.erd-import-row {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 6px 10px; border-radius: var(--radius);
+  background: var(--surface-2); border: 1px solid var(--border-soft);
+}
+/* 테이블이 서른 개여도 목록이 창을 밀어내지 않아야 한다. */
+.erd-import-names {
+  font-size: 12.5px; color: var(--text-dim); line-height: 1.6;
+  min-width: 0; word-break: break-word;
+}
+.erd-import-notes summary { cursor: pointer; font-size: 13px; color: var(--text-dim); }
+
+.erd-mig-created { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+.erd-history td code { font-size: 11.5px; }
+tr.is-destructive td { background: hsl(var(--h-danger) / 0.08); }
+
+@media (max-width: 1100px) {
+  .erd-body { grid-template-columns: 1fr; grid-template-rows: 1fr 300px; }
+}
+
+/* ---------- 마이그레이션 ---------- */
+
+.mig-list { display: flex; flex-direction: column; gap: 10px; }
+.mig-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 16px;
+}
+.mig-row-main { min-width: 0; }
+.mig-title {
+  font-size: 15px; font-weight: 600; color: var(--text); text-decoration: none;
+  display: block; margin-bottom: 6px;
+}
+.mig-title:hover { color: var(--primary); }
+.mig-row-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; }
+.mig-row-stats { display: flex; gap: 18px; margin: 0; }
+.mig-row-stats dt { font-size: 10.5px; color: var(--text-mute); text-transform: uppercase; }
+.mig-row-stats dd { margin: 2px 0 0; font-size: 13.5px; font-weight: 600; }
+
+.mig-head { display: flex; flex-direction: column; gap: 12px; }
+.mig-head-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.mig-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 6px 18px;
+  margin: 0;
+}
+.mig-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.mig-precheck h2, .mig-head h2 { display: flex; align-items: center; gap: 8px; }
+
+.mig-sql-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.mig-sql-col { min-width: 0; }
+.mig-sql-col .sql-block { max-height: 380px; overflow: auto; }
+
+.mig-lossy {
+  margin: 4px 0 0; font-size: 11.5px; color: var(--warn);
+  display: flex; align-items: center; gap: 4px;
+}
+
+.mig-reviews { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+.mig-review {
+  padding: 8px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-alt);
+}
+.mig-review-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; }
+.mig-review-comment { margin: 6px 0 0; font-size: 13px; white-space: pre-wrap; }
+
+.mig-exec code.mig-exec-sql {
+  font-size: 11.5px;
+  display: block;
+  max-width: 620px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.text-danger { color: var(--danger); }
+
+/* ---------- 버전 이력 ---------- */
+
+/* 버전 카드는 훑어보는 목록이다. 세로로 쌓을수록 한 화면에 들어가는 버전 수가
+   줄고, 그러면 "언제 무엇이 바뀌었나"를 스크롤로 재구성해야 한다.
+   그래서 같은 줄에 놓을 수 있는 것은 모두 가로로 붙인다.
+   (.version-note / .version-actions 는 매크로 대화상자도 쓰는 이름이라
+    여기서는 .version-item 아래로 한정한다.) */
+.version-timeline { display: flex; flex-direction: column; gap: 8px; }
+.version-item {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 13px 16px;
+  margin-bottom: 0; /* 목록 간격은 .version-timeline 의 gap 하나로만 정한다 */
+}
+.version-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.version-no { font-size: 15px; font-family: var(--mono); }
+/* 동작은 오른쪽 끝으로 민다. 줄이 좁아지면 다음 줄로 넘어가되 왼쪽 정렬로 붙는다. */
+.version-item .version-actions { display: flex; gap: 6px; margin-left: auto; }
+
+.version-body {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap;
+}
+.version-item .version-note {
+  margin: 0; font-size: 12.5px; color: var(--text-dim);
+  flex: 1 1 200px; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.version-item .version-note.is-empty { color: var(--text-mute); font-style: italic; }
+
+/* 라벨과 값을 한 줄에 둔다. 위아래로 쌓으면 이 블록만으로 두 줄을 쓴다. */
+.version-stats { display: flex; gap: 14px; margin: 0; flex-wrap: wrap; }
+.version-stats > div { display: flex; align-items: baseline; gap: 5px; }
+.version-stats dt { font-size: 11px; color: var(--text-mute); }
+.version-stats dd {
+  margin: 0; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums;
+}
+.version-changes summary { cursor: pointer; font-size: 12.5px; color: var(--primary); }
+
+/* 비교 대화상자의 기준 → 대상 선택 줄 */
+.diff-picker {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding-bottom: 12px; margin-bottom: 12px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.diff-picker .field-label { white-space: nowrap; color: var(--text-dim); }
+.diff-base { font-size: 13px; font-weight: 600; }
+.diff-arrow { color: var(--text-mute); }
+/* 선택기가 남는 폭을 차지해 버전 라벨(날짜 포함)이 잘리지 않게 한다. */
+.diff-picker .input { flex: 1 1 240px; min-width: 200px; max-width: 380px; }
+
+@media (max-width: 900px) {
+  .mig-row { grid-template-columns: 1fr; }
+  .mig-sql-grid { grid-template-columns: 1fr; }
+}
+
+/* 성공 알림. 마이그레이션/롤백 결과 표시에 쓴다. */
+.notice-success {
+  background: hsl(var(--h-success) / 0.08);
+  color: var(--success);
+  border-color: hsl(var(--h-success) / 0.25);
+}
+/* ---------- Git 연동 ---------- */
+
+.vcs-list { display: flex; flex-direction: column; gap: 12px; margin-bottom: 18px; }
+.vcs-card { display: flex; flex-direction: column; gap: 10px; }
+.vcs-card-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
+}
+.vcs-card-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.vcs-card-title strong { font-size: 15px; }
+.vcs-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 6px 18px;
+  margin: 0;
+}
+.vcs-meta code { font-size: 11.5px; }
+.vcs-check-msg { margin: 0; font-size: 12px; }
+.vcs-check-msg.is-ok { color: var(--success); }
+.vcs-check-msg.is-bad { color: var(--danger); }
+.vcs-hints { font-size: 12px; color: var(--text-dim); }
+.vcs-vars summary { cursor: pointer; font-size: 12.5px; color: var(--primary); }
+.vcs-vars code { font-size: 11.5px; }
+
+.modal-foot-inline { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+
+.push-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.push-list li { font-size: 13px; }
+.push-list code { font-size: 11.5px; }
+
+/* ---------- AI 어시스턴트 ---------- */
+
+.ai-shell {
+  display: grid;
+  grid-template-columns: 250px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+  /* 대화 화면은 뷰포트 높이를 끝까지 쓴다.
+   *
+   * 다른 화면과 달리 여기서는 "아래 여백"이 손해다: 남긴 만큼 대화가 보이는 창이
+   * 좁아지고, 답변 하나가 화면을 넘겨 매번 스크롤하게 된다. 본문 여백만 빼서
+   * 정확히 한 화면에 맞춘다. */
+  height: calc(100vh - var(--content-pad-top) - var(--content-pad-bottom));
+}
+.ai-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  position: sticky;
+  top: 20px;
+}
+.ai-sidebar-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ai-sidebar-foot {
+  display: flex; flex-direction: column; gap: 6px;
+  border-top: 1px solid var(--border-soft); padding-top: 10px;
+}
+
+.ai-session-list {
+  display: flex; flex-direction: column; gap: 4px;
+  /* 대화가 수십 개 쌓여도 사이드바가 화면을 넘기지 않게 한다. */
+  max-height: 46vh; overflow-y: auto;
+}
+.ai-empty-list { margin: 8px 2px; font-size: 12.5px; }
+/* 페이지에서는 <a>, 팝업에서는 <button>이다(주소가 없으므로).
+ * 생김새는 하나여야 하므로 버튼의 기본 모양을 여기서 지운다. */
+.ai-session {
+  display: block; padding: 8px 10px; border-radius: var(--radius-sm);
+  color: var(--text-dim); text-decoration: none; border: 1px solid transparent;
+  background: none; width: 100%; text-align: left;
+  font-family: inherit; font-size: inherit; cursor: pointer;
+}
+.ai-session:hover { background: var(--surface-2); color: var(--text); }
+.ai-session.is-active {
+  background: var(--surface-2);
+  border-color: var(--border);
+  color: var(--text);
+}
+.ai-session-title {
+  font-size: 13px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ai-session-meta {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin-top: 3px; font-size: 11px;
+}
+
+/* 세로로 늘어나는 쪽은 본문뿐이다. 사이드바는 내용만큼만 차지한다(align-self: start). */
+.ai-main {
+  display: flex; flex-direction: column; gap: 12px;
+  min-width: 0; height: 100%; min-height: 0;
+}
+.ai-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
+}
+.ai-head-main { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ai-head-side { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+.ai-title { font-size: 18px; margin: 0; }
+
+.ai-log {
+  display: flex; flex-direction: column; gap: 14px;
+  /* 대화는 내부에서 스크롤한다. 입력창이 항상 화면에 남아야 한다.
+   * flex: 1 + min-height: 0 이 짝이다 — min-height를 풀지 않으면 flex 항목이
+   * 내용보다 작아지지 않아 긴 대화에서 입력창이 화면 밖으로 밀려난다. */
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  scroll-behavior: smooth;
+}
+.ai-msg { display: flex; flex-direction: column; gap: 8px; max-width: 100%; }
+.ai-msg.is-user { align-items: flex-end; }
+.ai-bubble {
+  padding: 10px 14px; border-radius: 14px; font-size: 13.5px; line-height: 1.65;
+  background: var(--surface-2); border: 1px solid var(--border-soft);
+  /* 모델 응답은 개행을 그대로 살리고, 긴 식별자도 넘치지 않게 자른다. */
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  max-width: 90%;
+}
+.ai-msg.is-user .ai-bubble {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: hsl(var(--h-primary-foreground));
+  max-width: 78%;
+}
+
+/* 마크다운으로 그린 답변.
+ *
+ * pre-wrap을 끄는 것이 핵심이다: 블록 구조가 생겼으므로 원문의 개행까지 그대로
+ * 살리면 문단마다 빈 줄이 두 번씩 들어간다. 줄바꿈은 파서가 <br>로 만든다. */
+.ai-bubble.is-markdown { white-space: normal; }
+.ai-bubble.is-markdown > :first-child { margin-top: 0; }
+.ai-bubble.is-markdown > :last-child { margin-bottom: 0; }
+.md-p { margin: 0 0 10px; }
+.md-h {
+  margin: 16px 0 8px; line-height: 1.35; font-weight: 600;
+  /* 답변 안의 제목은 화면 제목과 경쟁하지 않아야 한다. 본문보다 조금 크고
+   * 굵기로 구분하는 정도가 대화에 맞는다. */
+}
+h2.md-h { font-size: 16px; }
+h3.md-h { font-size: 15px; }
+h4.md-h { font-size: 14px; }
+h5.md-h, h6.md-h { font-size: 13.5px; color: var(--text-dim); }
+.md-list { margin: 0 0 10px; padding-left: 20px; }
+.md-list .md-list { margin: 4px 0 2px; }
+.md-li { margin: 3px 0; }
+.md-hr { border: 0; border-top: 1px solid var(--border-soft); margin: 14px 0; }
+.md-quote {
+  margin: 0 0 10px; padding: 2px 0 2px 12px;
+  border-left: 3px solid var(--border); color: var(--text-dim);
+}
+.md-inline-code {
+  padding: 1px 5px; border-radius: 4px;
+  background: var(--bg-alt); border: 1px solid var(--border-soft);
+  font-size: 12px; overflow-wrap: anywhere;
+}
+.md-code {
+  margin: 0 0 10px; padding: 10px 12px; border-radius: var(--radius-sm);
+  background: var(--bg-alt); border: 1px solid var(--border-soft);
+  overflow-x: auto; font-size: 12px; line-height: 1.6;
+}
+.md-code code { white-space: pre; }
+.md-link { color: var(--primary); text-decoration: underline; }
+/* 안전하지 않은 스킴은 링크로 만들지 않는다. 글자로는 남기되 링크처럼 보이지 않게 한다. */
+.md-unsafe-link { color: var(--text-dim); }
+/* 표는 버블 안에서만 가로로 스크롤한다. 대화 전체가 옆으로 밀리면 안 된다. */
+/* 표를 감싸는 통. 좁은 화면에서 표가 칸을 세로로 쪼개지 않도록 옆으로 민다. */
+.table-wrap { overflow-x: auto; max-width: 100%; }
+.md-table-wrap { margin: 0 0 10px; overflow-x: auto; }
+.md-table { border-collapse: collapse; font-size: 12.5px; }
+.md-table th, .md-table td {
+  border: 1px solid var(--border-soft); padding: 5px 9px; text-align: left;
+  white-space: nowrap;
+}
+.md-table th { background: var(--bg-alt); font-weight: 600; }
+.ai-cursor { color: var(--text-mute); animation: ai-blink 1s steps(2, start) infinite; }
+@keyframes ai-blink { to { visibility: hidden; } }
+
+.ai-stream-tools { display: flex; flex-direction: column; gap: 6px; }
+.ai-tool-call {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 6px 10px; border-radius: var(--radius-sm);
+  background: var(--bg-alt); border: 1px solid var(--border-soft);
+  font-size: 12px; color: var(--text-dim);
+}
+.ai-tool-call code { font-size: 11.5px; color: var(--text); }
+.ai-tool-call.is-running { border-color: var(--text-mute); }
+.ai-tool-call.is-error { border-color: hsl(var(--h-danger) / 0.45); }
+.ai-tool-args {
+  font-family: var(--mono); font-size: 11px; color: var(--text-mute);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
+}
+.ai-tool-status { margin-left: auto; font-size: 11px; }
+
+.ai-tool-result summary {
+  cursor: pointer; font-size: 12px; color: var(--text-dim);
+  display: flex; align-items: center; gap: 6px;
+}
+.ai-tool-error { font-size: 12.5px; align-items: flex-start; }
+.ai-tool-body {
+  margin: 6px 0 0; padding: 10px; max-height: 320px; overflow: auto;
+  background: var(--bg-alt); border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  font-family: var(--mono); font-size: 11.5px; line-height: 1.5;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+
+.ai-pending { border-color: hsl(var(--h-warning) / 0.5); background: hsl(var(--h-warning) / 0.04); gap: 10px; }
+.ai-pending-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--warn); }
+.ai-pending-summary { margin: 0; font-size: 13.5px; }
+.ai-pending-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.ai-preview { display: flex; flex-direction: column; gap: 8px; margin: 0; font-size: 12.5px; }
+.ai-preview dt { font-size: 10.5px; color: var(--text-mute); text-transform: uppercase; }
+.ai-preview dd { margin: 2px 0 0; overflow-wrap: anywhere; }
+.ai-preview-sql pre { max-height: 260px; }
+
+.ai-suggestions { display: flex; flex-direction: column; gap: 10px; }
+.ai-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* 보내기 버튼은 입력창과 같은 높이로 선다. 세 줄짜리 입력창 옆에 36px 버튼이
+ * 바닥에 붙어 있으면 두 요소가 한 덩어리로 보이지 않는다. */
+.ai-composer { display: flex; gap: 10px; align-items: stretch; }
+.ai-composer .btn { height: auto; align-self: stretch; }
+.ai-input { resize: vertical; font-family: var(--sans); line-height: 1.6; }
+
+.ai-provider-list { display: flex; flex-direction: column; gap: 12px; margin-bottom: 14px; }
+.ai-provider { gap: 10px; }
+.ai-provider-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ai-tool-list { list-style: none; padding: 0; margin: 0 0 12px; display: flex; flex-direction: column; gap: 5px; }
+.ai-tool-list li { font-size: 12.5px; color: var(--text-dim); }
+.ai-tool-list code { font-size: 11.5px; color: var(--text); }
+
+/* 허용 모델 고르기. 목록이 길어질 수 있으므로(프로바이더는 수백 개를 돌려주기도 한다)
+   높이를 고정하고 안에서만 스크롤한다 — 대화상자 전체가 길어지면 저장 버튼이 밀려난다. */
+.ai-model-picker { display: flex; flex-direction: column; gap: 8px; }
+.ai-model-picker .row-actions { align-items: center; }
+.ai-model-picker .row-actions .input { flex: 1; min-width: 140px; }
+.ai-model-filter .input { width: 100%; }
+.ai-model-list {
+  display: flex; flex-direction: column; gap: 4px;
+  max-height: 190px; overflow-y: auto;
+  padding: 8px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-alt);
+}
+.ai-model-list code { font-size: 11.5px; }
+.ai-model-chip { display: inline-block; margin: 0 4px 4px 0; font-size: 11.5px; }
+/* 헤더 안의 선택 상자(모델·대상 DB). 제목 줄에 얹히므로 입력 칸보다 작게 만든다. */
+.ai-model-switch,
+.ai-conn-switch { width: auto; max-width: 260px; height: 26px; padding: 0 24px 0 8px; font-size: 11.5px; }
+.ai-model-switch { min-width: 140px; }
+.ai-conn-switch { min-width: 150px; }
+
+@media (max-width: 900px) {
+  /* 좁은 화면에서는 사이드바가 위로 접히므로 한 화면에 가둘 수 없다.
+   * 높이 고정을 풀고 대화 창에만 상한을 준다. */
+  .ai-shell { grid-template-columns: 1fr; height: auto; }
+  .ai-sidebar { position: static; }
+  .ai-session-list { max-height: 30vh; }
+  .ai-main { height: auto; }
+  .ai-log { flex: none; max-height: 62vh; min-height: 320px; }
+}
+
+/* ---------- MongoDB / Redis 탐색 ---------- */
+
+.nosql-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+.nosql-grid .card { margin-bottom: 0; }
+.nosql-server { margin-bottom: 18px; }
+
+/* 라벨-값 쌍. 서버 정보처럼 항목 수가 가변인 목록에 쓴다. */
+.kv-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px 18px;
+  margin: 0;
+}
+.kv dt { font-size: 10.5px; color: var(--text-mute); text-transform: uppercase; letter-spacing: 0.03em; }
+.kv dd {
+  margin: 2px 0 0;
+  font-size: 13.5px;
+  font-variant-numeric: tabular-nums;
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+}
+.stat-sub { font-size: 11px; color: var(--text-dim); margin-top: 1px; }
+
+.nosql-fields td:first-child { max-width: 340px; overflow-wrap: anywhere; }
+.nosql-samples { max-width: 320px; }
+.nosql-samples code {
+  display: block; font-size: 11px; color: var(--text-mute);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* 필드 존재 비율. 숫자만으로는 100%와 97%의 차이가 눈에 들어오지 않는다. */
+.presence { display: flex; align-items: center; gap: 8px; }
+.presence-bar {
+  display: block; width: 70px; height: 6px; flex: none;
+  background: var(--surface-2); border-radius: 3px; overflow: hidden;
+}
+.presence-fill { display: block; height: 100%; border-radius: 3px; }
+.presence-fill.is-ok { background: var(--success); }
+.presence-fill.is-mid { background: var(--warn); }
+.presence-fill.is-low { background: var(--danger); }
+.presence-num { font-size: 11.5px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+
+.table tbody tr.row-warn td:first-child { box-shadow: inset 2px 0 0 var(--warn); }
+.table tbody tr.row-current { background: var(--surface-2); }
+.notice-link { margin-left: 8px; font-size: 12.5px; white-space: nowrap; }
+
+/* 사이드바 하단 액션: 테마 토글 + 로그아웃 */
+.sidebar-actions { display: flex; gap: 6px; }
+.sidebar-actions .btn-block { flex: 1; }
+.btn.icon-only { width: 32px; padding: 0; flex: none; }
+
+/* 대시보드 기능 목록 */
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 8px;
+}
+.feature {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 11px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+.feature:hover { background: hsl(var(--h-muted) / 0.6); border-color: var(--border); text-decoration: none; }
+.feature-icon {
+  width: 30px; height: 30px; flex: none;
+  display: grid; place-items: center;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-dim);
+}
+.feature-body { display: flex; flex-direction: column; min-width: 0; }
+.feature-title { font-size: 13.5px; font-weight: 500; }
+.feature-desc { font-size: 12.5px; color: var(--text-mute); line-height: 1.45; }
+.auth-shell { position: relative; }
+.auth-theme { position: absolute; top: 18px; right: 18px; }
+
+/* 사용자 목록: 마지막 접속 IP */
+.cell-ip {
+  display: inline-block;
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 0 5px;
+  /* IPv6는 길다. 표가 밀리지 않도록 넘치면 자른다(툴팁에 전체가 있다). */
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+/* ---------- 대시보드: DB 상태 카드 ---------- */
+
+.db-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
+}
+.db-card {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 14px 15px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  /* 카드 전체가 링크다. 링크의 기본 색·밑줄을 상속으로 되돌려 카드처럼 보이게 하고,
+   * 누를 수 있다는 사실은 hover·focus 상태로 알린다. */
+  color: inherit;
+  text-decoration: none;
+  transition: border-color 0.12s, transform 0.12s, box-shadow 0.12s;
+}
+.db-card:hover {
+  border-color: var(--primary);
+  box-shadow: var(--shadow-sm);
+  transform: translateY(-1px);
+  text-decoration: none;
+}
+.db-card:active { transform: none; }
+.db-card .db-card-title { color: var(--text); }
+.db-card.is-down { border-color: hsl(var(--h-danger) / 0.45); background: hsl(var(--h-danger) / 0.04); }
+.db-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.db-card-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; }
+.db-card-badges { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.db-card-meta {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  font-size: 12px; color: var(--text-mute);
+}
+
+/* 세션(커넥션 풀) 사용률 */
+.pool { display: flex; flex-direction: column; gap: 4px; }
+.pool-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  font-size: 12px; color: var(--text-dim);
+}
+.pool-detail { font-variant-numeric: tabular-nums; color: var(--text); }
+.pool-bar {
+  display: block; height: 6px; border-radius: 3px;
+  background: var(--surface-2); overflow: hidden;
+}
+.pool-fill { display: block; height: 100%; border-radius: 3px; }
+.pool-fill.is-ok { background: var(--success); }
+.pool-fill.is-mid { background: var(--warn); }
+.pool-fill.is-low { background: var(--danger); }
+
+.db-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
+  gap: 4px 12px;
+}
+.db-metric { display: flex; flex-direction: column; }
+.db-metric-label { font-size: 11px; color: var(--text-mute); }
+.db-metric-value { font-size: 14px; font-variant-numeric: tabular-nums; font-weight: 500; }
+
+.db-trouble { display: flex; gap: 5px; flex-wrap: wrap; }
+.db-trouble .chip { font-size: 11.5px; gap: 5px; }
+
+/* 부하 스파크라인 */
+.db-spark {
+  display: flex; align-items: center;
+  border-top: 1px solid var(--border-soft);
+  padding-top: 9px;
+  margin-top: auto;
+}
+.db-spark-body { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12px; }
+.db-spark-value { font-size: 13.5px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.db-spark-name { font-size: 11px; color: var(--text-mute); }
+
+/* 확인이 필요한 항목 */
+.trouble { border-color: hsl(var(--h-warning) / 0.45); }
+.trouble .card-title .icon { color: var(--warn); }
+.trouble-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.trouble-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border-soft);
+  font-size: 13px;
+}
+.trouble-item:last-child { border-bottom: none; }
+.trouble-conn { font-weight: 500; white-space: nowrap; }
+.trouble-msg {
+  flex: 1; min-width: 0; color: var(--text-dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.trouble-time { font-size: 12px; color: var(--text-mute); white-space: nowrap; }
+.card-title .notice-link { margin-left: auto; font-weight: 400; }
+
+@media (max-width: 700px) {
+  .trouble-item { flex-wrap: wrap; }
+  .trouble-msg { flex-basis: 100%; white-space: normal; }
+}
+
+/* 링크가 된 요약 타일 */
+a.stat { text-decoration: none; color: inherit; transition: border-color 0.15s, background-color 0.15s; }
+a.stat:hover { border-color: var(--text-mute); background: hsl(var(--h-muted) / 0.5); text-decoration: none; }
+
+/* 이상 신호가 없다는 사실도 표시한다 */
+.db-ok {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11.5px; color: var(--success);
+}
+
+/* ==========================================================================
+   데이터 브라우저 · SQL 콘솔 · 매크로 · 프로필 이미지 (P11)
+   ========================================================================== */
+
+/* ---- 공통 조각 ---- */
+
+/* 표가 넓어져도 페이지 자체는 가로로 밀리지 않게 한다.
+   가로 스크롤이 페이지에 생기면 사이드바까지 함께 밀려 화면이 망가진다. */
+.table-scroll { overflow-x: auto; }
+
+.link-btn {
+  background: none; border: 0; padding: 0; cursor: pointer;
+  color: var(--text-dim); font-size: 12px; text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.link-btn:hover { color: var(--text); }
+
+/* 코드 표시. 값이 아니라 문장을 다루는 자리이므로 고정폭이어야 한다.
+ * 코드 *입력*은 구문 강조 편집기(.code-editor)가 맡는다. */
+.code-block {
+  margin: 0 0 10px; padding: 10px 12px; border-radius: var(--radius);
+  background: var(--surface-2); border: 1px solid var(--border-soft);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-all;
+  max-height: 200px; overflow-y: auto;
+}
+
+/* ---- 데이터 브라우저 ---- */
+
+.data-layout {
+  display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 16px; align-items: start;
+}
+@media (max-width: 900px) { .data-layout { grid-template-columns: 1fr; } }
+
+.object-list {
+  display: flex; flex-direction: column; gap: 2px;
+  max-height: 60vh; overflow-y: auto; margin-top: 8px;
+}
+.object-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 6px 8px; border: 0; border-radius: 6px; background: none;
+  cursor: pointer; text-align: left; color: var(--text); font-size: 13px;
+}
+.object-item:hover { background: var(--surface-2); }
+.object-item.is-on { background: hsl(var(--h-primary) / 0.1); font-weight: 500; }
+.object-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.object-meta { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+
+.data-title { display: flex; align-items: baseline; gap: 8px; }
+
+.data-table th { white-space: nowrap; vertical-align: bottom; }
+.data-table th.sortable { cursor: pointer; user-select: none; }
+.data-table th.sortable:hover { background: var(--surface-2); }
+.data-table th.is-sorted { color: var(--text); }
+.col-name { display: block; font-weight: 500; }
+.col-type {
+  display: block; font-size: 10.5px; font-weight: 400; color: var(--text-mute);
+  text-transform: lowercase;
+}
+
+/* 컬럼 이름과 성질 기호를 한 줄에 둔다. 기호가 별도의 줄 상자를 만들면
+   머리글이 이름·기호·타입 세 줄이 되어 표 상단만 두꺼워진다. */
+.col-head { display: flex; align-items: center; gap: 4px; }
+.col-head .col-name { display: inline; }
+.col-mark {
+  display: inline-flex; align-items: center;
+  line-height: 1; /* 글자 높이를 넘기지 않게 한다 — 행 높이를 늘리는 주범이다 */
+  cursor: help;
+}
+.col-mark-pk { color: var(--accent); }
+.col-mark-fk { color: var(--info); }
+/* 값 칸은 한 줄로 고정한다. 긴 텍스트가 줄바꿈되면 한 행이 화면을 가득 채워
+   표로서의 쓸모가 사라진다. 전체 값은 수정 화면에서 본다. */
+.cell-value {
+  display: inline-block; max-width: 320px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom;
+}
+.cell-null { color: var(--text-mute); font-style: italic; font-size: 12px; }
+.cell-cut { color: var(--warn); margin-left: 2px; }
+.col-actions { width: 1%; white-space: nowrap; }
+
+/* 선택 칸. 값보다 앞에 있지만 값을 밀어내면 안 되므로 폭을 최소로 잡는다. */
+.col-check { width: 1%; white-space: nowrap; }
+.col-check input { width: 15px; height: 15px; cursor: pointer; }
+
+/* 행 전체가 상세로 들어가는 입구다. 누를 수 있다는 것이 보여야 한다. */
+.data-table tr.is-clickable { cursor: pointer; }
+.data-table tbody tr.is-clickable:hover { background: var(--surface-2); }
+
+/* 적용을 기다리는 행. 색만으로 구분하지 않고 왼쪽에 굵은 선을 둔다 —
+ * 배경색 차이는 화면 밝기나 색각에 따라 안 보일 수 있다. */
+.data-table tr.is-staged td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
+.data-table tr.is-staged-delete td:first-child { box-shadow: inset 3px 0 0 var(--danger); }
+.data-table tr.is-staged-delete .cell-value { text-decoration: line-through; opacity: 0.7; }
+
+/* 정렬 화살표. 활성 컬럼은 방향을, 나머지는 "누를 수 있다"만 흐리게 알린다. */
+.sort-arrow { font-size: 9px; color: var(--primary); }
+.sort-arrow.is-hint { color: var(--text-mute); opacity: 0; transition: opacity 0.12s; }
+.data-table th.sortable:hover .sort-arrow.is-hint { opacity: 1; }
+
+/* 적용 대기 막대와 선택 막대. 표 위에 붙어 "지금 화면이 DB와 다르다"를 알린다. */
+.stage-bar, .selection-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 12px; margin-bottom: 10px;
+}
+.stage-bar { border-color: var(--warn); background: hsl(var(--h-warning) / 0.08); }
+.stage-bar .icon { color: var(--warn); }
+.selection-bar { border-color: var(--primary); background: hsl(var(--h-primary) / 0.07); }
+
+/* 컬럼 설명 popover. 표 위에 떠서 스키마에 적어 둔 설명을 보여준다. */
+.col-pop {
+  position: fixed; z-index: 60; max-width: 320px;
+  padding: 8px 10px; border-radius: var(--radius-sm);
+  background: var(--surface); border: 1px solid var(--border);
+  box-shadow: 0 8px 24px hsl(0 0% 0% / 0.28);
+  font-size: 12px; line-height: 1.5; pointer-events: none;
+}
+.col-pop b { display: block; font-size: 11.5px; color: var(--text-mute); margin-bottom: 2px; }
+.col-pop p { margin: 0; color: var(--text); }
+
+/* 적용 전 SQL 미리보기 */
+.sql-preview { display: flex; flex-direction: column; gap: 12px; max-height: 52vh; overflow-y: auto; }
+.sql-preview-item { display: flex; flex-direction: column; gap: 5px; }
+.sql-preview-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+.data-pager {
+  display: flex; align-items: center; gap: 12px; padding: 10px 2px; flex-wrap: wrap;
+}
+.filter-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.chip-x {
+  background: none; border: 0; padding: 0 0 0 4px; cursor: pointer;
+  color: inherit; font-size: 14px; line-height: 1;
+}
+/* 행 상세는 여러 칸이 옆으로 이어질 수 있다(외래키 따라가기). */
+.row-chain {
+  display: flex; gap: 12px; align-items: flex-start;
+  overflow-x: auto;
+  /* 스크롤 막대가 마지막 칸의 값을 가리지 않게 아래를 조금 띄운다. */
+  padding-bottom: 4px;
+}
+/* flex-shrink를 0으로 두는 이유: 사슬이 길어질 때 칸을 줄이면 모든 칸이 함께
+   읽기 어려워진다. 사슬은 값을 확인하려고 펼치는 것인데 값이 잘리면 펼친 뜻이
+   없다. 폭을 지키고 대신 옆으로 넘기게 한다 — 넘겨보는 수고가 다 같이 좁아지는
+   것보다 낫다. flex-grow는 남겨 둬 칸이 하나뿐일 때는 모달을 가득 채운다. */
+.row-editor, .row-panel {
+  display: flex; flex-direction: column; gap: 12px;
+  max-height: 60vh; overflow-y: auto;
+  flex: 1 0 360px; min-width: 360px;
+}
+.row-panel {
+  border-left: 1px solid var(--border); padding-left: 12px;
+}
+.row-panel-head {
+  display: flex; align-items: center; gap: 8px;
+  position: sticky; top: 0; background: var(--surface); z-index: 1;
+  padding-bottom: 6px; border-bottom: 1px solid var(--border-soft);
+}
+.row-panel-head strong { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row-panel-head .icon-btn { margin-left: auto; }
+.row-field-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.fk-follow { display: inline-flex; align-items: center; gap: 2px; }
+.row-view-field.is-followed { background: var(--surface-2); border-radius: var(--radius-sm); }
+.row-view-field.is-followed .col-name { color: var(--info); }
+
+/* 좁은 화면에서는 옆으로 늘어놓을 폭이 없다. 위아래로 쌓는다. */
+@media (max-width: 720px) {
+  .row-chain { flex-direction: column; overflow-x: visible; }
+  /* 세로로 쌓을 때 flex-basis는 **높이**가 된다. 위의 360px를 그대로 두면
+     칸 하나가 화면을 다 먹는다. */
+  .row-editor, .row-panel { flex: 0 0 auto; max-height: none; min-width: 0; width: 100%; }
+  .row-panel { border-left: none; border-top: 1px solid var(--border); padding-left: 0; padding-top: 10px; }
+}
+/* 컬럼 이름 줄: 이름 · 기호 · 타입은 왼쪽에, NULL 선택은 오른쪽 끝에 붙인다. */
+.row-field .field-label { display: flex; align-items: center; gap: 6px; }
+.row-field .field-label .col-name { display: inline; }
+.row-field .field-label .col-type { display: inline; }
+.row-editor .checkbox.small {
+  font-size: 11.5px; color: var(--text-dim);
+  margin: 0 0 0 auto; gap: 5px;
+}
+.row-editor .checkbox.small input { width: 14px; height: 14px; }
+
+/* 행 상세(읽기 전용) — 목록에서 잘려 보이던 값을 끝까지 보여준다 */
+.row-view-field .field-label { display: flex; align-items: center; gap: 6px; }
+.row-view-field .col-name, .row-view-field .col-type { display: inline; }
+.value-block {
+  margin: 0; padding: 8px 10px;
+  background: var(--bg); border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+  font-family: var(--mono); font-size: 12px; line-height: 1.55;
+  white-space: pre-wrap; word-break: break-all;
+  max-height: 260px; overflow: auto;
+}
+/* UUID는 옮겨 적을 때 한 글자 틀린 것을 눈으로 잡을 수 있어야 한다. */
+.value-uuid {
+  display: inline-block; padding: 6px 10px;
+  background: hsl(var(--h-violet) / 0.08); border: 1px solid hsl(var(--h-violet) / 0.25);
+  border-radius: var(--radius-sm);
+  font-family: var(--mono); font-size: 12.5px; letter-spacing: 0.02em; color: var(--accent);
+}
+
+/* ---- SQL 콘솔 ---- */
+
+.sql-results { display: flex; flex-direction: column; gap: 14px; }
+
+/* 편집기 아래의 검사·정리 줄. 실행 버튼과 일부러 떨어뜨려 놓았다 —
+ * "검사"를 누르려다 "실행"을 누르는 사고를 자리로 막는다. */
+.sql-editor-tools {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-top: 10px;
+}
+.sql-check:empty { display: none; }
+.sql-check { margin-top: 10px; }
+.sql-check-body { display: flex; flex-direction: column; gap: 8px; }
+.sql-check-list { display: flex; flex-direction: column; gap: 6px; }
+.sql-check-item {
+  padding: 8px 10px; border-radius: var(--radius);
+  background: var(--surface-2); border: 1px solid var(--border-soft);
+}
+.sql-check-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.sql-check-msg { margin: 4px 0 0; font-size: 12px; line-height: 1.5; }
+.sql-check-msg.is-error {
+  color: var(--danger);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  word-break: break-word;
+}
+.history-card summary { cursor: pointer; font-size: 13px; color: var(--text-dim); }
+.history-list { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; }
+.history-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 6px 8px; border: 0; border-radius: 6px; background: none; cursor: pointer;
+  text-align: left; color: var(--text);
+}
+.history-item:hover { background: var(--surface-2); }
+.history-item code {
+  font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* 한 줄에 "고르기(넓은 버튼)"와 "지우기(아이콘)"를 나란히 둔다.
+ * 지우기가 항상 보이는 이유: hover로만 나타나면 터치 화면에서는 닿을 수 없다. */
+.history-row { display: flex; align-items: center; gap: 4px; }
+.history-row .history-item { flex: 1; min-width: 0; }
+.history-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
+
+/* 버튼 안의 단축키 표시. 이름보다 약하게 보여야 한다 —
+ * 누르는 것은 이름이고 단축키는 다음에 쓰라고 알려주는 덤이다. */
+.btn-key {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  opacity: 0.72;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: hsl(var(--h-muted) / 0.5);
+  white-space: nowrap;
+}
+.btn-primary .btn-key { background: hsl(0 0% 100% / 0.16); }
+
+/* ---- 권한 화면의 능력 선택 ---- */
+
+.cap-pick { display: flex; flex-wrap: wrap; gap: 10px 16px; }
+.cap-toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12.5px; cursor: pointer; user-select: none;
+}
+.cap-toggle input { cursor: pointer; }
+.cap-toggle .field-help { margin-left: 4px; }
+/* 설명이 긴 토글은 한 줄에 하나씩 쌓는다. 가로로 흘리면 설명이 어느 항목의
+   것인지 줄바꿈 위치에 따라 달라 보인다. */
+.cap-pick-stacked { flex-direction: column; gap: 7px; align-items: flex-start; }
+.cap-cell { display: flex; flex-direction: column; gap: 4px; }
+.cap-cell .cap-toggle { font-size: 12px; }
+
+/* ---- 매크로 목록 ---- */
+
+.macro-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px;
+}
+/* 커스텀 노드 목록은 매크로 카드와 같은 격자를 쓴다. 둘은 같은 화면의 두 탭이고,
+ * 모양이 다르면 탭을 옮길 때마다 눈이 새로 적응해야 한다. */
+.nodedef-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px;
+}
+.nodedef-card { display: flex; flex-direction: column; gap: 10px; }
+/* 버튼이지만 링크처럼 보이는 제목. 노드는 이동할 주소가 없어 모달로 열린다. */
+.as-link {
+  border: 0; background: none; padding: 0; cursor: pointer;
+  font-family: inherit; text-align: left;
+}
+.as-link:hover { text-decoration: underline; }
+.macro-card { display: flex; flex-direction: column; gap: 10px; }
+.macro-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.macro-name { font-size: 15px; font-weight: 600; color: var(--text); text-decoration: none; }
+.macro-name:hover { text-decoration: underline; }
+.macro-desc { margin: 0; font-size: 12.5px; color: var(--text-dim); }
+.macro-meta {
+  display: flex; flex-direction: column; gap: 2px;
+  font-size: 11.5px; color: var(--text-mute);
+}
+.macro-card-actions { display: flex; gap: 6px; margin-top: auto; flex-wrap: wrap; }
+
+/* ---- 매크로 에디터 ---- */
+
+.macro-editor { display: flex; flex-direction: column; height: calc(100vh - 48px); min-height: 520px; }
+.macro-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding-bottom: 12px; border-bottom: 1px solid var(--border); flex-wrap: wrap;
+}
+.macro-head-main { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.macro-head-side { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.macro-back {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 12.5px; color: var(--text-dim); text-decoration: none;
+}
+.macro-back:hover { color: var(--text); }
+.macro-title { margin: 0; font-size: 17px; }
+.macro-status:not(:empty) { padding: 10px 0 0; }
+
+.macro-body {
+  display: grid; grid-template-columns: 200px minmax(0, 1fr) 300px;
+  gap: 12px; flex: 1; min-height: 0; padding-top: 12px;
+}
+@media (max-width: 1100px) { .macro-body { grid-template-columns: 170px minmax(0, 1fr); } }
+
+.macro-side, .macro-panel {
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface); overflow-y: auto; padding: 12px;
+}
+@media (max-width: 1100px) { .macro-panel { display: none; } }
+
+.palette-head { font-size: 12px; font-weight: 600; color: var(--text-dim); margin-bottom: 8px; }
+.palette-group { margin-bottom: 12px; }
+.palette-title {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--text-mute); margin-bottom: 4px;
+}
+/* 아이콘 · 이름은 왼쪽에 붙이고, 부가 표시(서버 설정 필요 등)만 오른쪽 끝으로 민다.
+   space-between으로 두면 아이콘과 이름이 양끝으로 벌어져 한 항목으로 안 보인다. */
+.palette-item {
+  display: flex; align-items: center; gap: 6px;
+  width: 100%; padding: 5px 8px; margin-bottom: 2px;
+  border: 1px solid transparent; border-radius: 6px; background: none;
+  cursor: pointer; text-align: left; color: var(--text); font-size: 12.5px;
+}
+.palette-item .palette-note { margin-left: auto; }
+.palette-item:hover:not(:disabled) { background: var(--surface-2); border-color: var(--border-soft); }
+.palette-item:disabled { opacity: 0.5; cursor: not-allowed; }
+.palette-note { font-size: 10px; color: var(--text-mute); }
+
+.palette-icon { display: inline-flex; color: var(--text-mute); margin-right: 6px; }
+.palette-item:hover:not(:disabled) .palette-icon { color: var(--text); }
+.palette-name { display: inline-flex; align-items: center; }
+
+.macro-canvas-wrap {
+  position: relative; /* 도움말 패널의 기준 */
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-alt); overflow: hidden; min-height: 0;
+}
+
+/* 노드 도움말. 캔버스 오른쪽 아래에 고정한다 — 마우스를 따라다니면
+   정작 가리키는 노드를 상자가 덮는다. */
+.macro-help {
+  position: absolute; right: 12px; bottom: 12px; z-index: 3;
+  width: 300px; max-width: calc(100% - 24px);
+  padding: 10px 12px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+  pointer-events: none; /* 도움말이 캔버스 조작을 가로채면 안 된다 */
+}
+.help-head { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.help-icon { display: inline-flex; color: var(--text-dim); }
+.help-group {
+  margin-left: auto; font-size: 10.5px; color: var(--text-mute);
+}
+.help-desc { margin: 6px 0 8px; font-size: 12px; color: var(--text-dim); line-height: 1.5; }
+.help-row {
+  display: flex; gap: 8px; font-size: 11.5px; color: var(--text-dim);
+  padding: 2px 0;
+}
+.help-row.is-warn { color: var(--warn); }
+.help-key { flex: none; width: 62px; color: var(--text-mute); }
+
+/* ---- 캔버스 주석(메모·그룹) ---- */
+
+.macro-group { cursor: move; }
+.group-box { fill: currentColor; fill-opacity: 0.07; stroke: currentColor; stroke-width: 1.5; stroke-dasharray: 6 4; }
+.group-label { font-size: 12px; font-weight: 600; fill: currentColor; }
+/* 고른 것은 노드와 같은 색 테두리로 표시한다.
+ * 자기 색으로 굵기만 바꾸면(예전 방식) 무엇이 골라졌는지 눈에 띄지 않는다. */
+.macro-group.is-selected .group-box {
+  stroke: var(--primary); stroke-dasharray: none; stroke-width: 2.5;
+}
+.macro-note { cursor: move; }
+.note-box { fill: currentColor; fill-opacity: 0.14; stroke: currentColor; stroke-width: 1; }
+.note-text { font-size: 11.5px; fill: var(--text); }
+.macro-note.is-selected .note-box { stroke: var(--primary); stroke-width: 2.5; }
+.group-grip { fill: currentColor; fill-opacity: 0.5; cursor: nwse-resize; }
+
+/* 주석 색. 도형은 currentColor를 쓰므로 색 하나만 정하면 된다. */
+.tint-yellow { color: hsl(45 90% 55%); }
+.tint-blue { color: hsl(210 85% 60%); }
+.tint-green { color: hsl(142 60% 50%); }
+.tint-pink { color: hsl(330 75% 65%); }
+.tint-gray { color: hsl(240 5% 60%); }
+
+.tint-picker { display: flex; gap: 6px; }
+.tint-swatch {
+  width: 22px; height: 22px; border-radius: 50%; cursor: pointer;
+  border: 2px solid transparent; background: currentColor;
+}
+.tint-swatch.is-on { border-color: var(--text); }
+.macro-canvas { width: 100%; height: 100%; display: block; cursor: grab; }
+.macro-canvas:active { cursor: grabbing; }
+
+.macro-node { cursor: move; }
+.node-box { fill: var(--surface); stroke: var(--border); stroke-width: 1; }
+.node-head { fill: var(--surface-2); }
+.macro-node.is-selected .node-box { stroke: var(--primary); stroke-width: 2; }
+.macro-node.is-disabled { opacity: 0.45; }
+/* 노드 종류를 머리띠 색으로 구분한다. 이름을 읽지 않고도 DB 노드와 흐름 노드가
+   갈려 보여야 큰 그래프에서 구조가 눈에 들어온다. */
+.macro-node.node-db .node-head { fill: hsl(var(--h-info) / 0.16); }
+.macro-node.node-studio .node-head { fill: hsl(var(--h-violet) / 0.16); }
+.macro-node.node-script .node-head { fill: hsl(var(--h-warning) / 0.16); }
+.macro-node.node-custom .node-head { fill: hsl(var(--h-success) / 0.16); }
+.node-icon { color: var(--text-dim); }
+.node-title { font-size: 12px; font-weight: 600; fill: var(--text); }
+.node-summary { font-size: 10.5px; fill: var(--text-mute); }
+.node-port-label { font-size: 10px; fill: var(--text-dim); }
+.node-port { fill: var(--surface); stroke: var(--text-dim); stroke-width: 1.5; }
+.node-port.port-out { cursor: crosshair; }
+.node-port.port-out:hover { fill: var(--primary); stroke: var(--primary); }
+.macro-edge {
+  fill: none; stroke: var(--text-dim); stroke-width: 1.6; cursor: pointer;
+}
+.macro-edge:hover { stroke: var(--danger); stroke-width: 2.2; }
+.macro-edge.is-preview { stroke-dasharray: 4 3; pointer-events: none; }
+
+.panel-empty { text-align: center; color: var(--text-mute); padding: 30px 10px; }
+.panel-empty p { margin: 8px 0 0; font-size: 12.5px; }
+.panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.panel-head h2 { margin: 0; font-size: 14px; }
+.panel-desc { margin: 4px 0 12px; font-size: 11.5px; color: var(--text-dim); }
+.panel-advanced { margin-top: 12px; }
+.panel-advanced summary { cursor: pointer; font-size: 12px; color: var(--text-dim); }
+.panel-advanced > * { margin-top: 8px; }
+.panel-hint { margin-top: 12px; font-size: 11px; color: var(--text-mute); }
+.panel-hint code {
+  padding: 1px 4px; border-radius: 4px; background: var(--surface-2); font-size: 10.5px;
+}
+
+/* ---- 매크로 부속 대화상자 ---- */
+
+.param-list { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
+.param-row {
+  display: grid; grid-template-columns: 1fr 1fr 110px 1fr auto auto;
+  gap: 6px; align-items: center;
+}
+.param-row .input { height: 32px; font-size: 12.5px; }
+
+.version-list, .run-list, .nodedef-list { display: flex; flex-direction: column; gap: 6px; }
+.version-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px; border: 1px solid var(--border-soft); border-radius: var(--radius);
+}
+.version-title { display: flex; align-items: center; gap: 6px; }
+.version-note { font-size: 12.5px; color: var(--text-dim); margin: 2px 0; }
+.version-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
+.run-row, .nodedef-row {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 8px 10px; border: 1px solid var(--border-soft); border-radius: var(--radius);
+  background: none; cursor: pointer; text-align: left; color: var(--text); font-size: 12.5px;
+}
+.run-row:hover, .nodedef-row:hover { background: var(--surface-2); }
+
+/* ---- 실행 로그 ---- */
+
+.run-log-head { margin-bottom: 10px; }
+.run-summary { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12.5px; }
+.run-log {
+  max-height: 55vh; overflow-y: auto; padding: 10px;
+  border: 1px solid var(--border-soft); border-radius: var(--radius);
+  background: var(--surface-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px; line-height: 1.6;
+}
+.run-log-line { display: flex; gap: 8px; flex-wrap: wrap; padding: 1px 0; }
+.log-time { color: var(--text-mute); flex-shrink: 0; }
+.log-node { color: var(--accent); flex-shrink: 0; }
+.log-message { flex: 1; min-width: 0; word-break: break-word; }
+.run-log-line.log-warn .log-message { color: var(--warn); }
+.run-log-line.log-error .log-message { color: var(--danger); }
+.run-log-line.log-debug { opacity: 0.7; }
+.log-detail { flex-basis: 100%; margin-left: 20px; }
+.log-detail summary { cursor: pointer; color: var(--text-mute); }
+.log-detail pre { margin: 4px 0 0; white-space: pre-wrap; word-break: break-all; }
+
+/* ---- 프로필 이미지 ---- */
+
+.image-pick { display: flex; flex-direction: column; gap: 8px; margin: 14px 0; }
+.image-pick-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.image-pick-row .input { flex: 1; min-width: 220px; }
+.hidden-file { display: none; }
+.upload-status:not(:empty) { padding: 4px 0; }
+.avatar.avatar-photo { padding: 0; overflow: hidden; }
+.avatar-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.perm-list { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+.sort-arrow { font-size: 9px; color: var(--text-dim); margin-left: 3px; }
+
+/* ==========================================================================
+   구문 강조 (P12)
+   ========================================================================== */
+
+/* 토큰 색.
+ *
+ * 팔레트 원칙("색은 의미가 있을 때만")과 충돌하는 것처럼 보이지만, 코드에서는
+ * 색 자체가 의미다 — 무엇이 문자열이고 무엇이 식별자인지가 구문 오류를 눈으로 찾는
+ * 유일한 단서다. 대신 색 수를 여섯 개로 묶고, 컨트롤에 쓰는 무채색과 겹치지 않게 한다.
+ */
+:root {
+  --tok-keyword: hsl(var(--h-violet));
+  --tok-string: hsl(var(--h-success));
+  --tok-number: hsl(var(--h-info));
+  --tok-comment: hsl(var(--h-muted-foreground));
+  --tok-func: hsl(var(--h-chart-1));
+  --tok-danger: hsl(var(--h-destructive));
+}
+
+/* 다크 테마에서는 같은 색이 배경에 묻힌다. 명도를 올려 대비를 되살린다.
+ * 팔레트와 같은 규칙으로 두 곳에 적는다: 시스템 설정이 기본이고 사용자의 선택이 이긴다. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --tok-keyword: hsl(263 70% 74%);
+    --tok-string: hsl(142 55% 62%);
+    --tok-number: hsl(201 80% 68%);
+    --tok-comment: hsl(240 5% 55%);
+    --tok-func: hsl(221 75% 72%);
+    --tok-danger: hsl(0 75% 70%);
+  }
+}
+
+:root[data-theme="dark"] {
+  --tok-keyword: hsl(263 70% 74%);
+  --tok-string: hsl(142 55% 62%);
+  --tok-number: hsl(201 80% 68%);
+  --tok-comment: hsl(240 5% 55%);
+  --tok-func: hsl(221 75% 72%);
+  --tok-danger: hsl(0 75% 70%);
+}
+
+.tok-keyword { color: var(--tok-keyword); font-weight: 500; }
+.tok-danger { color: var(--tok-danger); font-weight: 600; }
+.tok-string { color: var(--tok-string); }
+.tok-key { color: var(--tok-keyword); }
+.tok-number { color: var(--tok-number); }
+.tok-comment { color: var(--tok-comment); font-style: italic; }
+.tok-func { color: var(--tok-func); }
+.tok-builtin { color: var(--tok-func); }
+.tok-ident { color: var(--tok-number); }
+.tok-param { color: var(--tok-func); font-weight: 500; }
+.tok-operator { color: var(--text-dim); }
+.tok-punct { color: var(--text-dim); }
+
+/* ---- 겹쳐 놓은 편집기 ----
+ *
+ * 투명한 textarea를 강조된 pre 위에 올린다. 두 요소의 글꼴·크기·행간·여백·줄바꿈
+ * 규칙이 **하나라도** 다르면 글자가 어긋나므로, 그 값들을 여기서 한 번에 준다.
+ * 개별 선택자에서 따로 손대지 말 것.
+ */
+.code-editor {
+  position: relative;
+  display: block;
+}
+
+.code-editor > .code-hl,
+.code-editor > .code-ta {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-sizing: border-box;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+  letter-spacing: 0;
+  tab-size: 2;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.code-editor > .code-hl {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  /* 클릭·선택은 위의 textarea가 받는다. */
+  pointer-events: none;
+  background: var(--surface);
+  color: var(--text);
+  border-color: transparent;
+}
+
+.code-editor > .code-ta {
+  position: relative;
+  display: block;
+  width: 100%;
+  min-height: 0;
+  resize: vertical;
+  background: transparent;
+  /* 글자는 투명하고 커서만 보인다. 뒤의 pre가 색을 그린다. */
+  color: transparent;
+  caret-color: var(--text);
+}
+
+.code-editor > .code-ta:focus {
+  outline: none;
+  border-color: hsl(var(--h-ring));
+  box-shadow: 0 0 0 3px hsl(var(--h-ring) / 0.12);
+}
+
+/* 선택 영역은 반투명이어야 뒤의 글자가 비쳐 보인다. */
+.code-editor > .code-ta::selection { background: hsl(var(--h-ring) / 0.28); }
+.code-editor > .code-ta::placeholder { color: var(--text-mute); }
+
+/* ---- 줄 번호 거터 ----
+ *
+ * 거터를 켜면 자동 줄바꿈이 꺼진다. 논리적인 한 줄이 화면에서 여러 줄이 되면
+ * 번호와 내용이 어긋나고, 어긋난 번호는 오류 메시지의 행 번호를 찾는 데 쓸 수 없다.
+ * 대신 긴 줄은 가로 스크롤로 본다. 두 겹(pre/textarea)의 스크롤은 JS가 맞춘다.
+ */
+.code-editor.has-gutter {
+  --gutter-w: 4ch;
+}
+.code-editor.has-gutter > .code-hl,
+.code-editor.has-gutter > .code-ta {
+  padding-left: calc(var(--gutter-w) + 20px);
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
+  overflow-x: auto;
+}
+
+.code-gutter {
+  position: absolute;
+  top: 1px; bottom: 1px; left: 1px;
+  width: calc(var(--gutter-w) + 12px);
+  /* 위 여백은 .code-hl 의 테두리(1px)를 뺀 안쪽 여백(10px)과 같아야 한다.
+   * 1px만 어긋나도 번호와 글자가 미묘하게 엇갈려 읽기가 불편해진다. */
+  padding: 10px 6px 0 0;
+  box-sizing: border-box;
+  overflow: hidden;
+  z-index: 1;
+  border-radius: var(--radius) 0 0 var(--radius);
+  background: var(--surface-2);
+  border-right: 1px solid var(--border-soft);
+  pointer-events: none;
+}
+
+.code-gutter-inner {
+  display: flex;
+  flex-direction: column;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+  text-align: right;
+  color: var(--text-mute);
+  font-variant-numeric: tabular-nums;
+  /* 번호는 선택 대상이 아니다. 코드를 복사할 때 번호가 딸려오면 안 된다. */
+  user-select: none;
+}
+
+/* ---- 읽기 전용 코드 블록 ---- */
+
+.code-block[data-lang] { tab-size: 2; }
+
+/* 실행 기록 표 안의 SQL. 표 칸에 들어가므로 블록 여백을 없앤다. */
+.mig-exec-sql {
+  margin: 0; padding: 0; border: 0; background: none;
+  max-height: none; font-size: 11.5px;
+}
+
+/* 실행 이력 목록의 문장 미리보기. 한 줄로 눌러 담는다. */
+.history-sql {
+  margin: 0; padding: 0; border: 0; background: none;
+  max-height: none; font-size: 11.5px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  flex: 1; min-width: 0;
+}
+
+/* ---- 백업 (P12) ---- */
+
+.backup-list { display: flex; flex-direction: column; gap: 12px; }
+.backup-card { display: flex; flex-direction: column; gap: 10px; }
+.backup-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.backup-note { margin: 0; font-size: 12.5px; color: var(--text-dim); }
+.backup-progress .loading { padding: 4px 0; }
+
+.backup-stats {
+  display: flex; flex-wrap: wrap; gap: 6px 22px; margin: 0;
+  font-size: 12px;
+}
+.backup-stats > div { display: flex; align-items: baseline; gap: 6px; }
+.backup-stats dt { color: var(--text-mute); }
+.backup-stats dd { margin: 0; font-variant-numeric: tabular-nums; }
+
+.backup-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.backup-actions > .muted { margin-left: auto; }
+
+/* 미리보기는 파일의 앞부분이라 길다. 모달 안에서 스크롤되게 둔다. */
+.backup-preview { max-height: 55vh; }
+
+/* 롤백 대화상자의 버튼 줄. openModal의 기본 footer와 같은 간격을 쓴다. */
+.rollback-footer { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* ---- 매크로 자동 실행(트리거) ---- */
+
+.trigger-list { display: flex; flex-direction: column; gap: 8px; }
+
+.trigger-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 12px; border: 1px solid var(--border-soft); border-radius: var(--radius);
+}
+/* 꺼진 트리거는 목록에 남지만 눈에 덜 띄어야 한다 — 지운 것과 구분되면서
+   "지금 도는 것"을 훑을 때 방해하지 않는 정도. */
+.trigger-row.is-off { opacity: 0.6; }
+
+.trigger-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.trigger-name { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-weight: 600; }
+.trigger-when {
+  font-size: 12.5px; color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.trigger-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+
+/* 파라미터 상자. 테두리를 --border-soft(60% 투명)로 두었더니 배경과 거의 같은
+   밝기라 어디까지가 입력란인지 보이지 않았다. 실선 테두리로 올린다. */
+.trigger-params {
+  display: flex; flex-direction: column; gap: 12px;
+  padding: 12px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.trigger-param { gap: 6px; }
+.trigger-param .field-label { display: flex; align-items: center; gap: 6px; }
+/* 값 입력란도 상자 배경 위에서 또렷해야 한다. */
+.trigger-params .input {
+  background: var(--surface); border-color: var(--border);
+}
+.trigger-params .input:focus { border-color: var(--primary); }
+.param-mode { margin-left: auto; }
+.param-mode .input { height: 26px; font-size: 11.5px; padding: 0 24px 0 8px; }
+.req-mark { color: var(--danger); }
+.mono-input { font-family: var(--mono); font-size: 12.5px; }
+
+/* cron 미리보기: 식이 맞는지 확인하는 곳이므로 시각을 등폭으로 정렬한다. */
+.cron-preview {
+  margin: 4px 0 10px; padding: 8px 10px;
+  border: 1px solid var(--border-soft); border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.cron-describe { font-size: 12.5px; font-weight: 600; }
+.cron-times {
+  margin: 6px 0 0; padding-left: 16px;
+  font-size: 12px; color: var(--text-dim); font-variant-numeric: tabular-nums;
+}
+.cron-times li { margin: 1px 0; }
+
+@media (max-width: 720px) {
+  .trigger-row { flex-direction: column; align-items: stretch; }
+  .trigger-actions { justify-content: flex-end; }
+}
+
+/* ---- 매크로 공유(공개 범위 + 협업자) ---- */
+
+/* 공유 대화상자는 두 부분이다: 위쪽 공개 범위, 아래쪽 협업자.
+   구분선을 두는 이유는 둘이 독립적인 결정이어서다 — 비공개인 채로 협업자만
+   두는 것이 오히려 흔한 형태이고, 한 덩어리로 보이면 그 조합을 떠올리기 어렵다. */
+.share-section {
+  margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border-soft);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.share-section h4 { margin: 0; font-size: 13px; font-weight: 600; }
+
+.share-collab { display: flex; flex-direction: column; gap: 6px; }
+
+.share-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 8px 10px; border: 1px solid var(--border-soft); border-radius: var(--radius);
+}
+.share-row-main { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.share-row-side { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.share-row-side .muted { font-size: 12px; }
+.share-name { font-weight: 600; }
+
+.share-invite-row { display: flex; gap: 8px; align-items: center; }
+.share-invite-row select { flex: 1; min-width: 0; }
+
+@media (max-width: 720px) {
+  .share-row { flex-direction: column; align-items: stretch; }
+  .share-row-side { justify-content: space-between; }
+}
+
+/* ---- 서버 + DB 목록 ---- */
+
+.server-list { display: flex; flex-direction: column; gap: 12px; }
+
+.server-card {
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+  background: var(--surface); padding: 12px 14px;
+}
+.server-card.is-off { opacity: 0.65; }
+
+.server-head {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto auto;
+  align-items: center; gap: 10px;
+}
+.server-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.server-title h2 { margin: 0; font-size: 15px; }
+.server-addr {
+  font-size: 12px; color: var(--text-dim);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.server-status {
+  display: flex; align-items: center; gap: 5px;
+  font-size: 12px; color: var(--text-dim); white-space: nowrap;
+}
+.server-actions { display: flex; align-items: center; gap: 6px; }
+
+/* 펼침 삼각형: play 아이콘을 돌려 쓴다(아이콘을 하나 더 만들 이유가 없다). */
+.server-toggle {
+  display: flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; padding: 0;
+  border: none; background: none; cursor: pointer; color: var(--text-dim);
+  transform: rotate(90deg); transition: transform 120ms ease;
+}
+.server-toggle.is-collapsed { transform: rotate(0deg); }
+.server-toggle:hover { color: var(--text); }
+
+.server-dbs {
+  display: flex; flex-direction: column; gap: 4px;
+  margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-soft);
+}
+
+.db-row {
+  display: grid; grid-template-columns: auto 1fr auto;
+  align-items: center; gap: 10px;
+  padding: 7px 8px; border-radius: var(--radius);
+}
+.db-row:hover { background: var(--surface-2); }
+.db-row.is-locked { opacity: 0.55; }
+
+.db-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.db-title { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.db-name { font-weight: 600; font-size: 13px; }
+.db-meta {
+  display: flex; align-items: center; gap: 5px; flex-wrap: wrap;
+  font-size: 12px; color: var(--text-dim);
+}
+.db-meta code {
+  padding: 1px 5px; border-radius: 4px;
+  background: var(--surface-2); font-size: 11px;
+}
+.db-caps { display: inline-flex; gap: 4px; }
+.db-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+
+/* DB 고르기 목록(일괄 추가·서버 병합) */
+.dblist { margin: 8px 0; }
+.dblist-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 4px; max-height: 40vh; overflow-y: auto;
+  padding: 8px; border: 1px solid var(--border-soft); border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.dblist-item {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 6px; border-radius: 5px; cursor: pointer; font-size: 12.5px;
+}
+.dblist-item:hover { background: var(--surface); }
+.dblist-item.is-registered { opacity: 0.55; cursor: default; }
+.dblist-name { font-weight: 600; }
+.dblist-note {
+  margin-left: auto; font-size: 11px; color: var(--text-mute);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+@media (max-width: 860px) {
+  .server-head { grid-template-columns: auto 1fr; row-gap: 6px; }
+  .server-addr, .server-status { grid-column: 2; }
+  .server-actions { grid-column: 2; justify-content: flex-start; }
+  .db-row { grid-template-columns: auto 1fr; }
+  .db-actions { grid-column: 2; justify-content: flex-end; }
+}
+
+/* 권한 표: 서버 줄과 그 아래 DB 줄 */
+.access-server-row > td { background: var(--surface-2); }
+.access-server-row .cell-main {
+  display: flex; align-items: center; gap: 6px; font-weight: 700;
+}
+/* DB 줄은 들여써서 어느 서버에 속하는지 눈으로 따라갈 수 있게 한다. */
+.access-db-name { padding-left: 22px !important; }
+.access-db-row + .access-server-row > td { border-top: 2px solid var(--border); }
+
+/* ---------- 2단계 인증 ---------- */
+
+/* 등록 화면은 로그인 카드보다 넓어야 QR과 설명이 함께 들어간다. */
+.auth-card-wide { max-width: 560px; }
+
+.totp-steps {
+  margin: 0 0 16px;
+  padding-left: 20px;
+  text-align: left;
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.totp-scan {
+  display: flex;
+  gap: 18px;
+  align-items: flex-start;
+  padding: 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  text-align: left;
+}
+
+/* QR은 흰 바탕에 여백을 두고 그린다. 다크 테마에서 배경과 붙으면
+ * 카메라가 코드 경계를 찾지 못한다. */
+.totp-qr {
+  flex: none;
+  background: #fff;
+  border-radius: 6px;
+  image-rendering: pixelated;
+}
+
+.totp-manual { min-width: 0; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+
+.totp-secret {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  word-break: break-all;
+  user-select: all;
+}
+
+.totp-form { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; text-align: left; }
+
+/* 코드 입력칸은 숫자 여섯 자리만 들어간다. 폭을 좁히고 자간을 벌려
+ * 몇 자리를 넣었는지 눈으로 셀 수 있게 한다. */
+.code-input {
+  font-family: var(--mono);
+  font-size: 20px;
+  letter-spacing: 0.35em;
+  text-align: center;
+}
+
+.totp-status { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+
+.recovery-codes {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 8px;
+  margin: 14px 0;
+  padding: 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.recovery-codes code {
+  font-size: 14px;
+  letter-spacing: 0.06em;
+  user-select: all;
+  text-align: center;
+}
+
+/* ---------- 보안 설정 ---------- */
+
+.security-stat {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
+  margin: 14px 0;
+}
+
+.security-tile {
+  padding: 12px 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.security-tile.is-success { border-left-color: var(--success); }
+.security-tile.is-warn { border-left-color: var(--warn); }
+.security-tile-value { font-size: 22px; font-weight: 700; line-height: 1.2; }
+.security-tile-label { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+
+@media (max-width: 620px) {
+  .totp-scan { flex-direction: column; align-items: center; }
+  .totp-manual { align-items: stretch; width: 100%; }
+}
+
+/* ---- 떠 있는 패널 ----
+ *
+ * 모달(z-index 100)보다 아래에 둔다. 패널 안에서 연 대화상자(프로바이더 설정 등)가
+ * 패널에 가려지면 아무것도 할 수 없다. 토스트(200)는 언제나 맨 위다. */
+.float-panel {
+  position: fixed;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.float-panel.is-front { z-index: 91; }
+/* 끌고 있는 동안에는 안쪽에서 포인터를 가로채지 않는다.
+ * 그러지 않으면 커서가 iframe·입력칸 위를 지날 때 끌기가 끊긴다. */
+.float-panel.is-dragging .float-body { pointer-events: none; user-select: none; }
+
+.float-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 6px 8px 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.float-grip {
+  display: flex; align-items: center; gap: 7px;
+  flex: 1; min-width: 0;
+  cursor: move;
+  /* 제목 줄을 끌 때 글자가 선택되면 파란 덩어리가 따라다닌다. */
+  user-select: none;
+  padding: 3px 0;
+}
+.float-grip .icon { color: var(--text-mute); flex: none; }
+.float-title {
+  font-size: 13px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.float-actions { display: flex; align-items: center; gap: 2px; flex: none; }
+.float-btn { width: 26px; height: 26px; }
+
+.float-body { flex: 1; min-height: 0; overflow: auto; padding: 12px; }
+
+/* 크기 조절 손잡이. 모서리에 삼각형으로 그린다 — 테두리 전체를 잡게 하면
+ * 안쪽 스크롤바와 판정이 겹친다. */
+.float-resize {
+  position: absolute; right: 0; bottom: 0;
+  width: 16px; height: 16px;
+  cursor: nwse-resize;
+  background: linear-gradient(135deg, transparent 50%, var(--border) 50%, var(--border) 65%,
+    transparent 65%, transparent 78%, var(--border) 78%, var(--border) 92%, transparent 92%);
+}
+
+/* 패널 안의 어시스턴트는 화면 높이가 아니라 패널 높이를 쓴다. */
+.float-body .ai-shell {
+  height: 100%;
+  gap: 12px;
+  grid-template-columns: 200px minmax(0, 1fr);
+}
+.float-body .ai-sidebar { position: static; padding: 10px; }
+.float-body .ai-session-list { max-height: none; }
+
+/* 좁은 팝업에서 대화 목록은 화면에 늘 펼쳐 두지 않고 겹쳐 연다(패널 안 모달).
+ *
+ * 예전에는 목록을 가로로 눕혔는데, 폭이 모자라면 항목이 85px까지 줄어
+ * 제목도 시각도 읽을 수 없었다. 목록은 목록의 모양(세로)일 때만 목록이다. */
+.float-panel.is-narrow .ai-shell {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+}
+/* 낮아지면 머리글의 부연 설명(토큰 사용량)부터 접는다.
+ * 대화가 보이는 높이가 먼저다. */
+.float-panel.is-short .ai-head-side .muted { display: none; }
+.float-panel.is-short .float-body { padding: 8px; }
+
+/* 좁은 화면에서는 옮기고 줄이는 것 자체가 성가시다. 화면을 거의 다 쓴다. */
+@media (max-width: 640px) {
+  .float-panel {
+    left: 8px !important; top: 8px !important;
+    width: calc(100vw - 16px) !important; height: calc(100vh - 16px) !important;
+  }
+  .float-resize { display: none; }
+  .float-grip { cursor: default; }
+}
+
+/* ---- 사용 설명서 ----
+ *
+ * 읽기 위한 화면이므로 본문 폭을 제한한다. 넓은 모니터에서 한 줄이 화면을 가로지르면
+ * 다음 줄의 시작을 눈으로 찾게 되고, 그러면 읽는 속도가 눈에 띄게 떨어진다. */
+.manual-shell {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 32px;
+  align-items: start;
+}
+.manual-toc {
+  position: sticky; top: 20px;
+  display: flex; flex-direction: column; gap: 2px;
+  max-height: calc(100vh - 40px); overflow-y: auto;
+  padding-right: 8px;
+}
+.manual-toc-head {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--text-mute);
+  margin-bottom: 6px;
+}
+.manual-toc-link {
+  padding: 5px 8px; border-radius: var(--radius-sm);
+  font-size: 13px; color: var(--text-dim); text-decoration: none;
+  border-left: 2px solid transparent;
+}
+.manual-toc-link:hover {
+  background: var(--surface-2); color: var(--text);
+  border-left-color: var(--primary); text-decoration: none;
+}
+
+.manual-body { max-width: 780px; }
+.manual-head { margin-bottom: 28px; }
+.manual-head h1 { margin: 0 0 4px; }
+.manual-section {
+  padding-top: 12px;
+  /* 차례에서 눌러 온 자리가 화면 맨 위에 딱 붙지 않게 한다. */
+  scroll-margin-top: 20px;
+}
+.manual-section + .manual-section { margin-top: 34px; border-top: 1px solid var(--border-soft); }
+.manual-section-title {
+  font-size: 20px; font-weight: 700; margin: 14px 0 10px;
+}
+.manual-section .md-h { margin-top: 22px; }
+.manual-section p, .manual-section li { line-height: 1.75; }
+.manual-nodes { margin-top: 16px; }
+.manual-nodes .md-table td:first-child { white-space: nowrap; }
+
+@media (max-width: 900px) {
+  .manual-shell { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .manual-toc {
+    position: static; max-height: none;
+    flex-direction: row; flex-wrap: wrap; gap: 4px;
+    padding-bottom: 12px; border-bottom: 1px solid var(--border);
+  }
+  .manual-toc-head { display: none; }
+  .manual-toc-link { border: 1px solid var(--border); border-left-width: 1px; }
+}
+
+/* 인쇄하면 차례와 앱 껍데기는 필요 없다. */
+@media print {
+  .sidebar, .topbar, .manual-toc, .float-panel { display: none !important; }
+  .manual-shell { display: block; }
+  .manual-body { max-width: none; }
+}
+
+/* 감사 기록 상세 */
+.audit-detail-head {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px 16px; margin-bottom: 16px;
+}
+.audit-detail-head .kv { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.audit-detail-head .kv-key { color: var(--text-mute); min-width: 48px; }
+.audit-detail-title { font-size: 13px; color: var(--text-dim); margin: 0 0 8px; }
+.audit-kv { table-layout: auto; }
+.audit-kv td { vertical-align: top; }
+.audit-kv-value {
+  margin: 0; font-size: 12.5px; font-family: var(--mono);
+  white-space: pre-wrap; word-break: break-all; max-height: 220px; overflow: auto;
+}
+/* 누를 수 있는 표 줄. 마우스가 올라간 줄을 표시하지 않으면 눌러도 되는지 알 수 없다. */
+tr.is-clickable { cursor: pointer; }
+tr.is-clickable:hover td { background: var(--surface-2); }
+tr.is-clickable:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.erd-note-grip { fill: var(--note-accent); fill-opacity: 0.55; cursor: nwse-resize; }
+
+/* 패널 안에서만 덮는 대화상자 */
+.float-modal {
+  position: absolute; inset: 0; z-index: 5;
+  background: hsl(var(--h-foreground) / 0.45);
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 14px;
+}
+.float-modal-box {
+  width: 100%; max-width: 420px; max-height: 100%;
+  display: flex; flex-direction: column;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+}
+.float-modal-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 10px 10px 10px 14px; border-bottom: 1px solid var(--border);
+}
+.float-modal-body { padding: 12px 14px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+.float-modal-foot {
+  display: flex; justify-content: flex-end; gap: 8px;
+  padding: 10px 14px; border-top: 1px solid var(--border);
+}
+
+/* 좁은 팝업의 어시스턴트 */
+.ai-shell.is-compact { grid-template-columns: minmax(0, 1fr); }
+.ai-head.is-compact { align-items: center; gap: 8px; }
+.ai-head.is-compact .ai-title {
+  font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ai-settings-row {
+  display: flex; align-items: center; gap: 10px; justify-content: space-between;
+}
+.ai-settings-row .field-label { flex: none; min-width: 60px; }
+.ai-settings-value { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+
+/* 팝업 안 모달에 담긴 대화 목록.
+ *
+ * 여기서는 폭이 넉넉하므로 평소의 세로 목록 그대로 그린다. 항목마다 제목 한 줄과
+ * 시각·개수 한 줄이 보여야 "어느 대화였는지"를 고를 수 있다. */
+.float-modal .ai-sidebar {
+  flex-direction: column; align-items: stretch;
+  gap: 10px; padding: 0; border: none; background: none;
+}
+.float-modal .ai-sidebar-head { flex: none; }
+.float-modal .ai-sidebar-head strong { display: inline; }
+.float-modal .ai-session-list {
+  flex-direction: column; flex: 1 1 auto; gap: 4px;
+  min-width: 0; max-height: 44vh;
+  overflow-x: hidden; overflow-y: auto; padding-bottom: 0;
+}
+.float-modal .ai-session {
+  flex: none; width: 100%; max-width: none; padding: 8px 10px;
+  border: 1px solid var(--border-soft);
+}
+.float-modal .ai-session.is-active { border-color: var(--border); }
+.float-modal .ai-session-title { white-space: normal; overflow: visible; }
+.float-modal .ai-session-meta { display: flex; }
+.float-modal .ai-sidebar-foot {
+  flex-direction: row; flex: none;
+  border-top: 1px solid var(--border-soft); padding-top: 10px;
+}
+.float-modal .ai-sidebar-foot .btn { flex: 1; padding: 0 10px; }
+.float-modal .ai-sidebar-foot .btn span { display: inline; }
+
+/* 설명서 코드 블록의 복사 버튼. 코드 위에 겹치되 평소에는 옅게 둔다 —
+ * 늘 진하면 코드의 첫 줄과 겹쳐 읽기를 방해한다. */
+.md-code-wrap { position: relative; }
+.md-code-wrap .md-code { margin-bottom: 0; }
+.md-code-wrap + * { margin-top: 10px; }
+.md-code-copy {
+  position: absolute; top: 6px; right: 6px;
+  width: 28px; height: 28px;
+  background: var(--surface); border: 1px solid var(--border);
+  opacity: 0; transition: opacity 0.12s;
+}
+.md-code-wrap:hover .md-code-copy,
+.md-code-copy:focus-visible { opacity: 1; }
+/* 마우스가 없는 기기에는 hover가 없다. 그곳에서는 늘 보여야 한다. */
+@media (hover: none) {
+  .md-code-copy { opacity: 1; }
+}
+
+/* ==========================================================================
+   서버 컴퓨터 (호스트 모니터링, P21)
+   ========================================================================== */
+
+/* 디스크는 목록이 아니라 막대로 보여준다. "87%"는 읽어야 알지만
+ * 막대는 훑기만 해도 보이고, 여러 디스크를 한눈에 견줄 수 있다. */
+.host-disks { display: grid; gap: 14px; }
+.host-disk-head {
+  display: flex; align-items: baseline; gap: 8px;
+  margin-bottom: 6px;
+}
+.host-disk-mount { font-weight: 600; font-size: 13.5px; }
+.host-disk-pct { margin-left: auto; font-variant-numeric: tabular-nums; font-weight: 600; }
+.host-disk-meta { font-size: 12px; margin-top: 5px; }
+
+.host-bar {
+  height: 8px; border-radius: 999px;
+  background: hsl(var(--h-muted) / 0.9);
+  overflow: hidden;
+}
+.host-bar-fill {
+  height: 100%; border-radius: 999px;
+  width: var(--host-bar-width, 0%);
+  background: var(--accent);
+  transition: width 0.3s ease-out;
+}
+.host-bar-warn { background: var(--warn); }
+.host-bar-crit { background: var(--danger); }
+.host-warn { color: var(--warn); }
+.host-crit { color: var(--danger); }
+
+/* 호스트 이벤트 목록. 이벤트 화면의 표를 그대로 쓰지 않는 이유는
+ * 여기서는 "무슨 일이 있었나"만 훑고, 자세한 것은 이벤트 화면에서 보기 때문이다. */
+/* 목록의 기본 들여쓰기(padding-inline-start: 40px)를 지운다. 지우지 않으면
+ * 카드 왼쪽에 빈 여백이 생겨 이 목록만 다른 카드와 어긋나 보인다. */
+.host-events { list-style: none; display: grid; gap: 8px; margin: 0; padding: 0; }
+.host-events li {
+  display: flex; align-items: center; gap: 9px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+}
+.host-event-msg { flex: 1; min-width: 0; font-size: 13px; }
+.host-events .muted { flex: none; font-size: 12px; }
+
+@media (max-width: 640px) {
+  /* 좁은 화면에서는 한 줄에 다 넣을 수 없다. 메시지를 아래로 내린다 —
+   * 가로로 넘치면 어느 쪽도 읽을 수 없다. */
+  .host-events li { flex-wrap: wrap; }
+  .host-event-msg { flex-basis: 100%; order: 3; }
+}
+
+/* ==========================================================================
+   ERD 타입 고르개 · 도메인 (P22)
+   ========================================================================== */
+
+/* 타입 칸 옆의 고르개 버튼. 칸에 붙여 두어 "이 칸을 고르는 버튼"으로 읽히게 한다. */
+.erd-col-type-pick { width: 26px; height: 26px; }
+
+.erd-type-params:empty { display: none; }
+.erd-type-preview {
+  display: block;
+  padding: 8px 10px;
+  border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+  background: var(--surface-2, var(--surface));
+  font-size: 12.5px;
+}
+
+/* 도메인 목록. 카드 하나가 정의 하나이고, 그 아래에 쓰는 곳을 접어 둔다 —
+ * 목록의 목적은 "무엇이 있는가"이고, "어디에 쓰이는가"는 필요할 때만 본다. */
+.erd-domain-list { display: grid; gap: 10px; margin: 12px 0; }
+.erd-domain {
+  border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+  padding: 10px 12px;
+}
+.erd-domain-head { display: flex; align-items: center; gap: 8px; }
+.erd-domain-name { font-weight: 600; font-size: 13.5px; }
+.erd-domain-type {
+  font-size: 12px; color: var(--text-dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* 수정·삭제 버튼은 오른쪽 끝에 모은다. 이름과 타입 사이에 끼면 이름이 밀린다. */
+.erd-domain-head .icon-btn:nth-last-of-type(2) { margin-left: auto; }
+.erd-domain-meta {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  margin-top: 6px; font-size: 12px;
+}
+.erd-domain-comment { margin-top: 6px; font-size: 12.5px; color: var(--text-dim); }
+.erd-domain-users { margin-top: 6px; font-size: 12px; }
+.erd-domain-users summary { cursor: pointer; color: var(--text-dim); }
+
+/* 카드 제목 안의 배지는 제목 글자와 붙지 않아야 한다.
+ *
+ * .card-title 을 쓰는 제목은 flex의 gap이 처리하지만, 기본 h2 를 그대로 쓴 카드도 있다
+ * (마이그레이션 상세의 "리뷰 승인 0/1", "사전 검사 실행 가능"). 그 제목들의 크기를
+ * 바꾸지 않고 간격만 주기 위해 여기서 배지에 여백을 준다. */
+.card > h2 > .badge { margin-left: 8px; }
+
+/* 알림 설정 (P23) */
+.notify-kinds { display: flex; flex-wrap: wrap; gap: 10px 18px; }
+.notify-actions { display: flex; gap: 8px; margin-top: 16px; }
+
+/* 클러스터 화면: 노드 카드.
+   격자로 두는 이유는 노드가 늘어나도 한 화면에서 훑을 수 있어야 하기 때문이다. */
+.node-grid {
+  display: grid; gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+}
+.node-card {
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 14px; background: var(--surface-2);
+  display: flex; flex-direction: column; gap: 10px;
+}
+/* 소식이 끊긴 노드는 테두리로 먼저 알린다 — 배지를 읽기 전에 눈에 들어와야 한다. */
+.node-card.is-stale { border-color: var(--danger); }
+.node-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.node-name { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+.node-actions { display: flex; justify-content: flex-end; }
+.node-host { display: flex; flex-direction: column; gap: 6px; }
+.node-gauge { display: grid; grid-template-columns: 90px 1fr 44px; align-items: center; gap: 8px; }
+.node-gauge-label { font-size: 12px; color: var(--text-dim); }
+.node-gauge-value { font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
+.node-gauge-bar {
+  height: 6px; border-radius: 3px; background: var(--surface-3, var(--border)); overflow: hidden;
+}
+.node-gauge-fill { height: 100%; background: var(--success); }
+.node-gauge.is-warn .node-gauge-fill { background: var(--warn); }
+.node-gauge.is-critical .node-gauge-fill { background: var(--danger); }
+
+/* 클러스터의 값 목록은 세로로 쌓는다.
+   가로로 늘어놓는 .mig-meta를 쓰면 주소와 시각이 잘려 "http://127.0.0.1:8…"이 된다 —
+   노드 주소는 끝의 포트가 핵심이라 그 생략이 정보를 통째로 지운다. */
+.cluster-meta { display: flex; flex-direction: column; gap: 4px; margin: 0; }
+.cluster-meta .meta-row { display: grid; grid-template-columns: 110px 1fr; gap: 8px; align-items: baseline; }
+.cluster-meta dt { color: var(--text-dim); font-size: 12px; }
+.cluster-meta dd { margin: 0; font-size: 13px; word-break: break-all; }
+
+/* 스토리지 화면.
+   용량 막대를 크게 두는 이유: 이 화면에서 가장 자주 확인하는 값이고, 90%를 넘는
+   순간부터는 다른 어떤 지표보다 급한 문제가 된다. */
+.storage-capacity { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 12px; }
+.storage-gauge {
+  height: 10px; border-radius: 5px; overflow: hidden;
+  background: var(--surface-2, var(--border));
+}
+.storage-gauge-fill { height: 100%; background: var(--success); transition: width 0.2s ease; }
+.storage-gauge.is-warn .storage-gauge-fill { background: var(--warn); }
+.storage-gauge.is-critical .storage-gauge-fill { background: var(--danger); }
+.storage-capacity-text { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+
+.storage-facts {
+  display: grid; gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+}
+.storage-fact {
+  display: flex; justify-content: space-between; gap: 8px;
+  padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+/* 나쁜 값은 테두리로 먼저 알린다 — 숫자를 읽기 전에 눈에 들어와야 한다. */
+.storage-fact.is-warn { border-color: var(--warn); }
+.storage-fact.is-error { border-color: var(--danger); }
+.storage-fact-label { color: var(--text-dim); font-size: 12.5px; }
+.storage-fact-value { font-variant-numeric: tabular-nums; }
+.storage-checks { margin: 0 0 10px; padding-left: 18px; color: var(--warn); font-size: 13px; }
+.storage-notes { margin-top: 10px; }
+
+/* 경로 이동 줄. */
+.crumbs { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin: 8px 0; }
+.crumb-sep { color: var(--text-dim); }
+.crumb-current { font-weight: 600; }
+/* 값이 길면(용량 두 개, 상태 문장) 줄바꿈은 값 쪽에서 일어나야 한다.
+   라벨이 쪼개지면 "YARN 메모 / 리"처럼 읽을 수 없는 줄이 생긴다. */
+.storage-fact { align-items: baseline; }
+.storage-fact-label { white-space: nowrap; }
+.storage-fact-value { text-align: right; }

@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+  <!-- 생성 파일입니다. 수정하지 말고 scripts/gen-favicon 을 고쳐 다시 생성하세요. -->
+  <style>
+    :root { --bg: #18181b; --fg: #fafafa; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #fafafa; --fg: #18181b; } }
+  </style>
+  <rect width="100" height="100" rx="22" fill="var(--bg)"/>
+  <g fill="var(--fg)">
+    <ellipse cx="50.0" cy="26.0" rx="30.0" ry="10.0"/>
+    <path d="M 20.0 26.0 V 72.0 A 30.0 10.0 0 0 0 80.0 72.0 V 26.0 Z"/>
+  </g>
+  <g fill="none" stroke="var(--bg)" stroke-width="6.0" stroke-linecap="butt">
+    <path d="M 20.0 41.0 A 30.0 10.0 0 0 0 80.0 41.0"/>
+    <path d="M 20.0 57.0 A 30.0 10.0 0 0 0 80.0 57.0"/>
+  </g>
+</svg>

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DB Studio</title>
+  <!-- 파비콘: SVG를 뒤에 두면 지원하는 브라우저가 그것을 고르고, 나머지는 .ico로 떨어진다.
+       .ico는 브라우저가 /favicon.ico를 자동 요청할 때도 쓰인다. -->
+  <link rel="icon" href="/favicon.ico" sizes="32x32">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#09090b" media="(prefers-color-scheme: dark)">
+  <!-- 폰트를 app.css보다 먼저 둔다. @font-face를 늦게 발견할수록 글자가 대체 폰트로
+       그려졌다가 바뀌는 시간(FOUT)이 길어진다. font-display:swap 이므로 폰트를
+       기다리느라 화면이 비는 일은 없다. -->
+  <link rel="stylesheet" href="/fonts/pretendard-jp/pretendard-jp.css">
+  <link rel="stylesheet" href="/css/app.css">
+  <!-- 저장된 테마를 첫 페인트 전에 적용한다. CSP가 인라인 스크립트를 막으므로 파일로 둔다. -->
+  <script src="/js/theme-init.js"></script>
+</head>
+<body>
+  <div id="app" class="app-loading">불러오는 중…</div>
+  <div id="toasts" class="toasts"></div>
+  <script type="module" src="/js/main.js"></script>
+</body>
+</html>
