@@ -396,7 +396,7 @@ scripts/release.sh v1.0.0        # 버전을 생략하면 git describe → dev
 
 `dist/`에 5개 플랫폼(linux amd64·arm64, darwin amd64·arm64, windows amd64) 바이너리와
 `SHA256SUMS`가 만들어진다. `-trimpath -ldflags "-s -w"`로 빌드해 개발 경로가 남지 않고
-크기도 줄어든다(약 37~39MB). 버전은 바이너리에 심어지므로 실행 없이도 확인할 수 있다.
+크기도 줄어든다(약 50~53MB). 버전은 바이너리에 심어지므로 실행 없이도 확인할 수 있다.
 
 빌드 시각을 심기 때문에 같은 소스라도 실행마다 해시가 달라진다. 해시를 고정해야 한다면
 `SOURCE_DATE_EPOCH`로 시각을 지정한다(`SOURCE_DATE_EPOCH=1700000000 scripts/release.sh v1.0.0`).
@@ -405,6 +405,32 @@ scripts/release.sh v1.0.0        # 버전을 생략하면 git describe → dev
 ./dbstudio -version                       # dbstudio v1.0.0 linux/amd64 go1.26.5
 curl -s localhost:8080/api/v1/health      # 로그인 없이 빌드 정보 확인 (배포 검증용)
 ```
+
+### CI와 릴리스 자동화 (GitHub Actions)
+
+`.github/workflows/`에 둘이 있다.
+
+| 워크플로 | 언제 | 하는 일 |
+|---|---|---|
+| `ci.yml` | main 푸시 · PR | gofmt 확인, `go vet`, `go test ./...`(우분투·윈도우), 5개 플랫폼 크로스 빌드 |
+| `release.yml` | `v*` 태그 푸시 | 시험 → `scripts/release.sh` 빌드 → 릴리스 노트 작성 → GitHub 릴리스 생성 |
+
+```bash
+git tag v1.0.0 && git push origin v1.0.0
+```
+
+- **빌드 명령은 `scripts/release.sh` 하나뿐이다.** 워크플로가 `go build`를 다시 적으면
+  ldflags가 두 곳에 생기고, 손으로 만든 빌드와 CI 빌드가 조용히 달라진다.
+- 릴리스 빌드는 태그가 가리키는 커밋 시각을 `SOURCE_DATE_EPOCH`로 심는다. 같은 태그를
+  다시 빌드하면 바이너리 해시가 같다.
+- 하이픈이 있는 태그(`v1.0.0-rc.1`)는 사전 배포로 올라간다.
+- **시험이 실패하면 릴리스를 만들지 않는다.** 태그를 되돌리는 것보다 거기서 멈추는 편이 싸다.
+- CI가 윈도우에서도 시험을 돌리는 이유: 호스트 감시와 OS 로그 읽기는 플랫폼마다 구현이
+  다르다(`internal/hostmon/*_windows.go`). 한쪽에서만 돌리면 다른 쪽 코드는 아무도 실행하지 않는다.
+- 크로스 빌드를 따로 두는 이유: OS별로 갈라지는 파일이 있어 리눅스 시험이 통과해도 macOS
+  빌드가 깨질 수 있고, 그 사실은 릴리스를 만드는 순간에야 드러난다.
+- 통합 시험(실제 DB 접속)은 `-integration` 플래그나 `DBSTUDIO_INTEGRATION`이 있을 때만 도므로
+  CI에서는 자동으로 건너뛴다. 돌리려면 `docker/compose.test.yaml`을 먼저 띄워야 한다.
 
 ### 옵션
 
@@ -663,6 +689,7 @@ web/                 프론트엔드 (ES Module, 프레임워크 없음)
                      rules, events, logs, erd, erdeditor, migrations, vcs, nosql,
                      data, sqlconsole, backups, macros, macroeditor, triggers, assistant, audit
 scripts/             릴리스 빌드 (release.sh / release.ps1), 파비콘 생성 (gen-favicon)
+.github/workflows/   CI (ci.yml) 와 릴리스 (release.yml)
 docker/              테스트용 DB 컨테이너 정의
 docs/PLAN.md         전체 설계 및 단계 계획
 ```
