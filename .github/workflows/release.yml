@@ -26,6 +26,7 @@ concurrency:
 
 permissions:
   contents: write # 릴리스 생성과 자산 업로드에 필요하다
+  packages: write # GHCR 이미지 푸시에 필요하다 (별도 시크릿 없이 GITHUB_TOKEN으로 한다)
 
 env:
   CGO_ENABLED: "0"
@@ -166,6 +167,73 @@ jobs:
             --notes-file release-notes.md \
             "${flags[@]}" \
             dist/*
+
+      # ---------- 도커 이미지 ----------
+      #
+      # 두 변종을 낸다. 기본은 distroless(셸 없음, 작고 공격 면이 좁다), 그리고
+      # alpine(-alpine 접미사, 셸이 있어 매크로의 sh.run과 docker exec을 쓸 수 있다).
+      # 둘 다 위에서 만든 릴리스 자산과 **같은 바이트**의 바이너리를 담는다.
+      #
+      # docker/* 액션을 쓰지 않고 CLI로 하는 이유: 러너에 buildx가 이미 있고,
+      # 액션을 하나 더 얹으면 그 액션의 Node 런타임 수명까지 따라가야 한다
+      # (v0.0.1에서 Node 20 지원 종료 경고를 받은 것이 그 예다).
+      - name: QEMU 등록 (arm64 alpine 빌드용)
+        if: github.event_name == 'push'
+        # distroless 변종은 대상 아키텍처에서 RUN 하지 않으므로 에뮬레이션이 필요
+        # 없지만, alpine 변종은 apk·adduser를 arm64에서 실행한다.
+        run: docker run --privileged --rm tonistiigi/binfmt --install arm64
+
+      - name: buildx 준비
+        if: github.event_name == 'push'
+        run: docker buildx create --use --name dbstudio --driver docker-container
+
+      - name: GHCR 로그인
+        if: github.event_name == 'push'
+        run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: 이미지 빌드·푸시 (distroless · alpine / amd64 · arm64)
+        if: github.event_name == 'push'
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          PRERELEASE: ${{ steps.ver.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          # 레지스트리 경로는 소문자만 받는다(저장소 이름은 DB-Studio다).
+          repo="ghcr.io/$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          ver="${VERSION#v}"        # v1.2.3 → 1.2.3
+          minor="${ver%.*}"         # 1.2.3  → 1.2
+          chmod +x "dist/dbstudio_${VERSION}_linux_amd64" "dist/dbstudio_${VERSION}_linux_arm64"
+
+          push_variant() { # push_variant <Dockerfile> <태그 접미사> <움직이는 태그>
+            local file="$1" suffix="$2" moving="$3"
+            local tags=(-t "${repo}:${VERSION}${suffix}"
+                        -t "${repo}:${ver}${suffix}"
+                        -t "${repo}:${minor}${suffix}")
+            # 사전 배포(v1.0.0-rc.1)는 움직이는 태그를 건드리지 않는다.
+            if [ "$PRERELEASE" != "true" ]; then
+              tags+=(-t "${repo}:${moving}")
+            fi
+            echo "── ${file} → ${tags[*]}"
+            # --provenance=false: 켜 두면 매니페스트 목록에 증명서용 항목이 함께
+            # 올라가 패키지 화면에 "unknown/unknown" 플랫폼으로 보인다. 서명·증명은
+            # 나중에 따로 붙이는 편이 낫다.
+            docker buildx build \
+              --platform linux/amd64,linux/arm64 \
+              --file "$file" \
+              --build-arg "VERSION=${VERSION}" \
+              --label "org.opencontainers.image.version=${VERSION}" \
+              --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+              --provenance=false \
+              "${tags[@]}" --push .
+          }
+
+          push_variant docker/Dockerfile        ""        latest
+          push_variant docker/Dockerfile.alpine "-alpine" alpine
+
+          echo
+          echo "올라간 이미지:"
+          echo "  ${repo}:${VERSION}        (distroless)"
+          echo "  ${repo}:${VERSION}-alpine (alpine)"
 
       # 태그 없이 손으로 돌린 경우. 릴리스를 만들지 않고 산출물만 남긴다.
       - name: 산출물 업로드 (릴리스 없이)

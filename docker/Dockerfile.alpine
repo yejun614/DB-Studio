@@ -1,0 +1,43 @@
+# 배포 이미지 (alpine) — 셸이 필요할 때 쓰는 변종.
+#
+# distroless 변종(docker/Dockerfile)과 같은 바이너리를 담는다. 다른 점은 바닥에
+# 셸과 패키지 관리자가 있다는 것뿐이다. 그것이 필요한 경우는 둘이다.
+#
+#   1. 매크로의 Lua sh.run (-allow-shell). distroless에는 /bin/sh 가 없다.
+#   2. 컨테이너에 들어가 상태를 들여다보는 운영(docker exec ... sh).
+#
+# 그 편의의 대가는 공격 면이다. 셸과 패키지 관리자가 있는 이미지는 침입자가
+# 다음 단계를 밟기 쉽다. 기본값으로 distroless를 권하는 이유가 그것이다.
+FROM alpine:3.22
+
+ARG TARGETARCH
+ARG VERSION=dev
+
+# ca-certificates: 루트 CA 묶음 자체(/etc/ssl/certs/ca-certificates.crt)는 alpine
+#   바닥에 이미 들어 있다(ca-certificates-bundle). 이 패키지를 더 얹는 이유는
+#   update-ca-certificates 와 /usr/local/share/ca-certificates 경로 때문이다 —
+#   사내 CA로 발급한 GitLab·Ceph·RabbitMQ를 쓰는 배치에서 그 인증서를 넣어
+#   신뢰시킬 수 있다(그런 서버는 공개 CA 묶음만으로는 검증되지 않는다).
+# tzdata: 바이너리에 이미 임베드되어 있지만(time/tzdata), 컨테이너 안에서
+#   date 같은 도구를 쓸 때를 위해 함께 둔다.
+RUN apk add --no-cache ca-certificates tzdata \
+ && addgroup -g 65532 -S app \
+ && adduser -u 65532 -S app -G app -H -D \
+ && mkdir -p /data \
+ && chown 65532:65532 /data
+
+COPY --chmod=755 dist/dbstudio_${VERSION}_linux_${TARGETARCH} /dbstudio
+
+# distroless 변종과 같은 uid를 쓴다 — 두 변종이 같은 볼륨을 그대로 공유한다.
+USER 65532:65532
+
+VOLUME ["/data"]
+EXPOSE 8080
+
+LABEL org.opencontainers.image.title="DB Studio" \
+      org.opencontainers.image.description="여러 데이터베이스를 한 곳에서 관리하는 단일 바이너리 웹 앱 (alpine 변종)" \
+      org.opencontainers.image.source="https://github.com/yejun614/DB-Studio" \
+      org.opencontainers.image.licenses="MIT"
+
+ENTRYPOINT ["/dbstudio"]
+CMD ["-addr", ":8080", "-data", "/data"]

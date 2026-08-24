@@ -104,6 +104,19 @@ chmod +x dbstudio_*_linux_amd64
 </details>
 
 <details>
+<summary><b>도커로 실행</b></summary>
+
+```bash
+docker run -d -p 8080:8080 -v dbstudio-data:/data ghcr.io/yejun614/db-studio:latest
+```
+
+셸이 필요하면(매크로의 `sh.run`) `:alpine` 태그를 쓰세요. `/data`에 메타 DB와 마스터
+암호화 키가 생기므로 볼륨을 반드시 빼야 합니다 →
+[운영 문서](docs/operations.md#도커-이미지)
+
+</details>
+
+<details>
 <summary><b>소스에서 빌드</b></summary>
 
 ```bash

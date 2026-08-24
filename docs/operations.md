@@ -8,6 +8,7 @@
 
 - [릴리스 빌드](#릴리스-빌드)
 - [CI와 릴리스 자동화 (GitHub Actions)](#ci와-릴리스-자동화-github-actions)
+- [도커 이미지](#도커-이미지)
 - [로그 — 서버가 멈췄을 때 먼저 볼 곳](#로그--서버가-멈췄을-때-먼저-볼-곳)
 - [백업 훅](#백업-훅)
 - [마스터 암호화 키](#마스터-암호화-키)
@@ -59,6 +60,56 @@ git tag v1.0.0 && git push origin v1.0.0
   빌드가 깨질 수 있고, 그 사실은 릴리스를 만드는 순간에야 드러난다.
 - 통합 시험(실제 DB 접속)은 `-integration` 플래그나 `DBSTUDIO_INTEGRATION`이 있을 때만 도므로
   CI에서는 자동으로 건너뛴다. 돌리려면 `docker/compose.test.yaml`을 먼저 띄워야 한다.
+
+## 도커 이미지
+
+태그를 밀면 릴리스 워크플로가 두 변종을 GHCR에 올린다. 둘 다 linux/amd64 · arm64다.
+
+| 변종 | 태그 | 바닥 | 언제 |
+|---|---|---|---|
+| distroless (기본) | `:v1.0.0` · `:1.0.0` · `:1.0` · `:latest` | `distroless/static` | 대부분의 경우 |
+| alpine | `:v1.0.0-alpine` · `:1.0.0-alpine` · `:1.0-alpine` · `:alpine` | `alpine:3.22` | 셸이 필요할 때 |
+
+```bash
+docker run -d --name dbstudio -p 8080:8080 \
+  -v dbstudio-data:/data \
+  -e DBSTUDIO_MASTER_KEY="$(openssl rand -base64 32)" \
+  ghcr.io/yejun614/db-studio:latest
+docker logs dbstudio | head -20   # 슈퍼 어드민 계정과 임시 비밀번호가 한 번 나온다
+```
+
+**`/data`는 반드시 볼륨으로 빼야 한다.** 메타 DB(`dbstudio.db`)와 마스터 암호화 키
+(`master.key`)가 거기 생긴다. 컨테이너를 새로 만들 때 볼륨을 놓치면 키가 사라지고,
+그러면 저장된 DB 자격증명을 복호화할 수 없다. 위 예시처럼 `DBSTUDIO_MASTER_KEY`로
+키를 주입하면 키를 이미지·볼륨 밖(시크릿 관리)에 둘 수 있고, 클러스터의 모든 노드가
+같은 키를 쓰는 것도 그 방법으로 한다.
+
+두 변종은 **같은 uid(65532)** 로 돌므로 볼륨을 그대로 주고받을 수 있다. 바인드 마운트를
+쓸 때는 호스트 디렉터리를 `chown 65532` 해야 한다.
+
+**어떤 변종을 쓰나.** distroless에는 셸이 없다 — 공격 면이 좁은 대신 매크로의
+Lua `sh.run`(`-allow-shell`)과 `docker exec ... sh`를 쓸 수 없다. 그 둘이 필요하면
+`-alpine` 태그를 쓴다.
+
+**이미지 속 바이너리는 릴리스 자산과 같은 바이트다.** Dockerfile이 이미지 안에서 다시
+빌드하지 않고 `scripts/release.sh`가 만든 파일을 그대로 복사하므로, 릴리스에 함께 올라간
+`SHA256SUMS`로 이미지 내용을 검증할 수 있다.
+
+사내 CA로 발급한 GitLab·Ceph·RabbitMQ를 쓴다면 그 인증서를 신뢰시켜야 한다
+(공개 CA 묶음만으로는 검증되지 않는다). alpine 변종에 도구가 들어 있다.
+
+```bash
+docker run -v ./our-ca.crt:/usr/local/share/ca-certificates/our-ca.crt:ro \
+  --user 0 --entrypoint sh ghcr.io/yejun614/db-studio:alpine \
+  -c 'update-ca-certificates && exec /dbstudio -data /data'
+```
+
+손으로 만들 때는 `dist/`를 먼저 채워야 한다 — 이미지가 그 파일을 복사한다.
+
+```bash
+scripts/release.sh v1.0.0
+docker build -f docker/Dockerfile --build-arg VERSION=v1.0.0 -t db-studio .
+```
 
 ## 로그 — 서버가 멈췄을 때 먼저 볼 곳
 
