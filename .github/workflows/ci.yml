@@ -28,6 +28,12 @@ concurrency:
 permissions:
   contents: read
 
+# 액션 버전은 최신 메이저로 맞춘다.
+#
+# 이유: v4·v5는 Node 20에서 돌고, 러너가 Node 20 지원을 끝내는 중이라 실행마다
+# "Node.js 20 is deprecated ... being forced to run on Node.js 24" 경고가 붙는다.
+# 강제 실행이 끝나면 경고가 아니라 실패가 된다. v7은 node24 런타임이다.
+
 env:
   CGO_ENABLED: "0"
 
@@ -42,9 +48,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -75,9 +81,9 @@ jobs:
     name: 크로스 빌드
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true

@@ -7,7 +7,7 @@
 # CI가 만든 빌드가 조용히 달라진다.
 #
 # 손으로 실행(workflow_dispatch)하면 릴리스를 만들지 않고 산출물만 올린다.
-# 태그를 붙이기 전에 다섯 플랫폼이 실제로 빌드되는지 확인하는 용도다.
+# 태그를 붙이기 전에 여섯 플랫폼이 실제로 빌드되는지 확인하는 용도다.
 name: Release
 
 on:
@@ -35,12 +35,12 @@ jobs:
     name: 빌드와 릴리스
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # git describe와 변경 내역(직전 태그 이후 커밋)에 전체 이력이 필요하다.
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -170,7 +170,7 @@ jobs:
       # 태그 없이 손으로 돌린 경우. 릴리스를 만들지 않고 산출물만 남긴다.
       - name: 산출물 업로드 (릴리스 없이)
         if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dbstudio-${{ steps.ver.outputs.version }}
           path: dist/
