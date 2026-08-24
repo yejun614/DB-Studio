@@ -5,6 +5,10 @@
 **여러 데이터베이스를 한 곳에서.**
 접근 권한을 통제하고, 상태를 지켜보고, 구조를 설계해 바꾸고, 그 과정을 기록으로 남깁니다.
 
+[![CI](https://github.com/yejun614/DB-Studio/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/yejun614/DB-Studio/actions/workflows/ci.yml)
+[![Release](https://github.com/yejun614/DB-Studio/actions/workflows/release.yml/badge.svg)](https://github.com/yejun614/DB-Studio/actions/workflows/release.yml)
+[![Latest release](https://img.shields.io/github/v/release/yejun614/DB-Studio?display_name=tag&sort=semver&label=release)](https://github.com/yejun614/DB-Studio/releases/latest)
+
 [![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](go.mod)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Single binary](https://img.shields.io/badge/배포-단일%20바이너리-success)](docs/operations.md)
@@ -90,7 +94,7 @@ CPU·메모리·디스크를 함께 봅니다.</td>
 <details open>
 <summary><b>내려받아 실행</b></summary>
 
-[릴리스](../../releases)에서 플랫폼에 맞는 파일 하나를 받습니다.
+[릴리스](https://github.com/yejun614/DB-Studio/releases/latest)에서 플랫폼에 맞는 파일 하나를 받습니다(Linux · macOS · Windows / x86-64 · ARM64).
 
 ```bash
 chmod +x dbstudio_*_linux_amd64
@@ -103,7 +107,7 @@ chmod +x dbstudio_*_linux_amd64
 <summary><b>소스에서 빌드</b></summary>
 
 ```bash
-git clone <이 저장소> && cd draw_database
+git clone https://github.com/yejun614/DB-Studio.git && cd DB-Studio
 CGO_ENABLED=0 go build -o bin/dbstudio ./cmd/dbstudio
 ./bin/dbstudio -addr :8080 -data ./data
 ```

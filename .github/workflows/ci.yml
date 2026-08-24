@@ -9,9 +9,15 @@
 # 그 사실은 릴리스를 만드는 순간에야 드러난다.
 name: CI
 
+# main 푸시와 PR에서 돈다. 태그는 여기서 받지 않는다 — release 워크플로가 태그에서
+# 같은 시험을 이미 돌리므로, 둘 다 걸면 태그를 밀 때마다 시험이 두 번 돈다.
+#
+# README의 CI 뱃지는 **main 브랜치의 마지막 실행**을 가리킨다. 태그에서만 돌면
+# main 실행 기록이 없어 뱃지가 영원히 "no status"로 남는다.
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
+  pull_request:
   workflow_dispatch:
 
 # 같은 브랜치에 연달아 푸시하면 앞의 실행을 취소한다.
