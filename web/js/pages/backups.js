@@ -11,6 +11,7 @@ import {
   formatDate, relativeTime,
 } from '../core/ui.js';
 import { navigate } from '../core/router.js';
+import { serverDbPicker } from '../core/connpick.js';
 import { codeBlock } from '../core/highlight.js';
 import { errorPanel } from './users.js';
 
@@ -41,10 +42,14 @@ export async function renderBackups(outlet, params, query) {
   mount(outlet, spinner('백업 목록을 불러오는 중…'));
 
   let conns;
+  let servers;
   let res;
   try {
-    [conns, res] = await Promise.all([
+    // 서버 목록을 함께 받는 이유: 커넥션을 평평하게 늘어놓으면 같은 서버의 DB가
+    // 이름만 다른 항목으로 반복된다. 다른 화면과 같은 두 단계 고르개를 쓴다.
+    [conns, servers, res] = await Promise.all([
       api.get('/connections/'),
+      api.get('/servers/'),
       api.get(`/backups/?conn=${encodeURIComponent(query.get('conn') ?? '')}`),
     ]);
   } catch (err) {
@@ -58,13 +63,14 @@ export async function renderBackups(outlet, params, query) {
   const usable = conns.items.filter((i) => i.accessible);
   const filterId = query.get('conn') ?? '';
 
-  const connFilter = select(
-    [{ value: '', label: '모든 커넥션' },
-      ...usable.map((i) => ({ value: i.connection.id, label: i.connection.name }))],
-    { value: filterId },
-  );
-  connFilter.addEventListener('change', () => {
-    navigate(connFilter.value ? `/backups?conn=${encodeURIComponent(connFilter.value)}` : '/backups');
+  // 목록 화면이므로 "전체"가 정상 상태다. 그것을 서버 고르개의 첫 항목으로 두고,
+  // 그때는 DB 고르개를 감춘다(고를 대상이 정해지지 않았으므로 뜻이 없다).
+  const picker = serverDbPicker({
+    usable,
+    servers: servers.items ?? [],
+    currentId: filterId,
+    onPick: (id) => navigate(id ? `/backups?conn=${encodeURIComponent(id)}` : '/backups'),
+    allLabel: '모든 커넥션',
   });
 
   mount(outlet,
@@ -76,7 +82,7 @@ export async function renderBackups(outlet, params, query) {
         : null,
     ]),
     h('div.card.filter-bar', {},
-      h('label.field.field-inline', {}, h('span.field-label', {}, '커넥션'), connFilter),
+      ...picker.nodes,
       h('div.filter-sep'),
       h('span.muted.small', {},
         `보존 ${res.retention} · 덤프 상한 ${res.maxMB}MB · 파일은 gzip으로 저장됩니다`),

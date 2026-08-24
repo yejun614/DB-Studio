@@ -64,10 +64,13 @@ export function dbLabel(connection) {
  */
 export function serverDbPicker({
   usable, servers, currentId, onPick,
-  serverLabel = '서버', dbLabelText = 'DB',
+  serverLabel = '서버', dbLabelText = 'DB', allLabel = '',
 }) {
   const groups = groupByServer(usable, servers);
-  const current = groups.find((g) => g.dbs.some((i) => i.connection.id === currentId)) ?? groups[0];
+  const found = groups.find((g) => g.dbs.some((i) => i.connection.id === currentId));
+  // allLabel이 있으면 "고른 것이 없음"도 정상 상태다(목록 화면의 전체 보기).
+  // 없으면 하나는 반드시 골라야 하므로 첫 서버로 시작한다.
+  const current = found ?? (allLabel ? null : groups[0]);
 
   const dbSelect = select(
     (current?.dbs ?? []).map((i) => ({ value: i.connection.id, label: dbLabel(i.connection) })),
@@ -76,10 +79,29 @@ export function serverDbPicker({
   dbSelect.addEventListener('change', () => onPick(dbSelect.value));
 
   const serverSelect = select(
-    groups.map((g) => ({ value: g.id, label: g.label })),
+    [
+      ...(allLabel ? [{ value: '', label: allLabel }] : []),
+      ...groups.map((g) => ({ value: g.id, label: g.label })),
+    ],
     { value: current?.id ?? '' },
   );
+
+  const dbField = h('label.field.field-inline', {},
+    h('span.field-label', {}, dbLabelText), dbSelect);
+
+  // 전체를 고른 상태에서 DB 고르개는 뜻이 없다. 남겨 두면 "여기서 뭘 골라야 하나"를
+  // 묻게 되므로 감춘다(고를 것이 정해지면 다시 나타난다).
+  const syncDbField = () => {
+    dbField.style.display = allLabel && serverSelect.value === '' ? 'none' : '';
+  };
+  syncDbField();
+
   serverSelect.addEventListener('change', () => {
+    syncDbField();
+    if (allLabel && serverSelect.value === '') {
+      onPick('');
+      return;
+    }
     const g = groups.find((x) => x.id === serverSelect.value);
     if (!g) return;
     // 서버를 바꾸면 그 서버의 첫 DB로 간다. 어느 DB를 볼지는 아직 모르지만,
@@ -94,7 +116,7 @@ export function serverDbPicker({
     // 필터 바에 그대로 넣을 수 있는 라벨 묶음
     nodes: [
       h('label.field.field-inline', {}, h('span.field-label', {}, serverLabel), serverSelect),
-      h('label.field.field-inline', {}, h('span.field-label', {}, dbLabelText), dbSelect),
+      dbField,
     ],
   };
 }
