@@ -188,6 +188,9 @@ func notifyProviders() []struct {
 		{store.ProviderSlack, "Slack",
 			"앱 설정 → Incoming Webhooks에서 주소를 만듭니다. 최신 Slack 앱 웹훅은 채널·보내는 이름 지정을 " +
 				"무시하고 웹훅을 만들 때 고른 채널로 보냅니다."},
+		{store.ProviderDiscord, "Discord",
+			"채널 설정 → 연동 → 웹후크에서 주소를 만듭니다. 채널은 웹후크를 만들 때 정해져 여기서 바꿀 수 " +
+				"없고, 보내는 이름은 반영됩니다."},
 	}
 }
 

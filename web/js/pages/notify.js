@@ -39,16 +39,20 @@ export async function renderNotify(outlet) {
   const syncProvider = () => {
     const cur = providers.find((p) => p.value === providerSelect.value);
     providerNote.textContent = cur?.note ?? '';
-    const slack = providerSelect.value === 'slack';
-    channelHelp.textContent = slack
-      ? '앱 웹훅에서는 무시됩니다(웹훅을 만들 때 고른 채널로 갑니다). 예전 방식의 커스텀 웹훅에서만 반영됩니다.'
-      : '웹훅에 설정된 기본 채널 대신 보낼 채널입니다.';
-    usernameHelp.textContent = slack
+    const kind = providerSelect.value;
+    // 채널·보내는 이름이 먹는지는 메신저마다 다르다. 디스코드는 채널만 못 바꾸고
+    // 이름은 반영되므로, Slack과 한 덩어리로 묶으면 틀린 안내가 된다.
+    channelHelp.textContent = {
+      slack: '앱 웹훅에서는 무시됩니다(웹훅을 만들 때 고른 채널로 갑니다). 예전 방식의 커스텀 웹훅에서만 반영됩니다.',
+      discord: '무시됩니다. 디스코드 웹후크는 만들 때 채널이 정해집니다.',
+    }[kind] ?? '웹훅에 설정된 기본 채널 대신 보낼 채널입니다.';
+    usernameHelp.textContent = kind === 'slack'
       ? '앱 웹훅에서는 무시됩니다. 앱 이름으로 표시됩니다.'
       : '메시지에 표시할 이름입니다.';
-    webhookInput.placeholder = cfg.webhookUrl || (providerSelect.value === 'slack'
-      ? 'https://hooks.slack.com/services/T000/B000/xxxxxxxx'
-      : 'https://mattermost.example.com/hooks/xxxxxxxx');
+    webhookInput.placeholder = cfg.webhookUrl || {
+      slack: 'https://hooks.slack.com/services/T000/B000/xxxxxxxx',
+      discord: 'https://discord.com/api/webhooks/000000/xxxxxxxx',
+    }[kind] || 'https://mattermost.example.com/hooks/xxxxxxxx';
   };
   providerSelect.addEventListener('change', syncProvider);
   const channelInput = input({ value: cfg.channel ?? '', placeholder: '예: db-alerts (비우면 웹훅 기본 채널)' });

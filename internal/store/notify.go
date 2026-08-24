@@ -25,23 +25,29 @@ const SettingNotifyMattermost = "notify.mattermost"
 
 // 보낼 수 있는 메신저.
 //
-// 둘을 하나의 설정으로 다루는 이유: Slack의 들어오는 웹훅과 Mattermost의 것은 본문
-// 구조가 같다(Mattermost가 Slack 호환으로 만들었다). 다른 것은 **글자 문법**뿐이라
-// (굵게·링크) 화면과 저장 구조를 두 벌로 나눌 이유가 없다.
+// 셋을 하나의 설정으로 다루는 이유: 필요한 것은 어느 쪽이든 "주소 하나와 무엇을
+// 보낼지"이고, 그 규칙(최소 심각도·종류·해소 포함)은 메신저와 무관하다. 그래서 저장
+// 구조와 화면은 한 벌이다.
+//
+// 다른 점은 **본문 모양**뿐이다. Slack과 Mattermost는 같다(Mattermost가 Slack
+// 호환으로 만들었다) — 글자 문법만 다르다. 디스코드는 본문 구조가 다르다:
+// attachments 대신 embeds 이고 색이 문자열이 아니라 정수다. 그 차이는 notify 패키지의
+// forWire 한 곳에 가둬 둔다.
 const (
 	ProviderMattermost = "mattermost"
 	ProviderSlack      = "slack"
+	ProviderDiscord    = "discord"
 )
 
 // ValidProvider는 아는 메신저인지 본다.
 func ValidProvider(p string) bool {
-	return p == ProviderMattermost || p == ProviderSlack
+	return p == ProviderMattermost || p == ProviderSlack || p == ProviderDiscord
 }
 
 // NotifySettings는 이벤트를 메신저로 보낼 규칙이다.
 type NotifySettings struct {
 	Enabled bool `json:"enabled"`
-	// Provider는 보낼 메신저다(mattermost | slack). 비어 있으면 mattermost로 본다 —
+	// Provider는 보낼 메신저다(mattermost | slack | discord). 비어 있으면 mattermost로 본다 —
 	// 이 값이 생기기 전에 저장된 설정은 모두 Mattermost였다.
 	Provider string `json:"provider,omitempty"`
 	// WebhookURL은 Mattermost의 들어오는 웹훅 주소다. 저장할 때 암호화한다.

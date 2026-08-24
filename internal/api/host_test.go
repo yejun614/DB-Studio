@@ -214,8 +214,11 @@ func TestNotifySettingsFlow(t *testing.T) {
 	}
 }
 
-// 메신저는 Mattermost와 Slack 둘 다 고를 수 있어야 하고, 고른 값이 저장·응답에
+// 메신저는 Mattermost·Slack·Discord 를 고를 수 있어야 하고, 고른 값이 저장·응답에
 // 그대로 남아야 한다. 저장된 적 없는 서버도 화면이 고르개를 그릴 수 있게 기본값을 준다.
+//
+// 개수가 아니라 **이름**으로 확인하는 이유: 개수를 못박으면 메신저를 하나 더할 때마다
+// 이 시험이 깨지는데, 그 실패는 "무엇이 잘못됐다"를 말해 주지 않는다.
 func TestNotifyProviderChoice(t *testing.T) {
 	e := newTestEnv(t)
 	c := login(t, e, "alice")
@@ -229,8 +232,22 @@ func TestNotifyProviderChoice(t *testing.T) {
 		t.Errorf("기본 메신저 = %v", settings["provider"])
 	}
 	providers, _ := body["providers"].([]any)
-	if len(providers) != 2 {
-		t.Fatalf("고를 수 있는 메신저 = %d개", len(providers))
+	seen := map[string]bool{}
+	for _, raw := range providers {
+		p, _ := raw.(map[string]any)
+		value, _ := p["value"].(string)
+		seen[value] = true
+		// 안내가 비어 있으면 화면이 "이 주소를 어디서 만드는가"를 말해 줄 수 없다.
+		if note, _ := p["note"].(string); note == "" {
+			t.Errorf("메신저 %q 에 안내가 없습니다", value)
+		}
+	}
+	for _, want := range []string{
+		store.ProviderMattermost, store.ProviderSlack, store.ProviderDiscord,
+	} {
+		if !seen[want] {
+			t.Errorf("메신저 %q 를 고를 수 없습니다", want)
+		}
 	}
 
 	if status, _ = c.do("PUT", "/api/v1/notify/", map[string]any{
@@ -254,5 +271,17 @@ func TestNotifyProviderChoice(t *testing.T) {
 	cfg, _ = e.st.NotifySettings(context.Background())
 	if cfg.Kind() != store.ProviderSlack {
 		t.Errorf("메신저가 되돌아갔습니다: %q", cfg.Kind())
+	}
+
+	// 디스코드도 같은 경로로 저장된다(아는 메신저 목록에 들어 있어야 통과한다).
+	if status, _ = c.do("PUT", "/api/v1/notify/", map[string]any{
+		"provider": "discord", "webhookUrl": "https://discord.com/api/webhooks/1/abc",
+		"enabled": true, "minSeverity": "warning",
+	}); status != 200 {
+		t.Fatalf("디스코드 저장 = %d", status)
+	}
+	cfg, _ = e.st.NotifySettings(context.Background())
+	if cfg.Kind() != store.ProviderDiscord {
+		t.Errorf("저장된 메신저 = %q", cfg.Kind())
 	}
 }

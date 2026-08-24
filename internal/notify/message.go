@@ -2,6 +2,7 @@ package notify
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,6 +19,9 @@ import (
 // 다른 것은 **글자 문법**이다: Slack의 mrkdwn은 굵게가 *한 개* 별표이고 링크가
 // <주소|글자>인 반면, Mattermost는 표준 마크다운을 쓴다. 그 차이를 여기 두 함수
 // (bold·link)에 가둬 두면 나머지 코드는 어느 메신저인지 몰라도 된다.
+//
+// 디스코드는 본문 구조 자체가 다르다(embeds, 정수 색). 그 차이는 discordWire 하나에
+// 가둬 두고, 무엇을 보낼지 정하는 코드는 셋을 구분하지 않는다.
 
 const (
 	colorCritical = "#e03e3e"
@@ -26,10 +30,12 @@ const (
 	colorResolved = "#2fa36b"
 )
 
-// payload는 Mattermost 들어오는 웹훅의 본문이다.
+// payload는 메신저에 보낼 내용이다. 메신저별 JSON 모양은 forWire가 만든다.
 type payload struct {
 	// URL은 보낼 곳이다. 본문으로 나가지 않는다(forWire에서 뺀다).
-	URL         string
+	URL string
+	// Provider는 어느 메신저의 모양으로 만들지 정한다.
+	Provider    string
 	Channel     string
 	Username    string
 	Text        string
@@ -51,6 +57,9 @@ type field struct {
 
 // forWire는 실제로 보낼 JSON 구조다.
 func (p payload) forWire() map[string]any {
+	if p.Provider == store.ProviderDiscord {
+		return p.discordWire()
+	}
 	out := map[string]any{"text": p.Text}
 	if p.Channel != "" {
 		out["channel"] = p.Channel
@@ -62,6 +71,71 @@ func (p payload) forWire() map[string]any {
 		out["attachments"] = p.Attachments
 	}
 	return out
+}
+
+// discordWire는 디스코드 웹훅 본문이다.
+//
+// 왜 따로 만드는가: 디스코드는 Slack 호환 본문을 그대로 받지 않는다. 첨부(attachments)
+// 대신 embeds 를 쓰고, 색은 "#e03e3e" 같은 문자열이 아니라 정수(0xe03e3e)다. 주소 끝에
+// /slack 을 붙이면 Slack 본문도 받아 주지만 그 경로에서는 색과 필드가 제대로 살지 않아,
+// 심각도를 색으로 먼저 알린다는 이 기능의 목적이 사라진다.
+//
+// 채널을 싣지 않는 이유: 디스코드 웹훅은 만들 때 채널이 정해지고 본문으로 바꿀 수 없다.
+// 보내는 이름(username)은 반영된다.
+func (p payload) discordWire() map[string]any {
+	embed := map[string]any{}
+	if len(p.Attachments) > 0 {
+		a := p.Attachments[0]
+		if c := discordColor(a.Color); c > 0 {
+			embed["color"] = c
+		}
+		if a.Text != "" {
+			embed["description"] = a.Text
+		}
+		if len(a.Fields) > 0 {
+			fields := make([]map[string]any, 0, len(a.Fields))
+			for _, f := range a.Fields {
+				fields = append(fields, map[string]any{
+					"name": f.Title, "value": f.Value, "inline": f.Short,
+				})
+			}
+			embed["fields"] = fields
+		}
+	}
+
+	out := map[string]any{
+		// 본문 상한이 2000자다. 넘으면 400으로 거부되므로 여기서 자른다 —
+		// 잘린 알림이 오는 것과 아무 알림도 오지 않는 것은 다른 이야기다.
+		"content": clamp(p.Text, 2000),
+	}
+	if p.Username != "" {
+		out["username"] = p.Username
+	}
+	if len(embed) > 0 {
+		out["embeds"] = []map[string]any{embed}
+	}
+	return out
+}
+
+// discordColor는 "#rrggbb"를 디스코드가 받는 정수로 바꾼다.
+func discordColor(hex string) int64 {
+	s := strings.TrimPrefix(strings.TrimSpace(hex), "#")
+	if len(s) != 6 {
+		return 0
+	}
+	n, err := strconv.ParseInt(s, 16, 64)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+func clamp(s string, max int) string {
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max-1]) + "…"
 }
 
 // bold는 메신저별 "굵게" 문법이다.
@@ -148,6 +222,7 @@ func buildPayload(cfg *store.NotifySettings, ev *store.Event, connName string, r
 
 	return payload{
 		URL:      strings.TrimSpace(cfg.WebhookURL),
+		Provider: provider,
 		Channel:  strings.TrimSpace(cfg.Channel),
 		Username: displayName(*cfg),
 		Text: fmt.Sprintf("%s %s %s", head,

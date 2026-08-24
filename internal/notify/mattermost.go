@@ -1,4 +1,4 @@
-// Package notify는 모니터링 이벤트를 메신저(Mattermost)로 보낸다.
+// Package notify는 모니터링 이벤트를 메신저(Mattermost · Slack · Discord)로 보낸다.
 //
 // 왜 필요한가: 이벤트는 화면을 열어야 보인다. 디스크가 차거나 운영 DB가 응답을 멈춘
 // 사실은 **보고 있지 않을 때** 일어나고, 그때 사람에게 닿지 않으면 이벤트 목록은
@@ -232,7 +232,8 @@ func (n *Notifier) post(ctx context.Context, body payload) error {
 		return fmt.Errorf("보내지 못했습니다: %w", err)
 	}
 	defer res.Body.Close()
-	// 본문을 조금 읽는 이유: Mattermost는 실패 사유를 본문에 적는다.
+	// 본문을 조금 읽는 이유: 메신저들은 실패 사유를 본문에 적는다(디스코드는 성공 시
+	// 204로 답하고 본문이 없다).
 	// 상태 코드만 남기면 "400"만 보이고 무엇이 틀렸는지는 알 수 없다.
 	snippet, _ := io.ReadAll(io.LimitReader(res.Body, 512))
 	if res.StatusCode < 200 || res.StatusCode >= 300 {

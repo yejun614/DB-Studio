@@ -258,6 +258,133 @@ func TestProviderMarkupDiffers(t *testing.T) {
 	}
 }
 
+// TestDiscordWire는 디스코드 본문이 그 서비스가 받는 모양인지 본다.
+//
+// 이 시험이 필요한 이유: 디스코드는 Slack 호환 본문을 받지 않는다. attachments 를
+// 그대로 보내면 200이 아니라 400이 오거나, 색과 필드가 사라진 맨 줄만 남는다.
+func TestDiscordWire(t *testing.T) {
+	cfg := store.NotifySettings{
+		Enabled: true, Provider: store.ProviderDiscord,
+		WebhookURL: "https://discord.com/api/webhooks/1/abc",
+		Channel:    "무시되는-채널", Username: "DB 감시",
+		AppURL: "https://db.example.com",
+	}
+	value, threshold := 96.0, 95.0
+	ev := &store.Event{
+		Kind: store.EventThreshold, Severity: store.SeverityCritical,
+		Message: "세션 사용률이 96%입니다", Metric: "conn.used_pct",
+		Value: &value, Threshold: &threshold, Occurrences: 3,
+	}
+	wire := buildPayload(&cfg, ev, "shop", false).forWire()
+
+	if _, ok := wire["text"]; ok {
+		t.Error("디스코드에 text 를 보냈습니다(content 여야 합니다)")
+	}
+	if _, ok := wire["attachments"]; ok {
+		t.Error("디스코드에 attachments 를 보냈습니다(embeds 여야 합니다)")
+	}
+	if _, ok := wire["channel"]; ok {
+		t.Error("디스코드는 채널을 본문으로 바꿀 수 없으므로 싣지 않아야 합니다")
+	}
+	if got := wire["username"]; got != "DB 감시" {
+		t.Errorf("username = %v", got)
+	}
+	content, _ := wire["content"].(string)
+	if !strings.Contains(content, "세션 사용률") {
+		t.Errorf("content = %q", content)
+	}
+	if !strings.Contains(content, "**") {
+		t.Errorf("디스코드는 표준 마크다운을 쓴다: %q", content)
+	}
+
+	embeds, ok := wire["embeds"].([]map[string]any)
+	if !ok || len(embeds) != 1 {
+		t.Fatalf("embeds = %#v", wire["embeds"])
+	}
+	embed := embeds[0]
+	// 색은 문자열이 아니라 정수다. "#e03e3e" 를 그대로 보내면 거부된다.
+	if got := embed["color"]; got != int64(0xe03e3e) {
+		t.Errorf("color = %#v (정수 0xe03e3e 여야 합니다)", got)
+	}
+	fields, ok := embed["fields"].([]map[string]any)
+	if !ok || len(fields) == 0 {
+		t.Fatalf("fields = %#v", embed["fields"])
+	}
+	// 필드 키 이름도 다르다: title/value/short → name/value/inline.
+	if _, ok := fields[0]["name"]; !ok {
+		t.Errorf("필드에 name 이 없습니다: %#v", fields[0])
+	}
+	if _, ok := fields[0]["inline"]; !ok {
+		t.Errorf("필드에 inline 이 없습니다: %#v", fields[0])
+	}
+	desc, _ := embed["description"].(string)
+	if !strings.Contains(desc, "https://db.example.com/events") {
+		t.Errorf("이벤트 링크가 없습니다: %q", desc)
+	}
+}
+
+// TestDiscordClampsContent는 상한(2000자)을 넘는 본문을 자르는지 본다.
+// 넘겨 보내면 디스코드가 400으로 거부하고, 그러면 알림이 아예 오지 않는다.
+func TestDiscordClampsContent(t *testing.T) {
+	cfg := store.NotifySettings{
+		Enabled: true, Provider: store.ProviderDiscord,
+		WebhookURL: "https://discord.com/api/webhooks/1/abc",
+	}
+	ev := &store.Event{
+		Kind: store.EventThreshold, Severity: store.SeverityWarning,
+		Message: strings.Repeat("가", 3000),
+	}
+	wire := buildPayload(&cfg, ev, "shop", false).forWire()
+	content, _ := wire["content"].(string)
+	if n := len([]rune(content)); n != 2000 {
+		t.Errorf("content 길이 = %d (2000이어야 합니다)", n)
+	}
+	if !strings.HasSuffix(content, "…") {
+		t.Error("잘렸다는 표시가 없습니다")
+	}
+}
+
+// TestDiscordPostSucceedsOn204는 디스코드의 성공 응답을 성공으로 보는지 본다.
+//
+// 디스코드는 웹후크가 성공하면 **204 No Content** 로 답하고 본문이 없다. 200과 본문을
+// 기대하는 코드였다면 성공한 전송이 실패로 기록되고, 설정 화면의 전송 상태가 거짓이 된다.
+func TestDiscordPostSucceedsOn204(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		// 디스코드는 content 도 embeds 도 없으면 400을 준다.
+		if got["content"] == nil && got["embeds"] == nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	cfg := store.NotifySettings{
+		Enabled: true, Provider: store.ProviderDiscord,
+		WebhookURL: srv.URL + "/api/webhooks/1/abc", Username: "DB Studio",
+	}
+	ev := &store.Event{Kind: store.EventHost, Severity: store.SeverityWarning,
+		Message: "메모리 사용률이 91%입니다"}
+	n := New(nil, nil)
+	if err := n.post(context.Background(), buildPayload(&cfg, ev, "", false)); err != nil {
+		t.Fatalf("204를 실패로 보았습니다: %v", err)
+	}
+	if _, ok := got["embeds"]; !ok {
+		t.Errorf("embeds 가 실려 나가지 않았습니다: %#v", got)
+	}
+}
+
+func TestDiscordIsValidProvider(t *testing.T) {
+	if !store.ValidProvider(store.ProviderDiscord) {
+		t.Error("discord 가 아는 메신저 목록에 없습니다")
+	}
+}
+
 func TestProviderDefaultsToMattermost(t *testing.T) {
 	// 이 값이 생기기 전에 저장된 설정은 provider가 비어 있다. 그것을 알 수 없는
 	// 메신저로 보면 이미 쓰던 알림이 조용히 멈춘다.
