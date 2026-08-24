@@ -43,7 +43,7 @@ func request(ctx context.Context, cfg Config, method, endpoint string, body, out
 	req.Header.Set("Accept", "application/json")
 	applyAuth(req, cfg)
 
-	return doRequest(req, endpoint, out)
+	return doRequest(req, cfg.Kind, endpoint, out)
 }
 
 // multipartRequest는 Bitbucket의 /src처럼 multipart/form-data를 요구하는 호출을 수행한다.
@@ -77,10 +77,10 @@ func multipartRequest(ctx context.Context, cfg Config, endpoint string, fields m
 	req.Header.Set("Accept", "application/json")
 	applyAuth(req, cfg)
 
-	return doRequest(req, endpoint, out)
+	return doRequest(req, cfg.Kind, endpoint, out)
 }
 
-func doRequest(req *http.Request, endpoint string, out any) error {
+func doRequest(req *http.Request, kind Kind, endpoint string, out any) error {
 	res, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("요청 실패: %w", err)
@@ -93,11 +93,13 @@ func doRequest(req *http.Request, endpoint string, out any) error {
 	}
 
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		message := extractMessage(data)
 		return &APIError{
 			Status:  res.StatusCode,
-			Message: extractMessage(data),
+			Message: message,
 			Body:    string(data),
 			URL:     endpoint,
+			Hint:    hintFor(kind, res.StatusCode, message),
 		}
 	}
 	if out == nil || len(bytes.TrimSpace(data)) == 0 {

@@ -140,6 +140,10 @@ func TestGitHubVerify(t *testing.T) {
 	f.on("GET", "/api/v3/repos/acme/db", 200, `{
 		"full_name":"acme/db","default_branch":"main","html_url":"https://git.example.com/acme/db",
 		"private":true,"permissions":{"push":true}}`)
+	// 연결 확인은 저장소 조회에서 멈추지 않고 내용을 읽을 수 있는지 시험한다
+	// (Metadata 권한만 있는 토큰을 여기서 걸러낸다).
+	f.on("GET", "/api/v3/repos/acme/db/git/ref/heads/main", 200,
+		`{"object":{"sha":"basesha"}}`)
 
 	cfg := Config{Kind: GitHub, BaseURL: f.server.URL, Repo: "acme/db", Token: "tok"}
 	p, _ := Get(GitHub)
@@ -222,6 +226,89 @@ func TestGitHubPutFilesSingleCommit(t *testing.T) {
 	}
 	if got := f.sequence(); strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Errorf("호출 순서가 다릅니다:\n  실제: %v\n  기대: %v", got, want)
+	}
+}
+
+// TestGitHubVerifyDetectsMetadataOnlyToken은 연결 확인이 "읽을 수는 있다"에서
+// 멈추지 않는지 본다.
+//
+// 이 시험이 있는 이유: 세분화 토큰에 Metadata 권한만 주면 저장소 조회는 200으로
+// 통과하고, 응답의 permissions.push 는 **토큰이 아니라 사람**의 권한이라 true 로 온다.
+// 그래서 연결 확인이 통과했는데 첫 푸시(브랜치 생성)에서 403이 났다.
+func TestGitHubVerifyDetectsMetadataOnlyToken(t *testing.T) {
+	f := newFake(t)
+	f.on("GET", "/api/v3/repos/acme/db", 200, `{
+		"full_name":"acme/db","default_branch":"main","permissions":{"push":true}}`)
+	f.on("GET", "/api/v3/repos/acme/db/git/ref/heads/main", 403,
+		`{"message":"Resource not accessible by personal access token"}`)
+
+	cfg := Config{Kind: GitHub, BaseURL: f.server.URL, Repo: "acme/db", Token: "tok"}
+	p, _ := Get(GitHub)
+	_, err := p.Verify(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("Contents 권한이 없는 토큰인데 연결 확인이 통과했습니다")
+	}
+	msg := err.Error()
+	for _, want := range []string{"Resource not accessible", "Contents", "Read and write"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("안내에 %q 가 없습니다: %s", want, msg)
+		}
+	}
+}
+
+// TestGitHubVerifyEmptyRepoIsNotFailure는 빈 저장소를 실패로 보지 않는지 본다.
+// 권한 문제와 "아직 아무것도 없다"는 다른 일이고, 후자는 알려만 주면 된다.
+func TestGitHubVerifyEmptyRepoIsNotFailure(t *testing.T) {
+	f := newFake(t)
+	f.on("GET", "/api/v3/repos/acme/db", 200,
+		`{"full_name":"acme/db","default_branch":"main","permissions":{"push":false}}`)
+	f.on("GET", "/api/v3/repos/acme/db/git/ref/heads/main", 404, `{"message":"Not Found"}`)
+
+	cfg := Config{Kind: GitHub, BaseURL: f.server.URL, Repo: "acme/db", Token: "tok"}
+	p, _ := Get(GitHub)
+	info, err := p.Verify(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("빈 저장소를 실패로 보았습니다: %v", err)
+	}
+	if len(info.Notes) == 0 {
+		t.Fatal("기준 브랜치가 없다는 사실을 알리지 않았습니다")
+	}
+}
+
+// TestAPIErrorHint는 서비스가 준 원문을 지우지 않고 조치를 덧붙이는지 본다.
+func TestAPIErrorHint(t *testing.T) {
+	cases := []struct {
+		name string
+		kind Kind
+		code int
+		msg  string
+		want []string
+	}{
+		{"GitHub 세분화 토큰", GitHub, 403,
+			"Resource not accessible by personal access token",
+			[]string{"Resource not accessible", "Contents", "Pull requests"}},
+		{"GitHub 호출 한도", GitHub, 403, "API rate limit exceeded",
+			[]string{"rate limit", "한도"}},
+		{"GitLab 스코프", GitLab, 403, "insufficient_scope", []string{"api", "Developer"}},
+		{"Bitbucket 앱 비밀번호", Bitbucket, 403, "Forbidden",
+			[]string{"Repositories: Write"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := &APIError{Status: tc.code, Message: tc.msg,
+				Hint: hintFor(tc.kind, tc.code, tc.msg)}
+			got := e.Error()
+			for _, want := range tc.want {
+				if !strings.Contains(got, want) {
+					t.Errorf("%q 가 없습니다: %s", want, got)
+				}
+			}
+		})
+	}
+	// 404는 "아직 없다"가 정상인 경로에서도 나온다. 거기에 권한 안내를 붙이면
+	// 멀쩡한 흐름에서 엉뚱한 말을 한다.
+	if h := hintFor(GitHub, 404, "Not Found"); h != "" {
+		t.Errorf("404에 안내가 붙었습니다: %s", h)
 	}
 }
 

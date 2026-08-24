@@ -82,6 +82,9 @@ type RepoInfo struct {
 	// Permissions는 쓰기 권한 여부다. 확인할 수 없으면 nil이다 —
 	// "권한이 없다"와 "알 수 없다"를 구분해야 사용자에게 정확히 말할 수 있다.
 	CanWrite *bool `json:"canWrite,omitempty"`
+	// Notes는 연결 확인에서 알게 된 주의사항이다. 실패는 아니지만 그대로 두면
+	// 나중에 푸시에서 드러날 것들을 여기 담아 화면의 경고로 올린다.
+	Notes []string `json:"notes,omitempty"`
 }
 
 // Commit은 커밋 결과다.
@@ -160,13 +163,64 @@ type APIError struct {
 	Message string
 	Body    string
 	URL     string
+	// Hint는 "무엇을 고쳐야 하는가"다. 서비스가 준 원문은 그대로 두고 뒤에 붙인다 —
+	// 원문을 지우면 검색으로 찾아볼 단서가 사라지고, 원문만 두면
+	// "Resource not accessible by personal access token"에서 사용자가 할 일을 알 수 없다.
+	Hint string
 }
 
 func (e *APIError) Error() string {
-	if e.Message != "" {
-		return fmt.Sprintf("HTTP %d: %s", e.Status, e.Message)
+	msg := e.Message
+	if msg == "" {
+		msg = truncate(e.Body, 300)
 	}
-	return fmt.Sprintf("HTTP %d: %s", e.Status, truncate(e.Body, 300))
+	if e.Hint != "" {
+		return fmt.Sprintf("HTTP %d: %s — %s", e.Status, msg, e.Hint)
+	}
+	return fmt.Sprintf("HTTP %d: %s", e.Status, msg)
+}
+
+// hintFor는 상태 코드와 원문을 보고 조치를 한 문장으로 만든다.
+//
+// 401·403만 다루는 이유: 404는 "아직 없다"가 정상인 경로에서도 나온다
+// (브랜치 존재 확인). 거기에 권한 안내를 붙이면 멀쩡한 흐름에서 엉뚱한 말을 한다.
+func hintFor(kind Kind, status int, msg string) string {
+	low := strings.ToLower(msg)
+	switch kind {
+	case GitHub:
+		switch {
+		case status == http.StatusForbidden && strings.Contains(low, "rate limit"):
+			return "API 호출 한도를 넘었습니다. 잠시 뒤 다시 시도하세요"
+		case status == http.StatusForbidden &&
+			(strings.Contains(low, "not accessible by personal access token") ||
+				strings.Contains(low, "not accessible by integration")):
+			return "토큰에 이 저장소의 권한이 없습니다. 세분화(fine-grained) 토큰이면 " +
+				"Repository access 에 이 저장소를 넣고 Contents 를 Read and write 로 바꾸세요" +
+				"(PR까지 만들려면 Pull requests 도 Read and write). " +
+				"조직 저장소는 관리자 승인이 필요할 수 있습니다"
+		case status == http.StatusForbidden:
+			return "권한이 거절되었습니다. 토큰 권한과 브랜치 보호 규칙을 확인하세요"
+		case status == http.StatusUnauthorized:
+			return "토큰이 만료되었거나 값이 잘못되었습니다"
+		}
+	case GitLab:
+		switch {
+		case status == http.StatusForbidden:
+			return "토큰 스코프에 api 가 없거나 역할이 Developer 미만입니다" +
+				"(보호된 브랜치에 만들려면 Maintainer 가 필요합니다)"
+		case status == http.StatusUnauthorized:
+			return "토큰이 만료되었거나 값이 잘못되었습니다"
+		}
+	case Bitbucket:
+		switch {
+		case status == http.StatusForbidden:
+			return "앱 비밀번호에 저장소 쓰기 권한(Repositories: Write)이 없습니다" +
+				"(PR까지 만들려면 Pull requests: Write 도 필요합니다)"
+		case status == http.StatusUnauthorized:
+			return "사용자 이름 또는 앱 비밀번호가 잘못되었습니다"
+		}
+	}
+	return ""
 }
 
 // NotFound는 404를 구분한다. 브랜치 존재 확인처럼 "없음"이 정상인 경우가 있다.

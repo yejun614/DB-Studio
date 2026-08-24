@@ -276,7 +276,9 @@ func (s *Server) handleTestVCSIntegration(c *fiber.Ctx) error {
 		Detail: map[string]any{"name": item.Name, "repo": info.FullName},
 	})
 
-	warnings := []string{}
+	// 제공자가 확인 중에 알게 된 것을 먼저 올린다(예: 기준 브랜치가 없음,
+	// 계정 권한과 토큰 권한이 다를 수 있음).
+	warnings := append([]string{}, info.Notes...)
 	if info.CanWrite != nil && !*info.CanWrite {
 		warnings = append(warnings,
 			"이 토큰에는 쓰기 권한이 없습니다. 브랜치 생성과 커밋이 실패합니다")

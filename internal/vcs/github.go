@@ -25,16 +25,57 @@ func (p *githubProvider) Verify(ctx context.Context, cfg Config) (*RepoInfo, err
 			Push bool `json:"push"`
 		} `json:"permissions"`
 	}
-	endpoint := fmt.Sprintf("%s/repos/%s/%s", apiRoot(cfg), pathEscape(owner), pathEscape(name))
-	if err := request(ctx, cfg, http.MethodGet, endpoint, nil, &out); err != nil {
+	root := fmt.Sprintf("%s/repos/%s/%s", apiRoot(cfg), pathEscape(owner), pathEscape(name))
+	if err := request(ctx, cfg, http.MethodGet, root, nil, &out); err != nil {
+		if ae, ok := asAPIError(err); ok && ae.NotFound() {
+			return nil, fmt.Errorf("저장소 %q 를 찾을 수 없습니다. 이름이 틀렸거나 토큰에 "+
+				"접근 권한이 없습니다(클래식 토큰은 repo 스코프가 필요합니다)", cfg.Repo)
+		}
 		return nil, err
 	}
+
+	info := &RepoInfo{
+		FullName: out.FullName, DefaultBranch: out.DefaultBranch,
+		WebURL: out.HTMLURL, Private: out.Private,
+	}
+
+	// 저장소 내용을 읽을 수 있는지 **실제로** 확인한다.
+	//
+	// 위의 저장소 조회는 Metadata 권한만으로 통과한다. 브랜치를 만들려면 그보다
+	// 넓은 Contents 권한이 필요하고, 그 차이는 지금까지 첫 푸시에서야 드러났다.
+	// 참조 하나를 읽어 보면 그 자리에서 알 수 있다.
+	// 기준 브랜치는 저장소가 알려 준 기본 브랜치를 쓴다. 연동에 설정된 기준 브랜치와
+	// 다를 수 있지만, 여기서 확인하려는 것은 브랜치가 아니라 "내용을 읽을 수 있는가"다.
+	base := out.DefaultBranch
+	if base != "" {
+		err := request(ctx, cfg, http.MethodGet,
+			root+"/git/ref/heads/"+pathKeepSlash(base), nil, nil)
+		ae, isAPI := asAPIError(err)
+		switch {
+		case err == nil:
+			// 읽을 수 있다. 쓰기는 여전히 첫 푸시에서 드러난다.
+		case isAPI && ae.NotFound():
+			// 저장소가 비었거나 기준 브랜치 이름이 다르다. 권한 문제가 아니므로
+			// 확인을 실패시키지 않고 알려만 준다.
+			info.Notes = append(info.Notes,
+				fmt.Sprintf("기준 브랜치 %q 를 찾을 수 없습니다. 빈 저장소이거나 이름이 다릅니다", base))
+		default:
+			// 403이면 hintFor가 붙인 안내가 그대로 따라온다.
+			return nil, fmt.Errorf("저장소 내용을 읽을 수 없습니다: %w", err)
+		}
+	}
+
 	// permissions는 인증된 사용자에게만 포함된다. 없으면 "알 수 없음"으로 남긴다.
 	canWrite := out.Permissions.Push
-	return &RepoInfo{
-		FullName: out.FullName, DefaultBranch: out.DefaultBranch,
-		WebURL: out.HTMLURL, Private: out.Private, CanWrite: &canWrite,
-	}, nil
+	info.CanWrite = &canWrite
+	if canWrite {
+		// 이 값은 **계정** 기준이다. 세분화 토큰은 그보다 좁을 수 있고, 그때
+		// 통과한 확인이 오히려 사람을 안심시킨다.
+		info.Notes = append(info.Notes,
+			"쓰기 권한은 계정 기준으로 보고된 값입니다. 세분화(fine-grained) 토큰이면 "+
+				"Contents 가 Read and write 인지 토큰 설정에서 확인하세요")
+	}
+	return info, nil
 }
 
 func (p *githubProvider) EnsureBranch(ctx context.Context, cfg Config, branch, base string) (bool, error) {
