@@ -6,11 +6,12 @@
 import { api } from '../core/api.js';
 import { state, kindLabel } from '../core/store.js';
 import {
-  h, mount, icon, select, input, spinner, emptyState, pageHeader,
+  h, mount, icon, input, spinner, emptyState, pageHeader,
   badge, envBadge, relativeTime, formatDate,
 } from '../core/ui.js';
 import { formatBytes } from '../core/chart.js';
 import { navigate } from '../core/router.js';
+import { serverDbPicker } from '../core/connpick.js';
 import { errorPanel } from './users.js';
 
 export async function renderNoSQL(outlet, params, query) {
@@ -42,15 +43,10 @@ export async function renderNoSQL(outlet, params, query) {
   const selectedId = query.get('conn') || usable[0].connection.id;
   const current = usable.find((i) => i.connection.id === selectedId) ?? usable[0];
 
-  const connSelect = select(
-    usable.map((i) => ({
-      value: i.connection.id,
-      label: `${i.connection.name} — ${kindLabel(i.connection.kind)} (${i.connection.environment === 'prod' ? '운영' : '개발'})`,
-    })),
-    { value: current.connection.id },
-  );
-  connSelect.addEventListener('change', () => {
-    navigate(`/nosql?conn=${encodeURIComponent(connSelect.value)}`);
+  const picker = serverDbPicker({
+    usable,
+    currentId: current.connection.id,
+    onPick: (id) => navigate(`/nosql?conn=${encodeURIComponent(id)}`),
   });
 
   const body = h('div');
@@ -60,7 +56,7 @@ export async function renderNoSQL(outlet, params, query) {
       h('button.btn', { type: 'button', onclick: () => load() }, icon('refresh'), '다시 읽기'),
     ]),
     h('div.card.filter-bar', {},
-      h('label.field.field-inline', {}, h('span.field-label', {}, '커넥션'), connSelect),
+      ...picker.nodes,
       envBadge(current.connection.environment),
       h('div.filter-sep'),
       h('a.btn.btn-small', { href: `/schema?conn=${encodeURIComponent(current.connection.id)}` },

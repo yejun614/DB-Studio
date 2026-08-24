@@ -4,13 +4,14 @@
 // 운영자가 이 화면에서 답을 얻고 싶은 질문은 셋이다 — 클러스터는 괜찮은가, 무엇이
 // 자리를 차지하고 있는가, 지금 무슨 일이 돌고 있는가.
 import { api } from '../core/api.js';
-import { state, kindLabel } from '../core/store.js';
+import { state } from '../core/store.js';
 import {
-  h, mount, icon, select, input, spinner, emptyState, pageHeader,
+  h, mount, icon, input, spinner, emptyState, pageHeader,
   badge, envBadge, formatDate, relativeTime, toast, toastError, confirmDialog, openModal,
 } from '../core/ui.js';
 import { formatBytes } from '../core/chart.js';
 import { navigate } from '../core/router.js';
+import { groupedSelect } from '../core/connpick.js';
 import { errorPanel } from './users.js';
 
 export async function renderStorage(outlet, params, query) {
@@ -42,13 +43,9 @@ export async function renderStorage(outlet, params, query) {
   const current = usable.find((i) => i.connection.id === selectedId) ?? usable[0];
   const conn = current.connection;
 
-  const connSelect = select(
-    usable.map((i) => ({
-      value: i.connection.id,
-      label: `${i.connection.name} — ${kindLabel(i.connection.kind)}`,
-    })),
-    { value: conn.id },
-  );
+  // 항목을 평평하게 늘어놓으면 같은 서버의 것이 이름만 다른 줄로 반복된다.
+  // 여기서는 "DB"라 부를 것이 없으므로 라벨은 그대로 두고 묶음 제목으로만 서버를 보여준다.
+  const connSelect = groupedSelect({ usable, currentId: conn.id });
   connSelect.addEventListener('change', () => {
     navigate(`/storage?conn=${encodeURIComponent(connSelect.value)}`);
   });

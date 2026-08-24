@@ -8,13 +8,14 @@
 // "쌓이고 있나"다. 큐 깊이·랙은 그 자체로 좋지도 나쁘지도 않다 — 소비자가 따라오고
 // 있으면 정상이고, 따라오지 못하면 장애의 전조다.
 import { api } from '../core/api.js';
-import { state, kindLabel } from '../core/store.js';
+import { state } from '../core/store.js';
 import {
-  h, mount, icon, select, spinner, emptyState, pageHeader,
+  h, mount, icon, spinner, emptyState, pageHeader,
   badge, envBadge, formatDate, relativeTime, toast, toastError, confirmDialog, openModal,
 } from '../core/ui.js';
 import { formatBytes } from '../core/chart.js';
 import { navigate } from '../core/router.js';
+import { groupedSelect } from '../core/connpick.js';
 import { errorPanel } from './users.js';
 
 export async function renderBroker(outlet, params, query) {
@@ -46,13 +47,9 @@ export async function renderBroker(outlet, params, query) {
   const current = usable.find((i) => i.connection.id === selectedId) ?? usable[0];
   const conn = current.connection;
 
-  const connSelect = select(
-    usable.map((i) => ({
-      value: i.connection.id,
-      label: `${i.connection.name} — ${kindLabel(i.connection.kind)}`,
-    })),
-    { value: conn.id },
-  );
+  // 항목을 평평하게 늘어놓으면 같은 서버의 것이 이름만 다른 줄로 반복된다.
+  // 여기서는 "DB"라 부를 것이 없으므로 라벨은 그대로 두고 묶음 제목으로만 서버를 보여준다.
+  const connSelect = groupedSelect({ usable, currentId: conn.id });
   connSelect.addEventListener('change', () => {
     navigate(`/broker?conn=${encodeURIComponent(connSelect.value)}`);
   });
