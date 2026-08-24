@@ -293,3 +293,53 @@ func TestInlineCSSVarsAreUsed(t *testing.T) {
 		t.Fatal("인라인 CSS 변수를 하나도 찾지 못했습니다 — 검사가 무력해졌는지 확인하세요")
 	}
 }
+
+// TestManualBodiesAreClosedProperly는 설명서 본문의 백틱이 이스케이프되어 있는지 본다.
+//
+// 이 검사가 있는 이유(실제로 겪었다): 설명서 문장에 코드 조각을 적으면서 백틱을
+// 이스케이프하지 않으면 그 자리에서 템플릿 문자열이 끝나고, 뒤따르는 글자가 코드로
+// 해석된다. 문법 오류가 아니라 **모듈 평가 시점의 예외**가 되므로 node --check 도,
+// 눈으로 읽는 것도 통과한다. 그런데 manual.js 는 main.js 가 처음에 불러오는 모듈이라,
+// 그 예외 하나로 앱 전체가 "불러오는 중"에서 멈춘다.
+//
+// 규칙은 단순하다: 본문은 `body: ` 다음의 백틱에서 시작해 백틱 + 쉼표로 끝난다.
+// 그 사이에서 끝나면 이스케이프를 빠뜨린 것이다.
+func TestManualBodiesAreClosedProperly(t *testing.T) {
+	raw, err := fs.ReadFile(embedded, "web/js/pages/manual.js")
+	if err != nil {
+		t.Fatalf("manual.js: %v", err)
+	}
+	src := string(raw)
+	const open = "body: `"
+
+	bodies := 0
+	for i := 0; ; {
+		start := strings.Index(src[i:], open)
+		if start < 0 {
+			break
+		}
+		start += i + len(open)
+		bodies++
+
+		end := -1
+		for j := start; j < len(src); j++ {
+			if src[j] == '`' && src[j-1] != '\\' {
+				end = j
+				break
+			}
+		}
+		if end < 0 {
+			t.Fatalf("%d번째 본문이 닫히지 않았습니다", bodies)
+		}
+		// 본문이 제대로 끝났다면 바로 뒤가 쉼표다.
+		if rest := strings.TrimLeft(src[end+1:], " \t\r\n"); !strings.HasPrefix(rest, ",") {
+			line := 1 + strings.Count(src[:end], "\n")
+			t.Errorf("manual.js:%d 본문이 여기서 끊겼습니다 — 백틱을 \\` 로 이스케이프하세요 (뒤: %.40q)",
+				line, src[end:])
+		}
+		i = end + 1
+	}
+	if bodies < 10 {
+		t.Fatalf("설명서 본문을 %d개만 찾았습니다 — 검사가 무력해졌는지 확인하세요", bodies)
+	}
+}
