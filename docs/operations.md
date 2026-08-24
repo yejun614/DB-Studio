@@ -22,7 +22,7 @@ scripts/release.sh v1.0.0        # 버전을 생략하면 git describe → dev
 .\scripts\release.ps1 -Version v1.0.0
 ```
 
-`dist/`에 5개 플랫폼(linux amd64·arm64, darwin amd64·arm64, windows amd64) 바이너리와
+`dist/`에 6개 플랫폼(linux amd64·arm64, darwin amd64·arm64, windows amd64·arm64) 바이너리와
 `SHA256SUMS`가 만들어진다. `-trimpath -ldflags "-s -w"`로 빌드해 개발 경로가 남지 않고
 크기도 줄어든다(약 50~53MB). 버전은 바이너리에 심어지므로 실행 없이도 확인할 수 있다.
 
@@ -40,7 +40,7 @@ curl -s localhost:8080/api/v1/health      # 로그인 없이 빌드 정보 확�
 
 | 워크플로 | 언제 | 하는 일 |
 |---|---|---|
-| `ci.yml` | main 푸시 · PR | gofmt 확인, `go vet`, `go test ./...`(우분투·윈도우), 5개 플랫폼 크로스 빌드 |
+| `ci.yml` | main 푸시 · PR | gofmt 확인, `go vet`, `go test ./...`(우분투·윈도우), 6개 플랫폼 크로스 빌드 |
 | `release.yml` | `v*` 태그 푸시 | 시험 → `scripts/release.sh` 빌드 → 릴리스 노트 작성 → GitHub 릴리스 생성 |
 
 ```bash

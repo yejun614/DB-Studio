@@ -31,12 +31,17 @@ rm -rf "$OUT"
 mkdir -p "$OUT"
 
 # 대상 목록. 필요 없는 것은 지워도 되지만, 하나씩 빌드해도 1분 이내다.
+#
+# windows/arm64를 넣는 이유: Snapdragon X 계열 노트북과 ARM 윈도우 VM이
+# 늘었다. x64 바이너리도 에뮬레이션으로 돌지만, 이 앱은 30초마다 호스트 지표를
+# 읽고 폴러를 돌리는 상주 프로세스여서 에뮬레이션 비용을 계속 낸다.
 TARGETS="
 linux/amd64
 linux/arm64
 darwin/amd64
 darwin/arm64
 windows/amd64
+windows/arm64
 "
 
 echo "dbstudio ${VERSION} (${COMMIT:-no-vcs}) 빌드"

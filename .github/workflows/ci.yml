@@ -78,9 +78,13 @@ jobs:
 
       # 산출물은 버리고 컴파일 여부만 본다. 실제 릴리스 산출물은
       # release 워크플로가 scripts/release.sh로 만든다(빌드 플래그의 유일한 출처).
+      #
+      # 목록은 scripts/release.sh 의 TARGETS 와 같아야 한다. 여기서 빠진 대상은
+      # 릴리스를 만드는 순간에 처음 빌드되고, 그때 깨지면 태그를 되돌려야 한다.
       - name: 배포 대상 전체 컴파일
         run: |
-          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 \
+                        windows/amd64 windows/arm64; do
             echo "→ $target"
             GOOS="${target%/*}" GOARCH="${target#*/}" \
               go build -trimpath -o /dev/null ./cmd/dbstudio

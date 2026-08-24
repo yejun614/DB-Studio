@@ -150,7 +150,7 @@ go test ./internal/dbx -run TestIntrospect -integration
   `node_modules`도, 트랜스파일도 없습니다. 고치고 새로고침하면 끝입니다.
 - 대신 컴파일러가 잡아 주던 것을 시험이 잡습니다(`assets_test.go` — 없는 함수 호출,
   쓰이지 않는 CSS 변수).
-- `main` 푸시·PR에서 gofmt·vet·시험(우분투·윈도우)과 5개 플랫폼 크로스 빌드가 돕니다.
+- `main` 푸시·PR에서 gofmt·vet·시험(우분투·윈도우)과 6개 플랫폼 크로스 빌드가 돕니다.
   `v*` 태그를 밀면 릴리스가 만들어집니다 → [운영 문서](docs/operations.md#ci와-릴리스-자동화-github-actions)
 
 ## 스택

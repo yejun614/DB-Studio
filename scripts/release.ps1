@@ -22,12 +22,15 @@ $out = 'dist'
 if (Test-Path $out) { Remove-Item -Recurse -Force $out }
 New-Item -ItemType Directory -Path $out | Out-Null
 
+# release.sh 의 TARGETS 와 같은 목록이어야 한다. 한쪽만 늘리면 손으로 만든
+# 빌드와 CI 빌드의 산출물이 달라진다.
 $targets = @(
   @{ os = 'linux';   arch = 'amd64' },
   @{ os = 'linux';   arch = 'arm64' },
   @{ os = 'darwin';  arch = 'amd64' },
   @{ os = 'darwin';  arch = 'arm64' },
-  @{ os = 'windows'; arch = 'amd64' }
+  @{ os = 'windows'; arch = 'amd64' },
+  @{ os = 'windows'; arch = 'arm64' }
 )
 
 Write-Host "dbstudio $Version ($commit) 빌드"

@@ -107,6 +107,17 @@ jobs:
             echo
             echo "처음 실행하면 슈퍼 어드민 계정과 임시 비밀번호가 터미널에 **한 번** 표시됩니다."
             echo
+            echo "### 플랫폼"
+            echo
+            echo "| 플랫폼 | 파일 |"
+            echo "|---|---|"
+            echo "| Linux x86-64 | \`dbstudio_${version}_linux_amd64\` |"
+            echo "| Linux ARM64 | \`dbstudio_${version}_linux_arm64\` |"
+            echo "| macOS Intel | \`dbstudio_${version}_darwin_amd64\` |"
+            echo "| macOS Apple Silicon | \`dbstudio_${version}_darwin_arm64\` |"
+            echo "| Windows x86-64 | \`dbstudio_${version}_windows_amd64.exe\` |"
+            echo "| Windows ARM64 | \`dbstudio_${version}_windows_arm64.exe\` |"
+            echo
             echo "## 변경 내역"
             echo
             if [ -n "$prev" ]; then
