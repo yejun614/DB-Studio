@@ -108,23 +108,17 @@ docker run -v ./our-ca.crt:/usr/local/share/ca-certificates/our-ca.crt:ro \
 (목록은 [시작하기의 옵션 표](getting-started.md#옵션)), 이미지는 플래그를 인자로 넘기지
 않으므로 환경변수가 그대로 먹는다.
 
-```yaml
-# compose.yaml
-services:
-  dbstudio:
-    image: ghcr.io/yejun614/db-studio:latest
-    ports: ["8080:8080"]
-    volumes: ["dbstudio-data:/data"]
-    environment:
-      DBSTUDIO_MASTER_KEY: "${DBSTUDIO_MASTER_KEY:?openssl rand -base64 32 으로 만들어 두세요}"
-      DBSTUDIO_SECURE_COOKIE: "true"      # HTTPS 프록시 뒤에 둘 때
-      DBSTUDIO_TRUST_PROXY: "true"        # X-Forwarded-For 를 클라이언트 IP로
-      DBSTUDIO_MONITOR_INTERVAL: "15s"
-      DBSTUDIO_LOG_LEVEL: "info"
-    restart: unless-stopped
-volumes:
-  dbstudio-data:
+예시 파일이 저장소에 있다 — [`docker/compose.yaml`](../docker/compose.yaml).
+
+```bash
+echo "DBSTUDIO_MASTER_KEY=$(openssl rand -base64 32)" > docker/.env
+docker compose -f docker/compose.yaml up -d
+docker compose -f docker/compose.yaml logs | head -20   # 첫 계정과 임시 비밀번호
 ```
+
+키를 환경변수로 주면 볼륨에 `master.key` 파일을 만들지 않는다 — 키와 데이터가 한곳에
+있지 않게 된다. 그 예시 파일은 `read_only`·`cap_drop: ALL`·`no-new-privileges` 까지
+켜 둔 상태로 동작을 확인한 것이다(쓰는 곳은 `/data` 와 tmpfs `/tmp` 뿐이다).
 
 우선순위는 `인자 > 환경변수 > 기본값`이다. 이미지에는 `DBSTUDIO_ADDR=:8080`·
 `DBSTUDIO_DATA=/data` 두 개만 기본값으로 심어 두었고, 인자를 주면 그것이 이긴다.

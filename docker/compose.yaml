@@ -1,0 +1,85 @@
+# DB Studio 배치 예시 (단일 노드).
+#
+#   docker compose -f docker/compose.yaml up -d
+#   docker compose -f docker/compose.yaml logs | head -20   # 첫 계정과 임시 비밀번호
+#
+# 이 파일과 같은 디렉터리의 .env 에서 값을 읽는다. 시작 전에 키를 만들어 둔다:
+#
+#   echo "DBSTUDIO_MASTER_KEY=$(openssl rand -base64 32)" > docker/.env
+#
+# 셸에서 export 하는 것보다 .env 에 넣는 편이 낫다. compose 는 up 뿐 아니라
+# down·logs·config 에서도 이 값을 요구하므로(값 치환이 먼저 일어난다), 셸에만
+# 두면 새 터미널에서 `down` 이 실패한다.
+#
+# (테스트용 DB 컨테이너는 compose.test.yaml 이다 — 이 파일과 목적이 다르다.)
+name: dbstudio
+
+services:
+  dbstudio:
+    # 태그를 고정하는 편이 좋다. latest 는 다음 릴리스에 조용히 바뀐다.
+    #   ghcr.io/yejun614/db-studio:0.1          최신 0.1.x
+    #   ghcr.io/yejun614/db-studio:0.1.0        딱 그 버전
+    #   ghcr.io/yejun614/db-studio:0.1.0-alpine 셸이 필요할 때
+    image: ghcr.io/yejun614/db-studio:latest
+    container_name: dbstudio
+    restart: unless-stopped
+
+    ports:
+      - "8080:8080"
+
+    # /data 에 메타 DB(dbstudio.db)와 마스터 암호화 키(master.key)가 생긴다.
+    # 이 볼륨을 잃으면 등록한 커넥션과 이력이 사라진다.
+    volumes:
+      - dbstudio-data:/data
+
+    environment:
+      # ── 반드시 줄 것 ────────────────────────────────────────────────
+      # 자격증명 암호화 키. 주지 않으면 컨테이너가 볼륨에 새로 만들지만,
+      # 그러면 키가 데이터와 같은 곳에 놓인다. 시크릿으로 관리하는 편이 낫다.
+      # 값이 없으면 여기서 멈춘다(뜬 뒤에 알게 되는 것보다 낫다).
+      DBSTUDIO_MASTER_KEY: ${DBSTUDIO_MASTER_KEY:?docker/.env 에 DBSTUDIO_MASTER_KEY 를 넣으세요 — openssl rand -base64 32}
+
+      # ── 프록시 뒤에 둘 때 ──────────────────────────────────────────
+      # HTTPS로 서비스하면 세션 쿠키에 Secure 를 붙인다.
+      # DBSTUDIO_SECURE_COOKIE: "true"
+      # X-Forwarded-For 를 클라이언트 IP로 쓴다(감사 로그의 IP가 프록시 주소로
+      # 통일되면 "누가 어디서 했는가"가 사라진다).
+      # DBSTUDIO_TRUST_PROXY: "true"
+      # DBSTUDIO_TRUSTED_PROXIES: "10.0.0.0/8"
+
+      # ── 관측 ───────────────────────────────────────────────────────
+      DBSTUDIO_MONITOR_INTERVAL: "30s"
+      DBSTUDIO_METRIC_RETENTION: "48h"
+      DBSTUDIO_LOG_LEVEL: "info"        # debug 로 올리면 모든 API 요청이 남는다
+
+      # ── 그 밖에 ────────────────────────────────────────────────────
+      # 플래그 40개 전부에 DBSTUDIO_* 대응이 있다. 전체 목록:
+      # https://github.com/yejun614/DB-Studio/blob/main/docs/getting-started.md#옵션
+      # DBSTUDIO_SESSION_TTL: "12h"
+      # DBSTUDIO_BACKUP_RETENTION: "720h"
+
+    # 이 앱은 자격증명을 들고 있다. 컨테이너가 뚫렸을 때 그다음 단계를 어렵게 한다.
+    # 이미지는 이미 nonroot(uid 65532)로 돌고, 쓰는 곳은 /data 하나뿐이다.
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp
+
+    # 헬스체크를 두지 않은 이유: 기본 이미지(distroless)에는 셸도 curl 도 없어서
+    # 컨테이너 안에서 HTTP를 찔러 볼 방법이 없다. 바깥(프록시·오케스트레이터)에서
+    # /api/v1/health 를 보는 것이 정석이다. 그 응답은 로그인 없이 열려 있고 빌드
+    # 정보를 함께 준다.
+    #
+    # 컨테이너 안에서 꼭 확인해야 한다면 -alpine 태그로 바꾸고 아래를 켠다.
+    # healthcheck:
+    #   test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/api/v1/health"]
+    #   interval: 30s
+    #   timeout: 5s
+    #   retries: 3
+    #   start_period: 20s
+
+volumes:
+  dbstudio-data:

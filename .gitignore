@@ -3,3 +3,6 @@
 *.log
 /dist/
 /.claude/settings.local.json
+
+# compose 가 읽는 값 파일. 마스터 암호화 키가 여기 들어간다(docker/compose.yaml 참고).
+.env
