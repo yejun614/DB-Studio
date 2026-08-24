@@ -322,6 +322,17 @@ class StructureView {
         // 초안으로 옮기므로, ERD 화면에서 커넥션을 다시 고를 필요가 없다.
         h('button.btn.btn-small', { type: 'button', onclick: () => this.createDraft() },
           icon('plus'), '이 구조로 초안 만들기'),
+        // 버전 이력으로 돌아가는 길. 여기 오는 흔한 경로가 그 화면의 "구조 보기"이고,
+        // 돌아갈 버튼이 없으면 브라우저 뒤로가기밖에 남지 않는다 — 그것은 시점을
+        // 바꿔 본 뒤에는 엉뚱한 곳으로 간다(주소가 그만큼 쌓여 있다).
+        //
+        // 시점이 "현재"일 때도 두는 이유: 이 커넥션의 이력으로 가는 길은 어느
+        // 상태에서든 쓸모가 있고, 상태에 따라 나타났다 사라지는 버튼은 찾을 때
+        // 있는지부터 의심하게 만든다.
+        h('a.btn.btn-small', {
+          href: `/versions?conn=${encodeURIComponent(this.conn.id)}`,
+          title: '이 DB의 스키마 버전 이력으로 갑니다',
+        }, icon('history'), '버전 이력'),
       ),
       h('div.erd-tool-spacer'),
       readOnly
