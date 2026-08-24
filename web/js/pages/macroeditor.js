@@ -13,6 +13,7 @@ import {
   toast, toastError, openModal, confirmDialog, field, formatDate, relativeTime,
 } from '../core/ui.js';
 import { navigate, setLeaveGuard } from '../core/router.js';
+import { serverDbPicker } from '../core/connpick.js';
 import { codeEditor } from '../core/highlight.js';
 import { errorPanel } from './users.js';
 import { openRunLog, runStatusBadge } from './macros.js';
@@ -1077,7 +1078,8 @@ class MacroEditor {
       this.markDirty();
     });
 
-    const controls = fields.map((f) => this.fieldControl(node, f));
+    // fieldControl은 칸 하나 또는 여러 개(서버+DB 고르개)를 돌려준다.
+    const controls = fields.flatMap((f) => this.fieldControl(node, f));
 
     mount(this.panel,
       h('div.panel-head', {},
@@ -1138,14 +1140,22 @@ class MacroEditor {
         //
         // "전체 DB"는 그 값을 처리할 줄 아는 노드(백업)에만 나온다. 서버가
         // allowAll로 알려주므로 화면이 노드 종류를 따로 알 필요가 없다.
-        const options = [{ value: '', label: '선택하세요' },
-          ...(f.allowAll ? [{ value: '*', label: '전체 DB (접근 가능한 모든 DB)' }] : []),
-          ...this.connections
-            .filter((i) => i.accessible)
-            .map((i) => ({ value: i.connection.id, label: i.connection.name }))];
-        control = select(options, { value: value ?? '' });
-        control.addEventListener('change', () => setValue(control.value));
-        break;
+        // 서버 → DB 두 단계로 고른다. 평평한 목록은 같은 서버의 DB가 이름만 다른
+        // 항목으로 반복되어("mysql / mysql", "mysql / dbstudio_migrate") 목록이
+        // 길어질수록 어느 서버의 것인지 사라진다.
+        return serverDbPicker({
+          usable: this.connections.filter((i) => i.accessible),
+          currentId: value ?? '',
+          onPick: (id) => setValue(id),
+          placeholder: '선택하세요',
+          allLabel: f.allowAll ? '전체 DB (접근 가능한 모든 DB)' : '',
+          allValue: '*',
+          dbLabelText: 'DB' + (f.required ? ' *' : ''),
+          inline: false,
+          // 도움말은 서버 칸에 붙인다. '전체 DB'를 고르면 DB 칸이 감춰지므로,
+          // 거기 붙여 두면 정작 그 설명이 필요한 순간에 사라진다.
+          serverHelp: f.help,
+        }).nodes;
       }
       case 'macro': {
         const options = [{ value: '', label: '선택하세요' },
@@ -1245,17 +1255,27 @@ class MacroEditor {
         params.length === 0
           ? h('p.muted', {}, '이 매크로는 실행 파라미터가 없습니다.')
           : h('div', {}, params.map((p) => {
+              // 커넥션 파라미터는 서버 → DB 두 단계로 고른다. 고르개는 select 처럼
+              // .value 를 주므로 아래 실행 버튼의 코드는 그대로다.
+              if (p.type === 'connection') {
+                const picker = serverDbPicker({
+                  usable: this.connections.filter((i) => i.accessible),
+                  currentId: p.default ?? '',
+                  onPick: () => {},
+                  placeholder: '선택하세요',
+                  dbLabelText: p.label || p.name,
+                  inline: false,
+                  help: p.help,
+                });
+                inputs.set(p.name, { control: picker, def: p });
+                return h('div', {}, ...picker.nodes);
+              }
               const control = p.type === 'boolean'
                 ? h('input', { type: 'checkbox', checked: Boolean(p.default) })
-                : p.type === 'connection'
-                  ? select([{ value: '', label: '선택하세요' },
-                      ...this.connections.filter((i) => i.accessible)
-                        .map((i) => ({ value: i.connection.id, label: i.connection.name }))],
-                    { value: p.default ?? '' })
-                  : input({
-                      value: p.default ?? '',
-                      type: p.type === 'number' ? 'number' : 'text',
-                    });
+                : input({
+                    value: p.default ?? '',
+                    type: p.type === 'number' ? 'number' : 'text',
+                  });
               inputs.set(p.name, { control, def: p });
               return field(p.label || p.name, control, p.help);
             })),
