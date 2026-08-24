@@ -22,6 +22,11 @@ DB Studio는 **프론트엔드까지 담은 하나의 실행 파일**입니다. 
 ./dbstudio -addr :8080 -data ./data
 ```
 
+<div align="center">
+  <img src="docs/images/dashboard.png" alt="대시보드 — 등록된 DB의 상태와 열린 이벤트" width="100%">
+  <sub>대시보드는 "지금 문제가 있는가"에 먼저 답합니다 · <a href="docs/screenshots.md">화면 더 보기</a></sub>
+</div>
+
 ## 바탕에 깔린 원칙 네 가지
 
 이 넷을 알면 나머지 동작은 예측할 수 있습니다.
@@ -48,6 +53,29 @@ DB Studio는 **프론트엔드까지 담은 하나의 실행 파일**입니다. 
 | 🔔 **알림** | 이벤트를 Mattermost·Slack으로. 해소 알림, 심각도별 색, 전송 상태 기록 |
 | 🌐 **분산** | 여러 서버를 하나처럼(마스터-리플리카), 특정 노드에서만 닿는 DB에는 담당 노드 지정 |
 | 📖 **설명서** | 앱 안에 들어 있습니다(`/manual`). 바이너리에 임베드되므로 화면과 버전이 갈리지 않습니다 |
+
+## 화면
+
+<table>
+<tr>
+<td width="50%"><a href="docs/images/erd.png"><img src="docs/images/erd.png" alt="ERD 설계"></a><br>
+<b>ERD 설계</b> — 여러 명이 같은 초안을 동시에 고칩니다. 커서·대화·되돌리기가 있고,
+그린 것은 마이그레이션으로만 실제 DB에 반영됩니다.</td>
+<td width="50%"><a href="docs/images/cluster.png"><img src="docs/images/cluster.png" alt="클러스터"></a><br>
+<b>클러스터</b> — 여러 서버를 하나처럼. 노드마다 복제 지연과 그 컴퓨터의
+CPU·메모리·디스크를 함께 봅니다.</td>
+</tr>
+<tr>
+<td width="50%"><a href="docs/images/data.png"><img src="docs/images/data.png" alt="데이터 브라우저"></a><br>
+<b>데이터</b> — 외래키를 누르면 대상 행이 오른쪽에 펼쳐집니다. 수정은 모아 두었다가
+실행될 SQL을 보고 적용합니다.</td>
+<td width="50%"><a href="docs/images/sql-console.png"><img src="docs/images/sql-console.png" alt="SQL 콘솔"></a><br>
+<b>SQL 콘솔</b> — 구문 검사(실행하지 않고 확인), 포맷팅, 실행 계획. 실행한 문장은
+감사 로그에 남습니다.</td>
+</tr>
+</table>
+
+<div align="center"><a href="docs/screenshots.md">모니터링 · 브로커 · 서버 컴퓨터 · 설명서 화면 보기 →</a></div>
 
 ## 다룰 수 있는 대상
 
@@ -101,6 +129,7 @@ $env:CGO_ENABLED="0"; go build -o bin/dbstudio.exe ./cmd/dbstudio
 | 문서 | 내용 |
 |---|---|
 | [문서 색인](docs/README.md) | 아래 전부의 지도 |
+| [화면](docs/screenshots.md) | 실제로 띄운 서버의 화면 12장 |
 | [기능 목록](docs/features.md) | 구현되어 있는 것 전체 |
 | [시작하기](docs/getting-started.md) | 빌드·실행, 옵션, 첫 로그인, 2단계 인증 |
 | [운영](docs/operations.md) | 릴리스, CI, 로그 읽기, 백업 훅, 암호화 키 |
