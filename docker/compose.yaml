@@ -25,7 +25,18 @@ services:
     restart: unless-stopped
 
     ports:
+      # 프록시 뒤에 둘 거라면 이 줄을 지운다. 프록시가 같은 네트워크에 있으면
+      # 호스트 포트를 열지 않고 dbstudio:8080 으로 닿는다.
       - "8080:8080"
+
+    networks:
+      - dbstudio
+      # 리버스 프록시(Caddy·Traefik·nginx)가 이미 쓰는 네트워크에 함께 붙일 때
+      # 켠다. 아래 networks 의 proxy 정의도 함께 켜야 한다.
+      # - proxy
+      # 관리 대상 DB가 컨테이너로 떠 있고 그 이름으로 접속하려면(postgres:5432 처럼)
+      # 그 프로젝트의 네트워크에도 함께 붙인다.
+      # - dbs-targets
 
     # /data 에 메타 DB(dbstudio.db)와 마스터 암호화 키(master.key)가 생긴다.
     # 이 볼륨을 잃으면 등록한 커넥션과 이력이 사라진다.
@@ -80,6 +91,30 @@ services:
     #   timeout: 5s
     #   retries: 3
     #   start_period: 20s
+
+networks:
+  # 이름을 정해 두는 이유: 정의하지 않으면 compose 가 <프로젝트>_default 를 만든다.
+  # 그 이름은 프로젝트 이름에 딸린 것이어서, 다른 컴포즈 파일(프록시·대상 DB)에서
+  # 이 네트워크를 가리킬 때 "dbstudio_default" 같은 문자열을 적어야 하고 프로젝트
+  # 이름을 바꾸는 순간 조용히 끊긴다.
+  dbstudio:
+    name: dbstudio
+    driver: bridge
+    # internal: true 로 두지 말 것. 이 앱은 밖으로 HTTPS를 낸다 — AI 제공자,
+    # Slack·Mattermost 웹훅, Git 호스트, Ceph·WebHDFS·RabbitMQ 관리 API, 그리고
+    # 클러스터의 다른 노드. 나가는 길을 막으면 그 기능들만 조용히 실패하고,
+    # DB 접속은 멀쩡해서 원인을 찾기 어렵다.
+
+  # 이미 있는 네트워크에 붙일 때 켠다(먼저 `docker network create proxy`).
+  # external 로 두면 compose 가 만들거나 지우지 않는다.
+  # proxy:
+  #   external: true
+
+  # 시험용 DB 컨테이너(compose.test.yaml)에 컨테이너 이름으로 접속하고 싶을 때.
+  # 그 파일은 프로젝트 이름이 dbstudio-test 이므로 네트워크는 dbstudio-test_default 다.
+  # dbs-targets:
+  #   external: true
+  #   name: dbstudio-test_default
 
 volumes:
   dbstudio-data:

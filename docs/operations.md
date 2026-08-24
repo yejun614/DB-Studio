@@ -120,6 +120,12 @@ docker compose -f docker/compose.yaml logs | head -20   # 첫 계정과 임시 �
 있지 않게 된다. 그 예시 파일은 `read_only`·`cap_drop: ALL`·`no-new-privileges` 까지
 켜 둔 상태로 동작을 확인한 것이다(쓰는 곳은 `/data` 와 tmpfs `/tmp` 뿐이다).
 
+예시는 `dbstudio` 라는 이름의 브리지 네트워크를 만든다. 리버스 프록시를 앞에 둘 때는
+`ports` 를 지우고 프록시를 같은 네트워크에 붙이면 호스트 포트를 열지 않고 `dbstudio:8080`
+으로 닿는다(예시 파일에 주석으로 켜는 자리를 만들어 두었다). **네트워크를
+`internal: true` 로 두면 안 된다** — 밖으로 내는 HTTPS(AI 제공자·웹훅·Git 호스트·
+클러스터의 다른 노드)가 막히는데, DB 접속은 멀쩡해서 원인을 찾기 어렵다.
+
 우선순위는 `인자 > 환경변수 > 기본값`이다. 이미지에는 `DBSTUDIO_ADDR=:8080`·
 `DBSTUDIO_DATA=/data` 두 개만 기본값으로 심어 두었고, 인자를 주면 그것이 이긴다.
 
