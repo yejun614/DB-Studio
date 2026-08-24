@@ -71,30 +71,34 @@ export async function renderAbout(outlet) {
       ),
       h('p.field-help', {},
         '문제를 보고할 때 이 한 줄을 함께 적어 주세요 — 어느 빌드에서 생긴 일인지가 '
-        + '조사의 출발점입니다.'),
-      h('div.node-actions', {},
-        h('button.btn.btn-small', {
+        + '조사의 출발점입니다. 오른쪽 위 버튼으로 복사합니다.'),
+      // 복사 버튼은 코드블럭 안에 둔다. 설명서의 코드 복사 버튼과 같은 장치이므로
+      // 같은 클래스를 쓴다 — 두 화면이 다르게 생기면 같은 기능으로 읽히지 않는다.
+      h('div.md-code-wrap', {},
+        h('pre.code-block', {}, oneLine),
+        h('button.icon-btn.md-code-copy', {
           type: 'button',
+          title: '버전 정보 복사',
+          'aria-label': '버전 정보 복사',
           onclick: () => {
             copyToClipboard(oneLine);
             toast('버전 정보를 복사했습니다', 'success');
           },
-        }, icon('copy', 14), '버전 정보 복사'),
+        }, icon('copy', 14)),
       ),
-      h('pre.code-block', {}, oneLine),
     ),
 
     h('div.card', {},
       h('h2.card-title', {}, '문서와 도움'),
-      h('dl.cluster-meta', {},
-        metaRow('사용 설명서', h('a', { href: '/manual' },
-          '앱 안 설명서 (이 서버의 버전에 맞는 문서)')),
-        metaRow('저장소', link(REPO)),
-        metaRow('릴리스', link(`${REPO}/releases`)),
-        metaRow('문제 보고', link(`${REPO}/issues`)),
+      // 키·값 표(.cluster-meta)를 쓰지 않는 이유: 그 표의 값 칸은 고정폭 글꼴이고
+      // 한 줄로 잘린다. 주소에는 맞지만 설명이 붙는 링크 목록에는 맞지 않는다.
+      h('ul.about-links', {},
+        aboutLink(h('a.link', { href: '/manual' }, '사용 설명서'),
+          '이 바이너리에 함께 들어 있습니다 — 화면과 설명이 다르면 화면이 맞습니다'),
+        aboutLink(extLink(REPO, '저장소'), '소스와 문서'),
+        aboutLink(extLink(`${REPO}/releases`, '릴리스'), '플랫폼별 바이너리와 변경 내역'),
+        aboutLink(extLink(`${REPO}/issues`, '문제 보고'), '위의 한 줄을 함께 적어 주세요'),
       ),
-      h('p.field-help', {},
-        '설명서는 이 바이너리에 함께 들어 있습니다. 화면과 설명이 다르면 화면이 맞습니다.'),
     ),
 
     h('div.card', {},
@@ -113,7 +117,13 @@ function metaRow(key, value) {
   return h('div.meta-row', {}, h('dt', {}, key), h('dd', {}, value));
 }
 
+function aboutLink(anchor, note) {
+  return h('li', {}, anchor, h('span.muted', {}, note));
+}
+
 // 바깥으로 나가는 링크는 새 탭으로 연다. 보던 화면을 잃지 않게 한다.
-function link(url) {
-  return h('a', { href: url, target: '_blank', rel: 'noreferrer noopener' }, url);
+function extLink(url, label) {
+  return h('a.link', {
+    href: url, target: '_blank', rel: 'noreferrer noopener',
+  }, label, icon('share', 12));
 }
