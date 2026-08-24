@@ -1,10 +1,8 @@
 package api
 
 import (
-	"errors"
 	"math"
 	"strconv"
-	"strings"
 
 	"github.com/gofiber/fiber/v2"
 
@@ -43,26 +41,13 @@ func (s *Server) handleGetStructure(c *fiber.Ctx) error {
 	var sc *schema.Schema
 	source := fiber.Map{"kind": "live"}
 
-	if raw := strings.TrimSpace(c.Query("version")); raw != "" {
-		id, perr := strconv.ParseInt(raw, 10, 64)
-		if perr != nil {
-			return fail(c, fiber.StatusBadRequest, "bad_request", "버전 ID가 올바르지 않습니다")
-		}
-		v, verr := s.st.GetSchemaVersion(c.Context(), id, true)
-		if errors.Is(verr, store.ErrNotFound) {
-			return fiber.NewError(fiber.StatusNotFound, "버전을 찾을 수 없습니다")
-		}
-		if verr != nil {
-			return verr
-		}
-		// 버전은 커넥션에 종속된다. 다른 커넥션의 버전을 이 경로로 읽으면
-		// 권한 검사를 우회하게 되므로 소속을 확인한다.
-		if v.ConnectionID != conn.ID {
-			return fiber.NewError(fiber.StatusNotFound, "이 커넥션의 버전이 아닙니다")
-		}
-		if v.Schema == nil {
-			return fail(c, fiber.StatusBadRequest, "no_schema", "이 버전에는 스키마 본문이 없습니다")
-		}
+	// 버전 읽기와 소속 확인은 schema_handlers.go 의 versionForQuery 한 곳에 있다.
+	// SQL 생성 경로도 같은 함수를 쓰므로 확인이 한쪽에서만 빠지는 일이 없다.
+	v, verr := s.versionForQuery(c, conn)
+	if verr != nil {
+		return verr
+	}
+	if v != nil {
 		sc = v.Schema
 		source = fiber.Map{
 			"kind": "version", "id": v.ID, "versionNo": v.VersionNo,

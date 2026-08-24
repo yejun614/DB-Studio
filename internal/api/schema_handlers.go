@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -258,16 +259,61 @@ func (s *Server) handleSchemaDiff(c *fiber.Ctx) error {
 
 // handleSchemaDDL은 현재 스키마 전체를 만드는 CREATE 스크립트를 생성한다.
 // 새 환경 구축이나 ERD 초기 임포트에 쓴다.
+// versionForQuery는 version= 쿼리가 가리키는 스키마 버전을 읽는다.
+//
+// 쿼리가 없으면 (nil, nil)이다 — 호출자는 현재 DB를 읽는다.
+//
+// 소속 확인을 여기 두는 이유: 버전은 커넥션에 종속되고, 권한은 커넥션 단위로 판정된다.
+// 다른 커넥션의 버전 ID를 이 경로로 넘기면 그 판정을 우회하게 된다. 확인을 부르는 쪽에
+// 맡기면 새 경로가 생길 때마다 잊을 수 있으므로 읽기와 같은 자리에 둔다.
+func (s *Server) versionForQuery(c *fiber.Ctx, conn *model.Connection) (*store.SchemaVersion, error) {
+	raw := strings.TrimSpace(c.Query("version"))
+	if raw == "" {
+		return nil, nil
+	}
+	id, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return nil, fiber.NewError(fiber.StatusBadRequest, "버전 ID가 올바르지 않습니다")
+	}
+	v, err := s.st.GetSchemaVersion(c.Context(), id, true)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, fiber.NewError(fiber.StatusNotFound, "버전을 찾을 수 없습니다")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if v.ConnectionID != conn.ID {
+		return nil, fiber.NewError(fiber.StatusNotFound, "이 커넥션의 버전이 아닙니다")
+	}
+	if v.Schema == nil {
+		return nil, fiber.NewError(fiber.StatusBadRequest, "이 버전에는 스키마 본문이 없습니다")
+	}
+	return v, nil
+}
+
 func (s *Server) handleSchemaDDL(c *fiber.Ctx) error {
 	conn, adapter, err := s.resolveSchemaAccess(c, c.Params("id"))
 	if err != nil {
 		return err
 	}
 
-	sc, err := s.introspectConnection(c, conn, adapter)
+	// version=<id> 면 그 버전의 스키마로 만든다. 옛 구조의 CREATE 스크립트를 보려고
+	// 그 시점의 DB를 되살릴 수는 없으므로, 저장된 스냅샷이 유일한 출처다.
+	version, err := s.versionForQuery(c, conn)
 	if err != nil {
-		return failDetail(c, fiber.StatusBadGateway, "introspect_failed",
-			"스키마를 읽지 못했습니다", err.Error())
+		return err
+	}
+
+	var sc *schema.Schema
+	if version != nil {
+		sc = version.Schema
+	} else {
+		live, ierr := s.introspectConnection(c, conn, adapter)
+		if ierr != nil {
+			return failDetail(c, fiber.StatusBadGateway, "introspect_failed",
+				"스키마를 읽지 못했습니다", ierr.Error())
+		}
+		sc = live
 	}
 
 	// 대상 dialect를 지정하면 다른 DB 종류용 스크립트를 만들 수 있다.
@@ -286,16 +332,24 @@ func (s *Server) handleSchemaDDL(c *fiber.Ctx) error {
 			sc.Dialect+" → "+dialect+" 로 타입을 변환했습니다. 실행 전 검토가 필요합니다")
 	}
 
-	s.audit(c, store.AuditParams{
-		Action: "schema.ddl", TargetType: "connection", TargetID: conn.ID,
-		Detail: map[string]any{"name": conn.Name, "dialect": dialect, "statements": len(plan.Up)},
-	})
-
-	return c.JSON(fiber.Map{
+	detail := map[string]any{"name": conn.Name, "dialect": dialect, "statements": len(plan.Up)}
+	out := fiber.Map{
 		"connection": connSummary(conn),
 		"dialect":    dialect,
 		"plan":       plan,
 		"upSql":      plan.UpSQL(),
 		"downSql":    plan.DownSQL(),
+	}
+	if version != nil {
+		detail["version"] = version.VersionNo
+		out["version"] = fiber.Map{
+			"id": version.ID, "versionNo": version.VersionNo,
+			"createdAt": version.CreatedAt, "note": version.Note,
+		}
+	}
+	s.audit(c, store.AuditParams{
+		Action: "schema.ddl", TargetType: "connection", TargetID: conn.ID, Detail: detail,
 	})
+
+	return c.JSON(out)
 }

@@ -752,6 +752,19 @@ function versionTimeline(versions, conn, canMigrate) {
         h('span.muted', {}, formatDate(v.createdAt)),
         v.authorName ? h('span.muted', {}, v.authorName) : null,
         h('div.version-actions', {},
+          // 비교보다 앞에 둔다. "그때 구조가 어땠나"는 "무엇이 달라졌나"보다 먼저
+          // 오는 질문이고, 비교 화면은 그 답을 주지 않는다.
+          h('button.btn.btn-small', {
+            type: 'button',
+            title: `v${v.versionNo} 의 구조를 ERD로 봅니다`,
+            onclick: () => navigate(
+              `/structure?conn=${encodeURIComponent(conn.id)}&version=${v.id}`),
+          }, icon('workflow'), '구조 보기'),
+          h('button.btn.btn-small', {
+            type: 'button',
+            title: `v${v.versionNo} 의 CREATE 스크립트를 봅니다`,
+            onclick: () => showVersionSQL(conn, v),
+          }, icon('code'), 'SQL 보기'),
           h('button.btn.btn-small', {
             type: 'button',
             onclick: () => showVersionDiff(conn.id, v, null, versions),
@@ -924,6 +937,64 @@ async function captureVersion(connID, reload) {
       }, '등록'),
     ],
   });
+}
+
+// showVersionSQL은 그 버전의 구조를 만드는 SQL을 보여준다.
+//
+// 비교 없이 단독으로 보는 길이 필요한 이유: "지금과 무엇이 다른가"와 "그때 구조가
+// 어땠나"는 다른 질문이다. 후자는 옛 구조를 다른 곳에 다시 만들 때(재현 환경, 사고
+// 조사) 필요하고, 그때 쓸 수 있는 것은 차이 목록이 아니라 완전한 CREATE 스크립트다.
+//
+// 스냅샷으로 만드는 이유: 그 시점의 DB는 이미 없다. 저장된 버전 본문이 유일한 출처다.
+async function showVersionSQL(conn, v) {
+  const body = h('div', {}, spinner('SQL을 만드는 중…'));
+  openModal({
+    title: `v${v.versionNo} 의 SQL — ${conn.name}`,
+    width: 900,
+    body: () => body,
+    footer: (close) => [h('button.btn', { type: 'button', onclick: close }, '닫기')],
+  });
+
+  try {
+    const res = await api.get(
+      `/connections/${encodeURIComponent(conn.id)}/schema/ddl?version=${v.id}`);
+    const sql = res.upSql ?? '';
+    const warnings = res.plan?.warnings ?? [];
+    mount(body,
+      h('p.field-help', {},
+        `${formatDate(v.createdAt)} 에 기록된 구조입니다`,
+        v.note ? ` — ${v.note}` : '',
+        `. ${res.dialect ?? conn.kind} 문법으로 만들었습니다.`),
+      warnings.length
+        ? h('div.notice.notice-warn', {}, icon('alert'),
+          h('div', {}, warnings.map((w) => h('div', {}, w))))
+        : null,
+      sqlBlock('CREATE 스크립트', sql, res.plan?.up?.length ?? 0),
+      sql
+        ? h('div.node-actions', {},
+          h('button.btn.btn-small', {
+            type: 'button',
+            onclick: () => downloadText(`${conn.name}_v${v.versionNo}.sql`, sql),
+          }, icon('save'), '파일로 저장'),
+        )
+        : null,
+    );
+  } catch (err) {
+    mount(body, errorPanel(err));
+  }
+}
+
+// downloadText는 만든 문자열을 파일로 내려준다.
+//
+// 서버에 파일을 만들지 않는 이유: 이 스크립트는 이미 브라우저에 다 와 있다. 내려받기
+// 경로를 서버에 두면 같은 것을 두 번 만들고, 그 파일을 지울 책임도 새로 생긴다.
+function downloadText(name, text) {
+  const url = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
+  const a = h('a', { href: url, download: name });
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 // showVersionDiff는 한 버전을 기준으로 무엇이 다른지 보여준다.
