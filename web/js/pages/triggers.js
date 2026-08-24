@@ -3,12 +3,13 @@
 // 두 종류를 한 화면에서 다루는 이유: 사용자가 답하려는 질문은 하나다 —
 // "이 매크로가 언제 저절로 도는가". 시각이든 조건이든 그 답의 일부다.
 import { api } from '../core/api.js';
-import { state, kindLabel } from '../core/store.js';
+import { state } from '../core/store.js';
 import {
   h, mount, icon, input, select, spinner, badge, field, emptyState, pageHeader,
   toast, toastError, openModal, confirmDialog, formatDate, relativeTime,
 } from '../core/ui.js';
 import { errorPanel } from './users.js';
+import { serverDbPicker } from '../core/connpick.js';
 
 // 흔한 주기는 골라 쓰게 한다. cron 식을 외워야만 쓸 수 있는 기능은 절반만 있는 것이다.
 const CRON_PRESETS = [
@@ -233,14 +234,15 @@ async function openTriggerDialog(macroID, macroParams, existing, reload) {
   const eventKind = select(EVENT_KINDS, { value: existing?.eventKind ?? '' });
   const severity = select(SEVERITIES, { value: existing?.eventSeverity ?? 'warning' });
   const metric = input({ value: existing?.eventMetric ?? '', placeholder: '예: connections.total (비우면 전체)' });
-  const connSelect = select(
-    [{ value: '', label: '모든 커넥션' },
-      ...conns.items.filter((i) => i.accessible).map((i) => ({
-        value: i.connection.id,
-        label: `${i.connection.name} — ${kindLabel(i.connection.kind)}`,
-      }))],
-    { value: existing?.connectionId ?? '' },
-  );
+  const connSelect = serverDbPicker({
+    usable: conns.items.filter((i) => i.accessible),
+    currentId: existing?.connectionId ?? '',
+    onPick: () => {},
+    serverLabel: '대상 서버',
+    allLabel: '모든 커넥션',
+    serverHelp: '비우면 어느 커넥션의 이벤트에도 반응합니다',
+    inline: false,
+  });
   const interval = input({
     type: 'number', value: String(existing?.minIntervalSec ?? 300), min: '10',
   });
@@ -273,7 +275,7 @@ async function openTriggerDialog(macroID, macroParams, existing, reload) {
     const exprHelp = h('p.field-help', {},
       'trigger · event · now 를 쓸 수 있습니다. 예: event.connectionId, '
       + '"[" .. event.severity .. "] " .. event.message');
-    const valueBox = h('div', {}, control);
+    const valueBox = h('div', {}, ...(control.nodes ?? [control]));
     const exprBox = h('div', {}, exprInput, exprHelp);
 
     const sync = () => {
@@ -307,7 +309,7 @@ async function openTriggerDialog(macroID, macroParams, existing, reload) {
     field('이벤트 종류', eventKind),
     field('심각도', severity, '이 이상인 이벤트에만 반응합니다'),
     field('지표', metric, '임계치 이벤트를 특정 지표로 좁힐 때'),
-    field('커넥션', connSelect),
+    ...connSelect.nodes,
     field('최소 간격(초)', interval,
       '같은 트리거가 연달아 터지는 것을 막습니다. 지표가 임계치 근처에서 흔들릴 때 필요합니다'),
   );
@@ -408,14 +410,13 @@ function paramControl(p, value, conns) {
     case 'text':
       return h('textarea.input.textarea', { rows: 3 }, String(value ?? ''));
     case 'connection':
-      return select(
-        [{ value: '', label: '선택 안 함' },
-          ...conns.items.filter((i) => i.accessible).map((i) => ({
-            value: i.connection.id,
-            label: `${i.connection.name} — ${kindLabel(i.connection.kind)}`,
-          }))],
-        { value: String(value ?? '') },
-      );
+      return serverDbPicker({
+        usable: conns.items.filter((i) => i.accessible),
+        currentId: String(value ?? ''),
+        onPick: () => {},
+        allLabel: '선택 안 함',
+        inline: false,
+      });
     default:
       return input({ value: String(value ?? '') });
   }

@@ -7,6 +7,7 @@ import {
 } from '../core/ui.js';
 import { navigate } from '../core/router.js';
 import { errorPanel } from './users.js';
+import { serverDbPicker } from '../core/connpick.js';
 
 // 문서 상태 표시. 리뷰/승인 워크플로(P7)가 이 값을 확장한다.
 export const STATUS_LABELS = {
@@ -138,11 +139,13 @@ function openCreateDialog(targets, reload) {
   const hasTargets = targets.length > 0;
 
   const connSelect = hasTargets
-    ? select(targets.map((i) => ({
-      value: i.connection.id,
-      label: `${i.connection.name} — ${kindLabel(i.connection.kind)}` +
-        ` (${i.connection.environment === 'prod' ? '운영' : '개발'})`,
-    })), { value: targets[0].connection.id })
+    ? serverDbPicker({
+      usable: targets,
+      currentId: targets[0].connection.id,
+      onPick: () => {},
+      inline: false,
+      help: 'DB 문법과 편집 권한이 이 커넥션을 따릅니다',
+    })
     : null;
 
   // 독립 초안은 대상이 없으므로 어떤 DB 문법으로 그릴지 직접 골라야 한다.
@@ -162,9 +165,7 @@ function openCreateDialog(targets, reload) {
   ].filter(Boolean);
   let mode = modes[0].value;
 
-  const connField = h('label.field', {},
-    h('span.field-label', {}, '대상 커넥션'), connSelect,
-    h('span.field-help', {}, 'DB 문법과 편집 권한이 이 커넥션을 따릅니다'));
+  const connField = h('div', {}, ...(connSelect?.nodes ?? []));
   const dialectField = h('label.field', {},
     h('span.field-label', {}, 'DB 문법'), dialectSelect,
     h('span.field-help', {}, '컬럼 타입과 내보낼 SQL이 이 종류를 따릅니다. 나중에 바꿀 수 없습니다'));

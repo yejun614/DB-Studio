@@ -1,12 +1,12 @@
 // 감시 룰 설정 화면.
 import { api } from '../core/api.js';
-import { kindLabel } from '../core/store.js';
 import {
   h, mount, icon, field, input, select, textarea, checkbox, spinner,
   emptyState, pageHeader, badge, envBadge, openModal, confirmDialog,
   toast, toastError,
 } from '../core/ui.js';
 import { errorPanel } from './users.js';
+import { serverDbPicker } from '../core/connpick.js';
 
 const OPS = [
   { value: '>', label: '초과 (>)' },
@@ -44,13 +44,6 @@ export async function renderRules(outlet) {
     return;
   }
 
-  const connOptions = [
-    { value: '', label: '모든 커넥션' },
-    ...conns.items.map((i) => ({
-      value: i.connection.id,
-      label: `${i.connection.name} (${kindLabel(i.connection.kind)})`,
-    })),
-  ];
   const connNames = {};
   for (const i of conns.items) connNames[i.connection.id] = i.connection.name;
 
@@ -61,7 +54,7 @@ export async function renderRules(outlet) {
       h('a.btn', { href: '/monitor' }, '← 모니터링'),
       h('button.btn.btn-primary', {
         type: 'button',
-        onclick: () => openRuleForm(null, data.metrics, connOptions, reload),
+        onclick: () => openRuleForm(null, data.metrics, conns.items, reload),
       }, icon('plus'), '룰 추가'),
     ]),
     h('p.notice.notice-info', {}, icon('activity'),
@@ -69,11 +62,11 @@ export async function renderRules(outlet) {
       '해당 DB가 제공하지 않는 지표의 룰은 조용히 건너뜁니다.'),
     data.rules.length === 0
       ? emptyState('감시 룰이 없습니다')
-      : h('div.card', {}, ruleTable(data, connNames, connOptions, reload)),
+      : h('div.card', {}, ruleTable(data, connNames, conns.items, reload)),
   );
 }
 
-function ruleTable(data, connNames, connOptions, reload) {
+function ruleTable(data, connNames, connItems, reload) {
   return h('table.table.rule-table', {},
     h('thead', {}, h('tr', {},
       h('th', {}, '이름'),
@@ -85,11 +78,11 @@ function ruleTable(data, connNames, connOptions, reload) {
       h('th.col-actions', {}, ''),
     )),
     h('tbody', {}, data.rules.map((entry) =>
-      ruleRow(entry, data.metrics, connNames, connOptions, reload))),
+      ruleRow(entry, data.metrics, connNames, connItems, reload))),
   );
 }
 
-function ruleRow({ rule, describe }, metrics, connNames, connOptions, reload) {
+function ruleRow({ rule, describe }, metrics, connNames, connItems, reload) {
   const scope = rule.connectionId
     ? connNames[rule.connectionId] ?? '(삭제된 커넥션)'
     : rule.environment
@@ -128,7 +121,7 @@ function ruleRow({ rule, describe }, metrics, connNames, connOptions, reload) {
       h('div.row-actions', {},
         h('button.icon-btn', {
           type: 'button', title: '수정',
-          onclick: () => openRuleForm(rule, metrics, connOptions, reload),
+          onclick: () => openRuleForm(rule, metrics, connItems, reload),
         }, icon('edit')),
         h('button.icon-btn.danger', {
           type: 'button', title: '삭제',
@@ -161,7 +154,7 @@ function toPayload(rule) {
   };
 }
 
-function openRuleForm(existing, metrics, connOptions, reload) {
+function openRuleForm(existing, metrics, connItems, reload) {
   const isEdit = Boolean(existing);
 
   const name = input({ value: existing?.name ?? '', placeholder: '세션 사용률 경고' });
@@ -174,7 +167,15 @@ function openRuleForm(existing, metrics, connOptions, reload) {
   const threshold = input({ type: 'number', step: 'any', value: existing?.threshold ?? 80 });
   const duration = input({ type: 'number', min: '0', value: existing?.durationSec ?? 60 });
   const severity = select(SEVERITIES, { value: existing?.severity ?? 'warning' });
-  const connection = select(connOptions, { value: existing?.connectionId ?? '' });
+  const connection = serverDbPicker({
+    usable: connItems,
+    currentId: existing?.connectionId ?? '',
+    onPick: () => {},
+    serverLabel: '적용 서버',
+    allLabel: '모든 커넥션',
+    serverHelp: '전체 적용은 관리자만 가능합니다',
+    inline: false,
+  });
   const environment = select(
     [{ value: '', label: '모든 환경' }, { value: 'dev', label: '개발만' }, { value: 'prod', label: '운영만' }],
     { value: existing?.environment ?? '' },
@@ -257,7 +258,7 @@ function openRuleForm(existing, metrics, connOptions, reload) {
         field('심각도', severity),
       ),
       h('div.form-grid', {},
-        field('적용 커넥션', connection, '전체 적용은 관리자만 가능합니다'),
+        ...connection.nodes,
         field('적용 환경', environment, '운영에만 더 엄격한 임계치를 둘 수 있습니다'),
       ),
       field('설명', description),

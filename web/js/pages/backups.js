@@ -4,7 +4,7 @@
 // 복구는 **데이터를 덮어쓴다.** 그래서 만들기는 옵션을 고르는 폼이고, 복구는
 // 무엇이 어디로 가는지 확인시키는 대화상자다.
 import { api } from '../core/api.js';
-import { state, kindLabel } from '../core/store.js';
+import { state } from '../core/store.js';
 import {
   h, mount, icon, select, input, checkbox, spinner, emptyState, pageHeader,
   badge, envBadge, toast, toastError, openModal, confirmDialog, field,
@@ -224,13 +224,12 @@ function formatBytes(n) {
 // ---------- 만들기 ----------
 
 function openCreateDialog(conns, preselect, reload) {
-  const connSelect = select(
-    conns.map((i) => ({
-      value: i.connection.id,
-      label: `${i.connection.name} — ${kindLabel(i.connection.kind)}`,
-    })),
-    { value: preselect || conns[0].connection.id },
-  );
+  const connSelect = serverDbPicker({
+    usable: conns,
+    currentId: preselect || conns[0].connection.id,
+    onPick: () => syncWarn(),
+    inline: false,
+  });
   const scopeSelect = select([
     { value: 'full', label: '전체 — 구조와 데이터' },
     { value: 'schema', label: '구조만 — 테이블·인덱스·제약' },
@@ -257,7 +256,6 @@ function openCreateDialog(conns, preselect, reload) {
     }
     mount(warn, parts);
   };
-  connSelect.addEventListener('change', syncWarn);
   scopeSelect.addEventListener('change', syncWarn);
   dropBox.addEventListener('change', syncWarn);
   syncWarn();
@@ -266,7 +264,7 @@ function openCreateDialog(conns, preselect, reload) {
     title: '백업 만들기',
     width: 620,
     body: () => [
-      field('커넥션', connSelect),
+      ...connSelect.nodes,
       field('범위', scopeSelect),
       field('대상 테이블', tablesInput, '일부만 담고 싶을 때 지정합니다'),
       h('div.field', {},
@@ -331,14 +329,14 @@ function openRestoreDialog(b, conns, reload) {
     toast(`${b.connectionKind} 종류의 커넥션이 없어 복구할 수 없습니다`, 'error');
     return;
   }
-  const connSelect = select(
-    targets.map((i) => ({
-      value: i.connection.id,
-      label: `${i.connection.name}${i.connection.environment === 'prod' ? ' (운영)' : ''}`,
-    })),
-    { value: targets.find((i) => i.connection.id === b.connectionId)?.connection.id
-      ?? targets[0].connection.id },
-  );
+  const connSelect = serverDbPicker({
+    usable: targets,
+    currentId: targets.find((i) => i.connection.id === b.connectionId)?.connection.id
+      ?? targets[0].connection.id,
+    onPick: () => syncConfirm(),
+    serverLabel: '복구 대상 서버',
+    inline: false,
+  });
   const confirmInput = input({ autocomplete: 'off' });
   const confirmField = h('div');
 
@@ -360,7 +358,6 @@ function openRestoreDialog(b, conns, reload) {
     }
     mount(confirmField, parts);
   };
-  connSelect.addEventListener('change', syncConfirm);
   syncConfirm();
 
   openModal({
@@ -376,7 +373,7 @@ function openRestoreDialog(b, conns, reload) {
           b.options?.dropIfExists
             ? '이 백업에는 DROP 문이 들어 있어 대상의 기존 테이블을 먼저 지웁니다.'
             : '이 백업에는 DROP 문이 없습니다. 대상에 같은 테이블이 이미 있으면 실패합니다.')),
-      field('복구 대상', connSelect),
+      ...connSelect.nodes,
       confirmField,
     ],
     footer: (close) => [

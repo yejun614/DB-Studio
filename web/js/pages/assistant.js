@@ -4,7 +4,7 @@
 // 엔드포인트를 쓰므로 파싱이 두 벌이면 한쪽만 낡는다.
 import { api } from '../core/api.js';
 import { streamAIChat } from '../core/aistream.js';
-import { state, kindLabel } from '../core/store.js';
+import { state } from '../core/store.js';
 import {
   h, mount, icon, select, input, spinner, emptyState,
   badge, envBadge, toast, toastError, relativeTime, openModal, confirmDialog,
@@ -13,6 +13,7 @@ import { navigate, currentPath } from '../core/router.js';
 import { openFloatPanel, panelModal } from '../core/floatpanel.js';
 import { renderMarkdown } from '../core/markdown.js';
 import { errorPanel } from './users.js';
+import { serverDbPicker, groupedSelect } from '../core/connpick.js';
 
 // assistantBubble은 모델 응답을 마크다운으로 그린다.
 //
@@ -227,13 +228,15 @@ async function createSession(data, conns, nav) {
     { value: data.providers?.[0]?.id ?? '' },
   );
   const usable = conns.items.filter((i) => i.accessible);
-  const connSelect = select([
-    { value: '', label: '특정 DB 지정 안 함' },
-    ...usable.map((i) => ({
-      value: i.connection.id,
-      label: `${i.connection.name} — ${kindLabel(i.connection.kind)}`,
-    })),
-  ], { value: '' });
+  const connSelect = serverDbPicker({
+    usable,
+    currentId: '',
+    onPick: () => {},
+    serverLabel: '대상 서버 (선택)',
+    allLabel: '특정 DB 지정 안 함',
+    serverHelp: '어시스턴트가 기본으로 참고할 커넥션입니다',
+    inline: false,
+  });
 
   // 모델은 프로바이더에 딸린 선택이므로 프로바이더가 바뀌면 다시 그린다.
   // 허용 목록이 없는 프로바이더는 고를 것이 없으므로 칸 자체를 숨긴다 —
@@ -266,8 +269,7 @@ async function createSession(data, conns, nav) {
         h('label.field', {}, h('span.field-label', {}, '제목 (비우면 첫 질문으로 정합니다)'), titleInput),
         h('label.field', {}, h('span.field-label', {}, '프로바이더'), providerSelect),
         modelField,
-        h('label.field', {}, h('span.field-label', {}, '대상 DB (선택)'), connSelect,
-          h('span.field-help', {}, '어시스턴트가 기본으로 참고할 커넥션입니다')),
+        ...connSelect.nodes,
       ];
     },
     footer: (close) => [
@@ -506,13 +508,11 @@ class ChatView {
     const usable = this.conns.items.filter((i) => i.accessible);
     const current = this.session.connectionId ?? '';
     const has = usable.some((i) => i.connection.id === current);
-    const sel = select([
-      { value: '', label: '대상 DB 없음' },
-      ...usable.map((i) => ({
-        value: i.connection.id,
-        label: `${i.connection.name} — ${kindLabel(i.connection.kind)}`,
-      })),
-    ], { value: has ? current : '' });
+    const sel = groupedSelect({
+      usable,
+      currentId: has ? current : '',
+      allLabel: '대상 DB 없음',
+    });
     sel.classList.add('ai-conn-switch');
     sel.title = '이 대화가 기본으로 참고할 DB';
     sel.addEventListener('change', () => {

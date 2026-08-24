@@ -1,11 +1,11 @@
 // Git 연동: 저장소 설정 등록/확인, 푸시 이력.
 import { api } from '../core/api.js';
-import { kindLabel } from '../core/store.js';
 import {
   h, mount, icon, select, input, checkbox, spinner, emptyState, pageHeader,
   badge, envBadge, toast, toastError, relativeTime, formatDate, openModal, confirmDialog,
 } from '../core/ui.js';
 import { errorPanel } from './users.js';
+import { serverDbPicker } from '../core/connpick.js';
 
 const PROVIDER_LABEL = { github: 'GitHub', gitlab: 'GitLab', bitbucket: 'Bitbucket' };
 
@@ -186,13 +186,15 @@ function openIntegrationDialog(existing, meta, conns, reload) {
 
   // 마이그레이션 등급이 있는 커넥션만 전용 연동 대상으로 제시한다.
   const usable = conns.items.filter((i) => i.accessible && i.level === 'migrate');
-  const connSelect = select([
-    { value: '', label: '모든 커넥션에서 사용' },
-    ...usable.map((i) => ({
-      value: i.connection.id,
-      label: `${i.connection.name} 전용 — ${kindLabel(i.connection.kind)}`,
-    })),
-  ], { value: existing?.connectionId ?? '' });
+  const connSelect = serverDbPicker({
+    usable,
+    currentId: existing?.connectionId ?? '',
+    onPick: () => {},
+    serverLabel: '적용 대상',
+    allLabel: '모든 커넥션에서 사용',
+    serverHelp: '특정 커넥션 전용으로 지정하면 다른 커넥션의 마이그레이션에는 쓸 수 없습니다',
+    inline: false,
+  });
 
   const hints = h('div.vcs-hints');
   const refreshHints = () => {
@@ -238,9 +240,7 @@ function openIntegrationDialog(existing, meta, conns, reload) {
           h('label.field', {}, h('span.field-label', {}, '브랜치 템플릿'), branchTmpl),
           h('label.field', {}, h('span.field-label', {}, '경로 템플릿'), pathTmpl)),
         varsHelp,
-        h('label.field', {}, h('span.field-label', {}, '적용 대상'), connSelect,
-          h('span.field-help', {},
-            '특정 커넥션 전용으로 지정하면 다른 커넥션의 마이그레이션에는 쓸 수 없습니다')),
+        ...connSelect.nodes,
         enabledBox,
       ];
     },
