@@ -666,6 +666,10 @@ func (s *Server) handleHealth(c *fiber.Ctx) error {
 // handleMeta는 프론트엔드가 폼과 권한 UI를 그리는 데 필요한 정적 메타데이터를 제공한다.
 func (s *Server) handleMeta(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{
+		// 빌드 정보를 함께 싣는 이유: 화면이 버전을 늘 보여주려면 셸을 그릴 때
+		// 그 값이 있어야 한다. /health 로 따로 물으면 화면을 열 때마다 요청이
+		// 하나 늘고, 늦게 오면 버전만 뒤늦게 나타난다.
+		"build":   buildinfo.Get(),
 		"dbKinds": dbx.Kinds(),
 		"roles": []fiber.Map{
 			{"value": model.RoleSuperadmin, "label": "슈퍼 어드민", "help": "사용자 관리 및 모든 설정"},

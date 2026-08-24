@@ -33,6 +33,7 @@ import { renderMacroEditor } from './pages/macroeditor.js';
 import { renderTriggers } from './pages/triggers.js';
 import { renderAssistant, openAssistantPopup } from './pages/assistant.js';
 import { renderManual } from './pages/manual.js';
+import { renderAbout } from './pages/about.js';
 import { renderAudit } from './pages/audit.js';
 import { renderSecurity } from './pages/security.js';
 import { renderNotify } from './pages/notify.js';
@@ -80,6 +81,7 @@ router.define('/notify', renderNotify);
 router.define('/cluster', renderCluster);
 router.define('/storage', renderStorage);
 router.define('/broker', renderBroker);
+router.define('/about', renderAbout);
 router.setNotFound((outlet) => {
   mount(outlet, h('div.card.empty', {},
     icon('alert', 28),
@@ -173,9 +175,27 @@ const NAV = [
       // 주소로 공유할 수도 있어야 한다. 팝업 머리의 버튼으로 옮겨 간다.
       { path: '/assistant', label: 'AI 어시스턴트', icon: 'settings', popup: true },
       { path: '/manual', label: '메뉴얼', icon: 'list' },
+      // 정보는 맨 아래다. 자주 여는 화면은 아니지만, 문제를 보고할 때 가장 먼저
+      // 필요한 것(무엇이 돌고 있는가)이 여기 있다.
+      { path: '/about', label: '정보', icon: 'box' },
     ],
   },
 ];
+
+// versionLine은 사이드바 아래에 지금 돌고 있는 버전을 적는다.
+//
+// 값을 /meta 에서 가져오는 이유: 셸을 그리기 전에 이미 한 번 받아 두는 응답이다.
+// 여기서 따로 /health 를 부르면 화면을 열 때마다 요청이 하나 늘고, 그 요청이
+// 늦으면 버전 줄만 뒤늦게 나타난다.
+function versionLine() {
+  const build = state.meta?.build;
+  if (!build?.version) return null;
+  const label = build.version === 'dev' ? '개발 빌드' : build.version;
+  return h('a.sidebar-version', {
+    href: '/about',
+    title: `${build.version}${build.commit ? ` (${build.commit})` : ''} · ${build.platform ?? ''}`,
+  }, label);
+}
 
 function buildShell() {
   const outlet = h('main.content');
@@ -220,6 +240,12 @@ function buildShell() {
           h('button.btn.btn-small.btn-block', { type: 'button', onclick: logout },
             icon('logout'), '로그아웃'),
         ),
+        // 버전을 늘 보이는 자리에 둔다. 누르면 정보 화면으로 간다.
+        //
+        // 메뉴에만 두지 않는 이유: 배포가 실제로 바뀌었는지는 화면을 열자마자
+        // 확인하고 싶은 것이고, 그때 메뉴를 찾아 들어가는 단계가 있으면
+        // 대개 확인하지 않는다.
+        versionLine(),
       ),
       sidebar.createResizer(),
     ),
