@@ -7,6 +7,7 @@ import {
   copyToClipboard,
 } from '../core/ui.js';
 import { navigate } from '../core/router.js';
+import { serverDbPicker } from '../core/connpick.js';
 import { codeBlock } from '../core/highlight.js';
 import { errorPanel } from './users.js';
 import { openPushDialog } from './vcs.js';
@@ -666,8 +667,15 @@ export async function renderVersions(outlet, params, query) {
   mount(outlet, spinner('커넥션 목록을 불러오는 중…'));
 
   let conns;
+  let servers;
   try {
-    conns = await api.get('/connections/');
+    // 서버 목록을 함께 받는 이유: 커넥션을 평평하게 늘어놓으면 같은 서버의 DB가
+    // 이름만 다른 항목으로 반복된다. 데이터·스키마 화면과 같은 두 단계 고르개를
+    // 쓰려면 서버 정보가 필요하다.
+    [conns, servers] = await Promise.all([
+      api.get('/connections/'),
+      api.get('/servers/'),
+    ]);
   } catch (err) {
     mount(outlet, errorPanel(err));
     return;
@@ -686,12 +694,11 @@ export async function renderVersions(outlet, params, query) {
 
   const selectedId = query.get('conn') || usable[0].connection.id;
   const current = usable.find((i) => i.connection.id === selectedId) ?? usable[0];
-  const connSelect = select(usable.map((i) => ({
-    value: i.connection.id,
-    label: `${i.connection.name} — ${kindLabel(i.connection.kind)}`,
-  })), { value: current.connection.id });
-  connSelect.addEventListener('change', () => {
-    navigate(`/versions?conn=${encodeURIComponent(connSelect.value)}`);
+  const picker = serverDbPicker({
+    usable,
+    servers: servers.items ?? [],
+    currentId: current.connection.id,
+    onPick: (id) => navigate(`/versions?conn=${encodeURIComponent(id)}`),
   });
 
   const body = h('div', {}, spinner('버전 이력을 불러오는 중…'));
@@ -707,7 +714,7 @@ export async function renderVersions(outlet, params, query) {
         : null,
     ]),
     h('div.card.filter-bar', {},
-      h('label.field.field-inline', {}, h('span.field-label', {}, '커넥션'), connSelect),
+      ...picker.nodes,
       h('p.field-help', {},
         '앱 밖에서 스키마가 바뀌면 "외부 편집"으로 등록해 이력에 남길 수 있습니다.'),
     ),
