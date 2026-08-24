@@ -93,7 +93,9 @@ services:
   # 이 앱의 브로커 화면은 카프카 프로토콜로 붙으므로, 커넥션 등록 시
   # 포트를 19092로 지정해야 한다.
   kafka:
-    image: apache/kafka:3.9
+    # 태그를 세 자리로 고정한다. apache/kafka에는 3.9 같은 두 자리 태그가 없어
+    # `up`이 "not found"로 멈춘다(다른 서비스의 pull까지 함께 중단된다).
+    image: apache/kafka:3.9.1
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
