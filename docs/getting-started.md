@@ -68,6 +68,24 @@ $env:CGO_ENABLED="0"; go build -o bin/dbstudio.exe ./cmd/dbstudio
 | `-backup-retention` | `DBSTUDIO_BACKUP_RETENTION` | `720h` (30일) | 이보다 오래된 백업을 자동 삭제. `0`이면 보관 |
 | `-avatar-max-kb` | `DBSTUDIO_AVATAR_MAX_KB` | `512` | 프로필 이미지 최대 크기 |
 | `-avatar-allow-private-uri` | `DBSTUDIO_AVATAR_ALLOW_PRIVATE_URI` | `false` | 사설망·루프백 주소에서 프로필 이미지 가져오기 허용 |
+| `-cluster-role` | `DBSTUDIO_CLUSTER_ROLE` | `standalone` | `standalone` / `master` / `replica` |
+| `-cluster-master` | `DBSTUDIO_CLUSTER_MASTER` | — | 리플리카가 부를 마스터 주소 |
+| `-cluster-node-name` | `DBSTUDIO_CLUSTER_NODE_NAME` | 호스트 이름 | 화면에 보일 노드 이름 |
+| `-cluster-advertise` | `DBSTUDIO_CLUSTER_ADVERTISE` | — | 다른 노드가 이 노드를 부를 주소 |
+| `-cluster-sync-interval` | `DBSTUDIO_CLUSTER_SYNC_INTERVAL` | `2s` | 변경을 받아 오는 주기 |
+| `-cluster-heartbeat` | `DBSTUDIO_CLUSTER_HEARTBEAT` | `10s` | 살아 있음을 알리는 주기 |
+| `-cluster-log-keep` | `DBSTUDIO_CLUSTER_LOG_KEEP` | `24h` | 마스터가 복제 로그를 남기는 기간 |
+| `-cluster-log-max` | `DBSTUDIO_CLUSTER_LOG_MAX` | `200000` | 복제 로그 최대 줄 수 |
+| — | `DBSTUDIO_CLUSTER_SECRET` | — | 노드 사이 공용 비밀. **환경변수로만** 받는다 |
+| — | `DBSTUDIO_MASTER_KEY` | 없으면 파일 생성 | 자격증명 암호화 키(base64 32바이트). 클러스터는 모든 노드가 같은 값을 써야 한다 |
+
+**플래그와 환경변수는 같은 것을 가리킨다.** 환경변수는 그 플래그의 *기본값*이 되고,
+인자로 준 플래그가 그것을 덮는다: `인자 > 환경변수 > 기본값`. 그래서 컨테이너·systemd
+배치에서는 환경변수만으로 전부 설정할 수 있다(→ [운영 문서의 도커 이미지](operations.md#도커-이미지)).
+
+비밀 두 개(`DBSTUDIO_CLUSTER_SECRET`·`DBSTUDIO_MASTER_KEY`)는 플래그가 없다. 명령줄
+인자는 프로세스 목록에 그대로 보이고, 그 값 하나로 클러스터의 모든 데이터를 받아 가거나
+저장된 자격증명을 복호화할 수 있기 때문이다.
 | — | `DBSTUDIO_MASTER_KEY` | (자동 생성) | base64 32바이트 암호화 키 |
 
 > **`-allow-shell`은 의식적으로 켜는 스위치다.** 이 플래그가 없으면 사용자에게 어떤 권한을 줘도

@@ -39,5 +39,17 @@ LABEL org.opencontainers.image.title="DB Studio" \
       org.opencontainers.image.source="https://github.com/yejun614/DB-Studio" \
       org.opencontainers.image.licenses="MIT"
 
+# 설정은 환경변수로 준다 — 플래그 40개 전부에 DBSTUDIO_* 대응이 있다.
+#
+#   docker run -e DBSTUDIO_MONITOR_INTERVAL=10s -e DBSTUDIO_SECURE_COOKIE=true ...
+#
+# CMD에 플래그를 박아 두지 않는 이유: 환경변수는 **플래그의 기본값**으로 쓰이므로,
+# CMD에 -addr이 있으면 그것이 이겨서 `-e DBSTUDIO_ADDR=:9000`이 조용히 무시된다.
+# 그래서 기본값은 ENV로 주고 CMD는 비워 둔다(인자를 주면 여전히 그것이 이긴다).
+#
+# CMD를 명시적으로 비우는 것도 필요하다 — 비워 두지 않으면 바닥 이미지의 CMD가
+# 그대로 남아 ENTRYPOINT의 인자로 붙는다(alpine의 /bin/sh 가 그렇다).
+ENV DBSTUDIO_ADDR=":8080" DBSTUDIO_DATA="/data"
+
 ENTRYPOINT ["/dbstudio"]
-CMD ["-addr", ":8080", "-data", "/data"]
+CMD []

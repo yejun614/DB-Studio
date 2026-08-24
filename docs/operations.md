@@ -104,6 +104,35 @@ docker run -v ./our-ca.crt:/usr/local/share/ca-certificates/our-ca.crt:ro \
   -c 'update-ca-certificates && exec /dbstudio -data /data'
 ```
 
+**설정은 전부 환경변수로 준다.** 플래그 40개에 모두 `DBSTUDIO_*` 대응이 있고
+(목록은 [시작하기의 옵션 표](getting-started.md#옵션)), 이미지는 플래그를 인자로 넘기지
+않으므로 환경변수가 그대로 먹는다.
+
+```yaml
+# compose.yaml
+services:
+  dbstudio:
+    image: ghcr.io/yejun614/db-studio:latest
+    ports: ["8080:8080"]
+    volumes: ["dbstudio-data:/data"]
+    environment:
+      DBSTUDIO_MASTER_KEY: "${DBSTUDIO_MASTER_KEY:?openssl rand -base64 32 으로 만들어 두세요}"
+      DBSTUDIO_SECURE_COOKIE: "true"      # HTTPS 프록시 뒤에 둘 때
+      DBSTUDIO_TRUST_PROXY: "true"        # X-Forwarded-For 를 클라이언트 IP로
+      DBSTUDIO_MONITOR_INTERVAL: "15s"
+      DBSTUDIO_LOG_LEVEL: "info"
+    restart: unless-stopped
+volumes:
+  dbstudio-data:
+```
+
+우선순위는 `인자 > 환경변수 > 기본값`이다. 이미지에는 `DBSTUDIO_ADDR=:8080`·
+`DBSTUDIO_DATA=/data` 두 개만 기본값으로 심어 두었고, 인자를 주면 그것이 이긴다.
+
+```bash
+docker run ... ghcr.io/yejun614/db-studio:latest -addr :9000   # 인자로도 된다
+```
+
 손으로 만들 때는 `dist/`를 먼저 채워야 한다 — 이미지가 그 파일을 복사한다.
 
 ```bash
