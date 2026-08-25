@@ -3577,6 +3577,8 @@ a.stat:hover { border-color: var(--text-mute); background: hsl(var(--h-muted) / 
 
 /* 구조 화면의 초안 바로가기. 도구 막대 안에서 버튼들과 높이를 맞춘다. */
 .structure-draft-pick { height: 32px; padding: 0 26px 0 10px; font-size: 12.5px; max-width: 260px; }
+/* 다른 시점을 보고 있는 참여자. 커서가 서로 보이지 않는 이유가 여기서 읽힌다. */
+.erd-avatar.is-elsewhere { opacity: 0.45; }
 
 /* 구조 화면의 대화 패널은 ERD 편집기의 것을 그대로 쓴다(.erd-chat-*).
  * 다른 모양으로 만들면 같은 일을 하는 두 화면이 서로 다르게 읽힌다. */

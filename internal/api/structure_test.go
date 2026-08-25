@@ -93,9 +93,10 @@ func TestStructureDocumentIsSharedPerConnection(t *testing.T) {
 	if status != 200 {
 		t.Fatalf("구조 조회 = %d: %v", status, body)
 	}
-	// 과거 버전 보기에서는 함께 고칠 것이 없으므로 방을 열지 않는다.
-	if body["documentId"] != "" {
-		t.Errorf("과거 버전 보기에 방 열쇠가 왔습니다: %v", body["documentId"])
+	// 방은 DB 기준이라 과거 시점을 보는 중에도 같은 방에 있다(누가 접속해 있는지와
+	// 대화는 시점과 무관한 사실이다). 다만 편집은 현재 시점에서만 한다.
+	if body["documentId"] == "" {
+		t.Error("과거 시점 보기에 방 열쇠가 오지 않았습니다")
 	}
 	if body["canEdit"] != false {
 		t.Errorf("과거 버전 보기가 편집 가능으로 왔습니다: %v", body["canEdit"])

@@ -85,23 +85,18 @@ func (s *Server) handleGetStructure(c *fiber.Ctx) error {
 		"layout":     doc.Layout,
 		"notes":      doc.Notes,
 		"groups":     doc.Groups,
-		// documentId는 실시간 방의 열쇠다. 과거 버전을 보는 중에는 비어 있다 —
-		// 그 화면은 지금이 아니라 그때를 보는 곳이라 함께 고칠 것이 없다.
-		"documentId": structureDocIDFor(doc, v == nil),
-		"canEdit":    canEdit && v == nil,
+		// documentId는 실시간 방의 열쇠다. 방은 **DB 기준**이라 과거 시점을 보는
+		// 중에도 같은 방에 있다 — 누가 접속해 있는지, 무엇을 이야기하는지는 보고
+		// 있는 시점과 무관한 사실이다. 커서만 같은 시점을 보는 사람끼리 보인다.
+		"documentId": doc.ID,
+		// 편집은 현재 시점에서만 한다. 과거 화면의 좌표로 카드를 옮기면 지금을 보는
+		// 사람의 화면이 이유 없이 흔들린다.
+		"canEdit": canEdit && v == nil,
 		// 새로 자리를 잡은 테이블 수. 화면이 "N개가 새로 놓였습니다"를 알릴 수 있다.
 		"placed":      placed,
 		"stats":       sc.Stats(),
 		"notesFromDB": sc.Notes,
 	})
-}
-
-// structureDocIDFor는 실시간 방 열쇠를 정한다. 과거 버전 보기에서는 비운다.
-func structureDocIDFor(doc *erd.Document, live bool) string {
-	if !live || doc == nil {
-		return ""
-	}
-	return doc.ID
 }
 
 // structureDocument는 이 커넥션의 구조 문서를 열고, 스키마 레이어를 지금 것으로 맞춘다.

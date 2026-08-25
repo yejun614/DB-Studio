@@ -88,7 +88,10 @@ export class ErdCanvas {
   }
 
   setCursor(clientId, cursor) {
-    this.remoteCursors.set(clientId, cursor);
+    // cursor가 없으면 지운다. 다른 시점으로 옮겨 간 사람의 커서를 남겨 두면 그
+    // 자리에 유령이 붙어 있고, null을 그대로 넣으면 그리는 쪽에서 터진다.
+    if (!cursor) this.remoteCursors.delete(clientId);
+    else this.remoteCursors.set(clientId, cursor);
     this.renderCursors();
   }
 

@@ -98,6 +98,7 @@ class StructureView {
     this.tab = 'inspect';
     this.chat = [];
     this.unread = 0;
+    this.panelHidden = false;
   }
 
   async start() {
@@ -172,6 +173,10 @@ class StructureView {
 
     this.canvas = new ErdCanvas(this.canvasWrap, {
       emptyHint: '테이블이 없습니다',
+      // 과거 시점을 보는 중이거나 등급이 없으면 손으로 옮길 수도 없어야 한다.
+      // 옮겨지긴 하는데 저장되지 않으면, 새로고침 때 제자리로 돌아가는 이유를
+      // 화면에서 알 수 없다.
+      canEdit: () => this.canEdit,
       // 선택은 종류를 함께 갖는다. 메모·그룹도 인스펙터에서 고치므로
       // "무엇을 고른 상태인가"를 문자열 하나로는 표현할 수 없다.
       onSelect: (key) => this.select(key ? { kind: 'table', id: key } : null),
@@ -332,17 +337,7 @@ class StructureView {
             icon('list'), '그룹'),
         )
         : null,
-      h('div.erd-tool-group', {},
-        h('button.btn.btn-small', {
-          type: 'button',
-          class: this.tab === 'chat' ? 'btn btn-small btn-active' : 'btn btn-small',
-          onclick: () => {
-            this.tab = this.tab === 'chat' ? 'inspect' : 'chat';
-            this.renderPanel();
-          },
-        }, icon('chat'), '대화',
-        this.unread > 0 ? badge(String(this.unread), 'info') : null),
-      ),
+
       h('div.erd-tool-group', {},
         h('button.icon-btn', { type: 'button', title: '축소', onclick: () => this.canvas.zoom(1.25) }, '−'),
         h('button.icon-btn', { type: 'button', title: '확대', onclick: () => this.canvas.zoom(0.8) }, '+'),
@@ -379,8 +374,32 @@ class StructureView {
       ),
       h('div.erd-tool-spacer'),
       readOnly
-        ? h('span.muted.small', {}, '과거 버전을 보고 있습니다 — 배치는 이 커넥션 공통으로 저장됩니다')
+        ? h('span.muted.small', {}, '과거 시점을 보고 있습니다 — 정리는 현재 시점에서 고칩니다')
         : null,
+      // 오른쪽 끝은 패널 탭이다. ERD 설계 화면과 같은 자리에 같은 순서로 둔다 —
+      // 두 화면을 오가는 사람이 매번 찾지 않아도 되도록. (도메인 탭은 없다:
+      // 도메인은 "만들고 싶은 것"을 그리는 초안의 개념이고, 구조 화면의 스키마는
+      // 실제 DB에서 읽은 것이라 고칠 수 없다.)
+      h('div.erd-tool-group', {},
+        h('button.btn.btn-small', {
+          type: 'button',
+          class: this.tab === 'inspect' ? 'btn btn-small btn-active' : 'btn btn-small',
+          onclick: () => { this.tab = 'inspect'; this.renderPanel(); },
+        }, '속성'),
+        h('button.btn.btn-small', {
+          type: 'button',
+          class: this.tab === 'chat' ? 'btn btn-small btn-active' : 'btn btn-small',
+          onclick: () => { this.tab = 'chat'; this.renderPanel(); },
+        }, '대화', this.unread > 0 ? badge(String(this.unread), 'info') : null),
+        // 사이드바를 접으면 캔버스가 그만큼 넓어진다. 테이블이 스무 개를 넘어가면
+        // 그 폭이 "한 화면에 다 보이는가"를 가른다.
+        h('button.icon-btn.btn-tip', {
+          type: 'button',
+          'data-tip': this.panelHidden ? '사이드바 보이기' : '사이드바 숨기기',
+          'aria-label': this.panelHidden ? '사이드바 보이기' : '사이드바 숨기기',
+          onclick: () => this.togglePanel(),
+        }, icon(this.panelHidden ? 'chevron-left' : 'chevron-right')),
+      ),
     );
   }
 
@@ -773,6 +792,14 @@ class StructureView {
     });
   }
 
+  togglePanel() {
+    this.panelHidden = !this.panelHidden;
+    this.root.classList.toggle('is-panel-hidden', this.panelHidden);
+    this.renderToolbar();
+    // 캔버스 폭이 바뀌었으므로 좌표계를 다시 잡는다.
+    this.canvas.render();
+  }
+
   // ---------- 실시간 ----------
 
   // op는 편집 하나를 방에 보낸다.
@@ -795,11 +822,16 @@ class StructureView {
     this.session = null;
     this.docID = docID;
     if (!docID) {
-      this.setStatus('past');
+      this.setStatus('none');
       return;
     }
     this.session = new ErdSession(docID, {
-      onStatus: (state) => this.setStatus(state),
+      onStatus: (state) => {
+        this.setStatus(state);
+        // 붙을 때마다 지금 보는 시점을 알린다. 재접속 뒤에도 참여자 목록의
+        // "어느 시점을 보는가"가 맞아야 커서 필터가 뜻을 갖는다.
+        if (state === 'connected') this.session?.presence({ view: this.viewKey() });
+      },
       onInit: (msg) => this.onDocument(msg),
       onState: (msg) => this.onDocument(msg),
       onOp: (op, mine, hasDoc) => this.onOp(op, mine, hasDoc),
@@ -818,11 +850,11 @@ class StructureView {
 
   setStatus(state) {
     const map = {
-      connected: ['실시간 연결됨', 'is-ok'],
+      connected: [this.versionParam ? '실시간 연결됨 · 과거 시점' : '실시간 연결됨', 'is-ok'],
       reconnecting: ['다시 연결하는 중…', 'is-warn'],
       disconnected: ['연결 끊김', 'is-bad'],
       error: ['연결 오류', 'is-bad'],
-      past: ['과거 시점 보기', ''],
+      none: ['연결 없음', ''],
     };
     const [label, cls] = map[state] ?? ['연결 중…', ''];
     mount(this.statusChip, label);
@@ -892,12 +924,31 @@ class StructureView {
   onPresence(list) {
     this.participants = list ?? [];
     this.canvas.setParticipants(this.participants, this.you?.clientId);
+    // 다른 시점으로 옮겨 간 사람의 커서는 지운다. 남겨 두면 유령이 붙어 있는다.
+    for (const p of this.participants) {
+      if ((p.view ?? '') !== this.viewKey()) this.canvas.setCursor(p.clientId, null);
+    }
     this.renderParticipants();
     this.canvas.renderCursors();
   }
 
+  // viewKey는 지금 보고 있는 시점이다(현재면 빈 문자열).
+  viewKey() {
+    return this.versionParam || '';
+  }
+
+  // viewLabel은 참여자 목록에 적을 시점 이름이다.
+  viewLabel(view) {
+    if (!view) return '현재';
+    const opt = [...this.versionSelect.options].find((o) => o.value === String(view));
+    return opt ? opt.textContent.split(' — ')[0] : '버전 ' + view;
+  }
+
   onCursor(msg) {
     if (!msg.cursor || msg.clientId === this.you?.clientId) return;
+    // 다른 시점을 보는 사람의 커서는 그리지 않는다. 그 좌표는 지금 화면에 없는
+    // 테이블 위를 가리키므로, 보이면 "왜 저기를 가리키지"만 남는다.
+    if ((msg.view ?? '') !== this.viewKey()) return;
     const who = this.participants.find((x) => x.clientId === msg.clientId);
     this.canvas.setCursor(msg.clientId, {
       x: msg.cursor.x, y: msg.cursor.y,
@@ -907,10 +958,16 @@ class StructureView {
 
   renderParticipants() {
     const others = this.participants.filter((p) => p.clientId !== this.you?.clientId);
-    mount(this.participantsBox, others.slice(0, 6).map((p) => h('span.erd-avatar', {
-      style: { background: p.color ?? '#888' },
-      'data-tip': p.userName + (p.canEdit ? '' : ' (읽기 전용)'),
-    }, (p.userName ?? '?').slice(0, 1))));
+    mount(this.participantsBox, others.slice(0, 6).map((p) => {
+      const sameView = (p.view ?? '') === this.viewKey();
+      return h('span.erd-avatar', {
+        // 다른 시점을 보는 사람은 흐리게. 커서가 안 보이는 이유가 여기서 읽힌다.
+        class: sameView ? 'erd-avatar' : 'erd-avatar is-elsewhere',
+        style: { background: p.color ?? '#888' },
+        'data-tip': p.userName + ' · ' + this.viewLabel(p.view)
+          + (p.canEdit ? '' : ' (읽기 전용)'),
+      }, (p.userName ?? '?').slice(0, 1));
+    }));
   }
 
   // ---------- 대화 ----------

@@ -132,6 +132,8 @@ type Client struct {
 	presenceMu sync.Mutex
 	cursor     *Point
 	selection  string
+	// view는 이 연결이 보고 있는 시점이다(구조 화면의 버전 id, 현재면 빈 값).
+	view string
 }
 
 type Point struct {
@@ -148,6 +150,9 @@ type PresenceView struct {
 	CanEdit   bool   `json:"canEdit"`
 	Cursor    *Point `json:"cursor,omitempty"`
 	Selection string `json:"selection,omitempty"`
+	// View는 이 사람이 보고 있는 시점이다. 화면이 "누가 어느 시점을 보는지"를
+	// 참여자 목록에 적고, 커서는 같은 시점을 보는 사람의 것만 그린다.
+	View string `json:"view,omitempty"`
 }
 
 // ---------- 참여 / 이탈 ----------
@@ -254,11 +259,15 @@ func (c *Client) CanEdit() bool { return c.p.CanEdit }
 // ---------- 수신 메시지 ----------
 
 type inbound struct {
-	Type      string          `json:"type"`
-	Ops       []*erd.Op       `json:"ops,omitempty"`
-	BaseSeq   int64           `json:"baseSeq,omitempty"`
-	Cursor    *Point          `json:"cursor,omitempty"`
-	Selection *string         `json:"selection,omitempty"`
+	Type      string    `json:"type"`
+	Ops       []*erd.Op `json:"ops,omitempty"`
+	BaseSeq   int64     `json:"baseSeq,omitempty"`
+	Cursor    *Point    `json:"cursor,omitempty"`
+	Selection *string   `json:"selection,omitempty"`
+	// View는 이 사람이 보고 있는 시점이다(구조 화면의 버전 id, 현재는 빈 문자열).
+	// 방은 DB 기준이고 시점은 사람마다 다를 수 있으므로, 커서를 서로 보여줄지
+	// 판단하려면 이 값이 필요하다 — 다른 시점의 커서는 없는 자리를 가리킨다.
+	View      *string         `json:"view,omitempty"`
 	Body      string          `json:"body,omitempty"`
 	TargetKey string          `json:"targetKey,omitempty"`
 	SinceSeq  int64           `json:"sinceSeq,omitempty"`
@@ -587,7 +596,14 @@ func (c *Client) handlePresence(msg *inbound) {
 		}
 		c.selection = *msg.Selection
 	}
+	// 시점이 바뀌는 것은 드문 일이라 목록 전체를 다시 보낸다. 그래야 다른 사람의
+	// 화면에서 "누가 어느 시점을 보는지"와 커서 필터가 함께 맞는다.
+	if msg.View != nil && c.view != *msg.View {
+		c.view = *msg.View
+		selectionChanged = true
+	}
 	cursor := c.cursor
+	view := c.view
 	c.presenceMu.Unlock()
 
 	if selectionChanged {
@@ -602,8 +618,10 @@ func (c *Client) handlePresence(msg *inbound) {
 		return
 	}
 	// 커서 이동은 빈도가 높으므로 목록 전체 대신 최소 정보만 보낸다.
+	// 커서에 시점을 함께 실어 보낸다. 받는 쪽이 자기와 같은 시점의 것만 그린다 —
+	// 다른 시점의 커서는 지금 화면에 없는 테이블 위를 가리킨다.
 	c.room.broadcastExcept(c, mustJSON(map[string]any{
-		"type": "cursor", "clientId": c.ID, "cursor": cursor,
+		"type": "cursor", "clientId": c.ID, "cursor": cursor, "view": view,
 	}))
 }
 
@@ -697,7 +715,7 @@ func (r *room) presenceLocked() []PresenceView {
 		view := PresenceView{
 			ClientID: c.ID, UserID: c.p.UserID, UserName: c.p.UserName,
 			Color: colorFor(c.p.UserID + c.ID), CanEdit: c.p.CanEdit,
-			Cursor: c.cursor, Selection: c.selection,
+			Cursor: c.cursor, Selection: c.selection, View: c.view,
 		}
 		c.presenceMu.Unlock()
 		out = append(out, view)
