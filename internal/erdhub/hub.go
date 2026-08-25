@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"dbstudio/internal/erd"
+	"dbstudio/internal/schema"
 	"dbstudio/internal/store"
 )
 
@@ -302,6 +303,18 @@ func (c *Client) handleOps(ctx context.Context, msg *inbound) error {
 		c.sendError("이 문서를 편집할 권한이 없습니다")
 		return nil
 	}
+	// 구조 문서의 스키마 레이어는 실제 DB의 것이다. 여기서 테이블을 고칠 수 있으면
+	// 화면과 DB가 조용히 갈라진다 — 고친 사람은 바뀐 줄 알고, DB는 그대로다.
+	// 고칠 수 있는 것은 사람이 얹은 것(배치·메모·묶음)뿐이다.
+	if c.room.isStructure() {
+		for _, op := range msg.Ops {
+			if op != nil && !allowedInStructure(op.Kind) {
+				c.sendError("구조 화면에서는 배치·메모·묶음만 바꿀 수 있습니다. " +
+					"스키마를 고치려면 ERD 초안을 만들어 마이그레이션으로 적용하세요")
+				return nil
+			}
+		}
+	}
 	if len(msg.Ops) == 0 {
 		return nil
 	}
@@ -346,6 +359,80 @@ func (c *Client) handleOps(ctx context.Context, msg *inbound) error {
 		c.sendUndoState()
 	}
 	return nil
+}
+
+// isStructure는 이 방이 구조 문서인지 본다.
+func (r *room) isStructure() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.doc != nil && r.doc.Kind == store.DocKindStructure
+}
+
+// allowedInStructure는 구조 문서에서 허용하는 op 종류다.
+//
+// 화이트리스트인 이유: 새 op 종류가 생겼을 때 기본이 "허용"이면 그것이 구조 문서에서
+// 스키마를 고치는 길이 되어도 아무도 모른다. 기본은 거부여야 한다.
+func allowedInStructure(kind erd.Kind) bool {
+	switch kind {
+	case erd.OpTableMove,
+		erd.OpNoteAdd, erd.OpNoteUpdate, erd.OpNoteDelete,
+		erd.OpGroupAdd, erd.OpGroupUpdate, erd.OpGroupDelete:
+		return true
+	}
+	return false
+}
+
+// RefreshSchema는 구조 문서의 스키마 레이어를 실제 DB에서 읽은 것으로 갈아 끼운다.
+//
+// op가 아니라 스냅샷 교체인 이유: "DB가 이렇게 생겼다"는 사람의 편집이 아니다. op로
+// 흘리면 편집 이력에 섞이고, 되돌리기가 남의 DB 상태를 되돌리려 든다.
+//
+// 허브가 이 일을 맡는 이유는 더 중요하다. 방이 열려 있는 동안 문서의 주인은 허브다.
+// API가 저장소에 직접 써 버리면 방의 메모리 상태는 옛 스키마를 그대로 들고 있다가,
+// 다음 압축 때 그것을 다시 써서 방금 읽어 온 것을 조용히 덮어쓴다.
+func (h *Hub) RefreshSchema(ctx context.Context, docID string, sc *schema.Schema, layout map[string]*erd.Box) error {
+	h.mu.Lock()
+	r := h.rooms[docID]
+	h.mu.Unlock()
+
+	if r == nil {
+		// 아무도 열어 두지 않았다. 저장소에서 읽어 고치고 그대로 저장한다.
+		doc, err := h.st.GetERDDocument(ctx, docID)
+		if err != nil {
+			return err
+		}
+		applyRefresh(doc, sc, layout)
+		_, err = h.st.CompactERDDocument(ctx, doc, -1)
+		return err
+	}
+
+	r.mu.Lock()
+	applyRefresh(r.doc, sc, layout)
+	snapshot := *r.doc
+	msg := r.stateMessageLocked()
+	r.mu.Unlock()
+
+	if _, err := h.st.CompactERDDocument(ctx, &snapshot, -1); err != nil {
+		return err
+	}
+	// 열려 있는 사람들의 화면도 함께 갱신한다. 그러지 않으면 새로고침한 사람만
+	// 새 스키마를 보고, 그 차이는 화면에서 알 수 없다.
+	r.broadcast(msg)
+	return nil
+}
+
+// applyRefresh는 스키마와 새로 생긴 테이블의 자리를 문서에 반영한다.
+// 사람이 얹은 것(메모·묶음·기존 배치)은 건드리지 않는다.
+func applyRefresh(doc *erd.Document, sc *schema.Schema, layout map[string]*erd.Box) {
+	doc.Schema = sc
+	if doc.Layout == nil {
+		doc.Layout = map[string]*erd.Box{}
+	}
+	for k, b := range layout {
+		if _, ok := doc.Layout[k]; !ok {
+			doc.Layout[k] = b
+		}
+	}
 }
 
 // opMessage는 브로드캐스트할 op 메시지를 만든다.

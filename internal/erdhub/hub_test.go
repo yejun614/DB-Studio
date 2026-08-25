@@ -701,3 +701,31 @@ func TestChatPersistsAcrossRooms(t *testing.T) {
 		t.Errorf("메시지 = %+v", m)
 	}
 }
+
+// 구조 문서에서는 스키마를 고치는 op가 통과하면 안 된다.
+//
+// 화이트리스트를 시험으로 고정하는 이유: 새 op 종류가 생겼을 때 기본이 "허용"이면
+// 그것이 구조 화면에서 실제 DB와 화면을 갈라놓는 길이 되어도 아무도 모른다.
+func TestStructureAllowsOnlyAnnotations(t *testing.T) {
+	allowed := []erd.Kind{
+		erd.OpTableMove,
+		erd.OpNoteAdd, erd.OpNoteUpdate, erd.OpNoteDelete,
+		erd.OpGroupAdd, erd.OpGroupUpdate, erd.OpGroupDelete,
+	}
+	for _, k := range allowed {
+		if !allowedInStructure(k) {
+			t.Errorf("%s 가 막혔습니다 — 구조 화면에서 정리는 할 수 있어야 합니다", k)
+		}
+	}
+	blocked := []erd.Kind{
+		erd.OpTableAdd, erd.OpTableUpdate, erd.OpTableDelete,
+		erd.OpColumnAdd, erd.OpColumnUpdate, erd.OpColumnDelete,
+		erd.OpIndexAdd, erd.OpFKAdd, erd.OpPKSet, erd.OpEnumAdd,
+		erd.OpDomainAdd, erd.OpSchemaImport,
+	}
+	for _, k := range blocked {
+		if allowedInStructure(k) {
+			t.Errorf("%s 가 구조 문서에서 통과합니다 — 실제 DB와 화면이 갈라집니다", k)
+		}
+	}
+}

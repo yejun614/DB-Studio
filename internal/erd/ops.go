@@ -1436,6 +1436,16 @@ func clampSize(v, min, max float64) float64 {
 
 const maxNoteLen = 4000
 
+// 메모·묶음 수 상한.
+//
+// 상한을 두는 이유는 저장 비용이 아니라 화면이다. 캔버스에 수천 개가 얹히면 그 문서는
+// 여는 것부터 느려지고, 지우려 해도 무엇을 지워야 할지 보이지 않는다. 구조 화면이
+// 개인 저장이던 시절 서버가 걸어 두었던 값을 그대로 op 경로로 옮겼다(0032).
+const (
+	maxNotes  = 200
+	maxGroups = 100
+)
+
 func applyNoteAdd(doc *Document, op *Op) error {
 	var p notePayload
 	if err := decode(op, &p); err != nil {
@@ -1448,6 +1458,9 @@ func applyNoteAdd(doc *Document, op *Op) error {
 	if doc.Note(id) != nil {
 		// 같은 op가 재전송된 경우다. 중복 생성 대신 무시하는 것이 안전하다.
 		return nil
+	}
+	if len(doc.Notes) >= maxNotes {
+		return invalid("메모는 %d개까지 붙일 수 있습니다", maxNotes)
 	}
 	n := &Note{ID: id}
 	if err := applyNotePatch(n, &p); err != nil {
@@ -1564,6 +1577,9 @@ func applyGroupAdd(doc *Document, op *Op) error {
 	if doc.Group(id) != nil {
 		// 같은 op가 재전송된 경우다. 메모와 같은 판단으로 무시한다.
 		return nil
+	}
+	if len(doc.Groups) >= maxGroups {
+		return invalid("묶음은 %d개까지 만들 수 있습니다", maxGroups)
 	}
 	g := &Group{ID: id, W: 320, H: 240}
 	applyGroupPatch(g, &p)

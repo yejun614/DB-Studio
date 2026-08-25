@@ -43,12 +43,12 @@ func (s *Store) CreateERDDocument(ctx context.Context, doc *erd.Document, create
 	}
 	now := nowString()
 	_, err = s.db.ExecContext(ctx, `INSERT INTO erd_documents
-		(id, name, connection_id, dialect, status, snapshot_json, layout_json, notes_json,
+		(id, name, connection_id, dialect, status, kind, snapshot_json, layout_json, notes_json,
 		 groups_json, domains_json, snapshot_seq, seq, source_snapshot_id, note, created_by, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		// 대상 커넥션이 없으면 NULL이다. 빈 문자열로 넣으면 외래키가 걸려 들어가지
 		// 않고, 들어간다 해도 "존재하지 않는 커넥션을 가리키는 문서"가 된다.
-		doc.ID, doc.Name, nullString(doc.ConnectionID), doc.Dialect, doc.Status,
+		doc.ID, doc.Name, nullString(doc.ConnectionID), doc.Dialect, doc.Status, docKind(doc.Kind),
 		j.schema, j.layout, j.notes, j.groups, j.domains, doc.Seq, doc.Seq,
 		sourceSnapshotID, note, nullString(createdBy), now, now)
 	if err != nil {
@@ -64,7 +64,7 @@ func (s *Store) CreateERDDocument(ctx context.Context, doc *erd.Document, create
 // 무한히 느려진다. 주기적 압축이 두 비용을 모두 묶는다.
 func (s *Store) GetERDDocument(ctx context.Context, id string) (*erd.Document, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT
-		id, name, COALESCE(connection_id, ''), dialect, status,
+		id, name, COALESCE(connection_id, ''), dialect, status, kind,
 		snapshot_json, layout_json, notes_json,
 		groups_json, domains_json, snapshot_seq, seq
 		FROM erd_documents WHERE id = ?`, id)
@@ -72,7 +72,7 @@ func (s *Store) GetERDDocument(ctx context.Context, id string) (*erd.Document, e
 	var doc erd.Document
 	var j docJSON
 	var snapshotSeq int64
-	if err := row.Scan(&doc.ID, &doc.Name, &doc.ConnectionID, &doc.Dialect, &doc.Status,
+	if err := row.Scan(&doc.ID, &doc.Name, &doc.ConnectionID, &doc.Dialect, &doc.Status, &doc.Kind,
 		&j.schema, &j.layout, &j.notes, &j.groups, &j.domains, &snapshotSeq, &doc.Seq); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
@@ -127,7 +127,10 @@ func (s *Store) ListERDDocuments(ctx context.Context, connectionIDs []string, li
 		-- SQLite에서 JSON 배열 길이는 json_array_length로 싸게 얻을 수 있다.
 		COALESCE(json_array_length(snapshot_json, '$.tables'), 0)
 		FROM erd_documents`
+	// 구조 문서는 초안이 아니다. 목록에 섞이면 마이그레이션 대상 후보에도 뜨는데,
+	// 그것은 실제 DB의 사본이라 적용할 것이 언제나 없다.
 	args := []any{}
+	query += ` WHERE kind <> 'structure'`
 	if connectionIDs != nil {
 		where := `connection_id IS NULL`
 		if len(connectionIDs) > 0 {
@@ -138,7 +141,7 @@ func (s *Store) ListERDDocuments(ctx context.Context, connectionIDs []string, li
 			}
 			where += ` OR connection_id IN (` + strings.Join(marks, ",") + `)`
 		}
-		query += ` WHERE ` + where
+		query += ` AND (` + where + `)`
 	}
 	query += ` ORDER BY updated_at DESC LIMIT ?`
 	args = append(args, limit)
@@ -534,6 +537,75 @@ func unmarshalDocument(doc *erd.Document, j docJSON) error {
 		if err := json.Unmarshal([]byte(j.domains), &doc.Domains); err != nil {
 			return fmt.Errorf("unmarshal erd domains: %w", err)
 		}
+	}
+	return nil
+}
+
+// ---------- 구조 문서 ----------
+
+// DocKindDraft / DocKindStructure는 erd_documents.kind 값이다.
+//
+// 구조 문서는 커넥션마다 하나이고, "지금 이 DB가 이렇게 생겼다"를 함께 보는 자리다.
+// 초안과 같은 캔버스·같은 실시간 방을 쓰지만 스키마 레이어는 읽기 전용이다.
+const (
+	DocKindDraft     = "draft"
+	DocKindStructure = "structure"
+)
+
+// docKind는 빈 값을 초안으로 본다. 기존 문서는 모두 초안이다.
+func docKind(kind string) string {
+	if kind == DocKindStructure {
+		return DocKindStructure
+	}
+	return DocKindDraft
+}
+
+// GetStructureDocumentID는 커넥션의 구조 문서 id를 찾는다. 없으면 ErrNotFound다.
+//
+// 문서 전체가 아니라 id만 돌려주는 이유: 호출부는 대개 그 id로 GetERDDocument를
+// 부르거나(스냅샷+op 재생) 소켓 경로로 넘긴다. 여기서 통째로 읽으면 그 일을 두 번 한다.
+func (s *Store) GetStructureDocumentID(ctx context.Context, connectionID string) (string, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id FROM erd_documents WHERE connection_id = ? AND kind = ?`,
+		connectionID, DocKindStructure).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("find structure document: %w", err)
+	}
+	return id, nil
+}
+
+// ReplaceERDSnapshot은 문서의 스키마 레이어만 통째로 바꾼다.
+//
+// 구조 문서를 위한 것이다: 실제 DB를 다시 읽었더니 테이블이 달라졌을 때, 그 사실을
+// op로 흘려보내지 않고 스냅샷을 갈아 끼운다. op로 만들면 "사람이 한 편집"과 "DB가
+// 그렇게 생겼다"가 같은 이력에 섞이고, 되돌리기가 남의 DB 상태를 되돌리려 든다.
+//
+// seq는 건드리지 않는다. 열려 있는 클라이언트가 자기 op 순서를 그대로 이어 간다.
+func (s *Store) ReplaceERDSnapshot(ctx context.Context, docID string, sc *schema.Schema, layout map[string]*erd.Box) error {
+	scJSON, err := json.Marshal(sc)
+	if err != nil {
+		return fmt.Errorf("marshal schema: %w", err)
+	}
+	layoutJSON, err := json.Marshal(layout)
+	if err != nil {
+		return fmt.Errorf("marshal layout: %w", err)
+	}
+	// snapshot_seq를 현재 seq로 올린다. 그러지 않으면 다음 로딩이 옛 op를 새 스냅샷
+	// 위에 다시 적용해, 방금 사라진 테이블을 되살리거나 재생 실패로 문서를 못 연다.
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE erd_documents
+		 SET snapshot_json = ?, layout_json = ?, snapshot_seq = seq, updated_at = ?
+		 WHERE id = ?`,
+		string(scJSON), string(layoutJSON), nowString(), docID)
+	if err != nil {
+		return fmt.Errorf("replace snapshot: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
 	}
 	return nil
 }

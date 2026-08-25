@@ -29,6 +29,10 @@ type Document struct {
 	ConnectionID string `json:"connectionId"`
 	Dialect      string `json:"dialect"`
 	Status       string `json:"status"`
+	// Kind는 이 문서가 무엇인가다: "draft"는 만들고 싶은 것을 그리는 초안,
+	// "structure"는 실제 DB의 지금 모습을 함께 보는 구조 문서다. 구조 문서에서는
+	// 스키마 레이어가 읽기 전용이라 서버가 op 종류를 제한한다.
+	Kind string `json:"kind,omitempty"`
 
 	Schema *schema.Schema `json:"schema"`
 
