@@ -356,9 +356,10 @@ class StructureView {
           icon('refresh'), '새로고침'),
         // 구조에서 곧바로 설계를 시작하는 흐름. 지금 보고 있는 것을 그대로
         // 초안으로 옮기므로, ERD 화면에서 커넥션을 다시 고를 필요가 없다.
-        // 작업 중인 초안으로 건너뛰는 길. 한 DB에 초안이 여럿일 수 있으므로
-        // 고르개로 둔다 — 목록 화면을 거쳐 다시 찾아 들어갈 이유가 없다.
-        this.drafts?.length ? this.draftPicker() : null,
+        // 이 DB로 만든 설계로 건너뛰는 길. 목록 화면을 거쳐 다시 찾아 들어갈
+        // 이유가 없다. 하나도 없으면 버튼을 비활성으로 둔다 — 사라졌다 나타나는
+        // 버튼은 찾을 때 있는지부터 의심하게 만든다.
+        this.draftButton(),
         h('button.btn.btn-small', { type: 'button', onclick: () => this.createDraft() },
           icon('plus'), '이 구조로 초안 만들기'),
         // 버전 이력으로 돌아가는 길. 여기 오는 흔한 경로가 그 화면의 "구조 보기"이고,
@@ -455,8 +456,8 @@ class StructureView {
         icon('database', 24),
         h('p', {}, '테이블을 선택하면 컬럼과 제약을 볼 수 있습니다.'),
         h('p.muted', {},
-          '이 화면에서는 구조를 바꿀 수 없습니다. 카드를 끌어 옮기거나 메모·그룹을 '
-          + '더할 수 있고, 그 정리는 내 계정에만 저장됩니다.'),
+          '이 화면에서는 구조를 바꿀 수 없습니다. 카드를 끌어 옮기거나 메모·묶음을 '
+          + '더할 수 있고, 그 정리는 이 DB를 보는 모두가 함께 봅니다.'),
       ));
       return;
     }
@@ -664,7 +665,7 @@ class StructureView {
         h('div.field', {}, h('span.field-label', {}, '색'), swatches),
         h('p.field-help', {},
           '테이블을 감싸는 사각형입니다. 크기와 위치는 캔버스에서 끌어 정합니다. '
-          + '내 계정에만 저장됩니다.'),
+          + '이 DB를 보는 모두에게 보입니다.'),
       ],
       footer: (close) => [
         h('button.btn', { type: 'button', onclick: close }, '취소'),
@@ -737,22 +738,55 @@ class StructureView {
     this.renderToolbar();
   }
 
-  // draftPicker는 이 DB의 초안 중 하나로 건너뛰는 고르개다.
-  draftPicker() {
-    const picker = select([
-      { value: '', label: `ERD 초안 (${this.drafts.length})` },
-      ...this.drafts.map((d) => ({
-        value: d.id,
-        label: `${d.name}${d.status && d.status !== 'draft' ? ` · ${draftStatusLabel(d.status)}` : ''}`,
-      })),
-    ], { value: '' });
-    picker.classList.add('structure-draft-pick');
-    picker.title = '이 DB로 작업 중인 ERD 초안으로 갑니다';
-    picker.addEventListener('change', () => {
-      if (!picker.value) return;
-      navigate(`/erd/${encodeURIComponent(picker.value)}`);
+  // draftButton은 이 DB의 ERD 설계를 고르는 버튼이다.
+  //
+  // 고르개(select)가 아니라 버튼+모달인 이유: 설계는 이름만으로 고르기 어렵다.
+  // 언제 고쳤는지, 지금 어떤 상태인지, 테이블이 몇 개인지가 있어야 "그 설계"를
+  // 알아본다. 그것을 select 항목 한 줄에 담으면 읽기 어렵고 잘린다.
+  draftButton() {
+    const count = this.drafts?.length ?? 0;
+    return h('button.btn.btn-small', {
+      type: 'button',
+      disabled: count === 0,
+      title: count
+        ? '이 DB로 만든 ERD 설계를 엽니다'
+        : '이 DB로 만든 ERD 설계가 아직 없습니다',
+      onclick: () => this.openDraftDialog(),
+    }, icon('edit'), count ? `ERD 설계 (${count})` : 'ERD 설계');
+  }
+
+  // openDraftDialog는 이 DB의 설계 목록을 띄우고 고른 것으로 옮긴다.
+  openDraftDialog() {
+    if (!this.drafts?.length) return;
+    let close = null;
+    const rows = this.drafts.map((d) => h('button.draft-row', {
+      type: 'button',
+      onclick: () => {
+        close?.();
+        navigate(`/erd/${encodeURIComponent(d.id)}`);
+      },
+    },
+    h('span.draft-row-main', {},
+      h('strong', {}, d.name || '이름 없는 설계'),
+      d.status && d.status !== 'draft' ? badge(draftStatusLabel(d.status), 'neutral') : null),
+    h('span.draft-row-side', {},
+      h('span.muted.small', {}, `테이블 ${d.tableCount ?? 0}`),
+      h('span.muted.small', {}, relativeTime(d.updatedAt))),
+    ));
+
+    close = openModal({
+      title: 'ERD 설계 열기',
+      width: 520,
+      body: () => [
+        h('p.modal-message', {},
+          '이 DB를 대상으로 만든 설계입니다. 고르면 그 편집 화면으로 갑니다 — '
+          + '설계에서 고친 것은 마이그레이션으로 적용하기 전까지 실제 DB에 영향을 주지 않습니다.'),
+        h('div.draft-list', {}, rows),
+      ],
+      footer: (closeFn) => [
+        h('button.btn', { type: 'button', onclick: closeFn }, '닫기'),
+      ],
     });
-    return picker;
   }
 
   // createDraft는 지금 보고 있는 커넥션으로 ERD 초안을 만든다.

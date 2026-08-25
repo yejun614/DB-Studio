@@ -3575,8 +3575,21 @@ a.stat:hover { border-color: var(--text-mute); background: hsl(var(--h-muted) / 
 .pick-opt:hover, .pick-opt.is-cursor { background: var(--surface-2); }
 .pick-empty { margin: 0; padding: 9px 10px; font-size: 12.5px; color: var(--text-mute); }
 
-/* 구조 화면의 초안 바로가기. 도구 막대 안에서 버튼들과 높이를 맞춘다. */
-.structure-draft-pick { height: 32px; padding: 0 26px 0 10px; font-size: 12.5px; max-width: 260px; }
+/* ERD 설계 고르기 모달의 줄. 이름과 함께 "언제 고쳤는지·테이블 몇 개인지"를
+ * 보여야 여러 설계 중에서 그것을 알아본다. */
+.draft-list { display: flex; flex-direction: column; gap: 6px; }
+.draft-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface-2); color: var(--text);
+  font: inherit; text-align: left; cursor: pointer;
+  transition: border-color 0.12s, background-color 0.12s;
+}
+.draft-row:hover { border-color: var(--text-mute); background: var(--surface); }
+.draft-row-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.draft-row-main strong { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.draft-row-side { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 /* 다른 시점을 보고 있는 참여자. 커서가 서로 보이지 않는 이유가 여기서 읽힌다. */
 .erd-avatar.is-elsewhere { opacity: 0.45; }
 
