@@ -8,6 +8,7 @@ import {
 } from '../core/ui.js';
 import { navigate } from '../core/router.js';
 import { serverDbPicker } from '../core/connpick.js';
+import { peoplePicker } from '../core/pickpeople.js';
 import { codeBlock } from '../core/highlight.js';
 import { errorPanel } from './users.js';
 import { openPushDialog } from './vcs.js';
@@ -264,27 +265,34 @@ function openAssignDialog(m, reload) {
       [{ value: '', label: '정하지 않음' }, ...people.map((p) => ({ value: p.id, label: label(p) }))],
       { value: m.assigneeId ?? '' },
     );
-    const picked = new Set((m.reviewers ?? []).map((r) => r.userId));
-    const boxes = people.map((p) => {
-      // 이름을 box 로 두는 이유: 이 파일이 import 한 input 헬퍼를 가리면
-      // 나중에 이 블록에서 텍스트 칸을 만들 때 조용히 엉뚱한 것이 잡힌다.
-      const box = h('input', { type: 'checkbox', checked: picked.has(p.id) });
-      return { id: p.id, box, node: h('label.checkbox', {}, box, h('span', {}, label(p))) };
+    // 리뷰어는 검색해서 고른다. 체크박스를 늘어놓으면 사람이 늘어날수록 눈으로
+    // 훑어 찾게 되고, 대화상자 높이도 사람 수만큼 늘어난다.
+    const reviewers = peoplePicker({
+      items: people.map((p) => ({
+        id: p.id,
+        label: p.displayName || p.username,
+        sub: p.displayName ? p.username : '',
+      })),
+      selected: (m.reviewers ?? []).map((r) => r.userId),
+      placeholder: '이름 또는 아이디로 검색',
     });
 
     mount(body,
       h('p.modal-message', {},
         '담당자는 이 계획을 끝까지 끌고 갈 한 사람이고, 리뷰어는 검토를 부탁할 사람들입니다. ' +
         '지정은 실행을 막거나 열지 않습니다 — 실행 조건은 그대로 승인 수입니다.'),
+      // .notice 는 flex 상자다. 글자 조각과 <b> 를 그대로 넣으면 조각마다 flex
+      // 항목이 되어 한 글자씩 세로로 쪼개진다 — 한 덩어리(span)로 싸야 한다.
       m.status === 'draft'
         ? h('p.notice.notice-info', {}, icon('activity'),
-          '리뷰어를 한 명이라도 고르면 이 계획은 바로 ', h('b', {}, '리뷰 중'),
-          ' 이 됩니다. 따로 "리뷰 요청"을 누를 필요가 없습니다.')
+          h('span', {},
+            '리뷰어를 한 명이라도 고르면 이 계획은 바로 ', h('b', {}, '리뷰 중'),
+            ' 이 됩니다. 따로 "리뷰 요청"을 누를 필요가 없습니다.'))
         : null,
       h('label.field', {}, h('span.field-label', {}, '담당자'), assignee),
       h('div.field', {},
         h('span.field-label', {}, '리뷰어'),
-        h('div.radio-list', {}, boxes.map((b) => b.node))),
+        reviewers.node),
     );
 
     mount(footer,
@@ -296,7 +304,7 @@ function openAssignDialog(m, reload) {
           try {
             await api.put(`/migrations/${encodeURIComponent(m.id)}/assignment`, {
               assigneeId: assignee.value,
-              reviewerIds: boxes.filter((b) => b.box.checked).map((b) => b.id),
+              reviewerIds: reviewers.value,
             });
             close();
             toast('담당자와 리뷰어를 저장했습니다', 'success');
