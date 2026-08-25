@@ -23,6 +23,7 @@ import { serverDbPicker } from '../core/connpick.js';
 import { panelResizeHandle, attachPanelResize } from '../core/panelresize.js';
 import { errorPanel } from './users.js';
 import { ErdSession } from '../core/erdsocket.js';
+import { roomChatView, scrollChatToBottom } from '../core/roomchat.js';
 // 구조 화면과 ERD 편집기는 같은 op를 주고받는다. 반영 규칙을 두 벌로 두면
 // 언젠가 어긋나고, 그때 조용히 사라지는 것은 남의 편집이다.
 import { applyLightOp } from './erdeditor.js';
@@ -424,6 +425,7 @@ class StructureView {
     if (this.tab === 'chat') {
       this.unread = 0;
       mount(this.panel, this.chatView());
+      scrollChatToBottom(this.panel);
       this.renderToolbar();
       return;
     }
@@ -872,6 +874,9 @@ class StructureView {
       groups: doc.groups ?? [],
     };
     if (msg.you) this.you = msg.you;
+    // 첫 메시지에 참여자 목록이 함께 온다. 여기서 받지 않으면 다음 변화가 있을
+    // 때까지 "0명 참여 중"으로 남아, 아무도 없는 방처럼 보인다.
+    if (msg.participants) this.onPresence(msg.participants);
     if (msg.chat) {
       this.chat = msg.chat;
       if (this.tab === 'chat') this.renderPanel();
@@ -930,6 +935,9 @@ class StructureView {
     }
     this.renderParticipants();
     this.canvas.renderCursors();
+    // 대화를 보고 있으면 "N명 참여 중"도 함께 맞춘다. 그러지 않으면 사람이 들어와도
+    // 그 줄만 옛 숫자로 남아, 아무도 없는 방처럼 보인다.
+    if (this.tab === 'chat') this.renderPanel();
   }
 
   // viewKey는 지금 보고 있는 시점이다(현재면 빈 문자열).
@@ -985,44 +993,23 @@ class StructureView {
   }
 
   chatView() {
-    const box = h('textarea.input.textarea', {
-      rows: 2, placeholder: '이 DB를 보는 사람들에게 남기기',
-      onkeydown: (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-          e.preventDefault();
-          send();
-        }
-      },
-    });
-    const send = () => {
-      const body = box.value.trim();
-      if (!body || !this.session) return;
-      this.session.chat(body);
-      box.value = '';
-    };
-    const list = h('div.erd-chat-list', {}, this.chat.length === 0
-      ? h('p.muted.small', {}, '아직 대화가 없습니다. 이 구조를 함께 보는 사람들에게 남겨 보세요.')
-      : this.chat.map((m) => h('div.erd-chat-msg', {},
-        h('div.erd-chat-msg-head', {},
-          h('strong', {}, m.userName || '알 수 없음'),
-          h('span.muted.small', {}, relativeTime(m.createdAt))),
-        h('p', {}, m.body))));
-    // 새 줄이 아래에 쌓이므로 열 때마다 맨 아래를 보여준다.
-    queueMicrotask(() => { list.scrollTop = list.scrollHeight; });
-
     return [
       h('div.erd-panel-head', {},
         h('h2', {}, '대화'),
         h('button.icon-btn', {
-          type: 'button', title: '닫기', onclick: () => { this.tab = 'inspect'; this.renderPanel(); },
+          type: 'button', title: '속성으로', onclick: () => { this.tab = 'inspect'; this.renderPanel(); },
         }, icon('x'))),
       h('div.erd-panel-body', {},
-        list,
-        this.session
-          ? h('div.erd-chat-send', {}, box,
-            h('button.btn.btn-small.btn-primary', { type: 'button', onclick: send }, '보내기'))
-          : h('p.field-help', {}, '과거 시점을 보는 중에는 대화에 참여할 수 없습니다.'),
-      ),
+        ...roomChatView({
+          messages: this.chat,
+          participants: this.participants.length,
+          placeholder: '이 DB를 보는 사람들에게 남기기',
+          emptyText: '아직 대화가 없습니다. 이 구조를 함께 보는 사람들에게 남겨 보세요.',
+          onSend: (body) => this.session?.chat(body),
+          // 방은 DB 기준이라 과거 시점에서도 대화는 된다. 방이 아예 없는 경우
+          // (문서를 열지 못한 상태)에만 입력칸을 내린다.
+          disabledNote: this.session ? '' : '연결되지 않아 대화를 보낼 수 없습니다.',
+        })),
     ];
   }
 

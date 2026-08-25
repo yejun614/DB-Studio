@@ -15,6 +15,7 @@ import {
   toast, toastError, relativeTime, openModal, confirmDialog, copyToClipboard,
 } from '../core/ui.js';
 import { ErdSession, throttle } from '../core/erdsocket.js';
+import { roomChatView } from '../core/roomchat.js';
 import { codeBlock, codeEditor } from '../core/highlight.js';
 import {
   ErdCanvas, CARD_W, tableKey, tableDisplay, refKey, newLocalID, truncate,
@@ -1557,43 +1558,16 @@ class Editor {
     ];
   }
 
+  // 전체 대화는 구조 화면과 같은 뷰를 쓴다(core/roomchat.js). 두 벌로 두면 한쪽만
+  // 고쳐지고, 같은 방의 같은 대화가 화면마다 다르게 보인다.
   roomChatView() {
-    const list = h('div.erd-chat-list', {}, this.chat.length === 0
-      ? h('p.muted.erd-chat-empty', {}, '아직 대화가 없습니다. 설계 의도를 남겨두면 리뷰가 쉬워집니다.')
-      : this.chat.map((m) => h(`div.erd-chat-msg${m.kind === 'system' ? '.is-system' : ''}`, {},
-        h('div.erd-chat-meta', {},
-          h('strong', {}, m.userName || '알 수 없음'),
-          m.targetKey ? badge(m.targetKey, 'neutral') : null,
-          h('span.muted', {}, relativeTime(m.createdAt)),
-        ),
-        // "[AI] "로 시작하는 줄은 AI 세션에서 공유된 답변이다. 그 본문은 모델이
-        // 쓴 마크다운이므로 그대로 두면 `**표**` 같은 별표가 화면에 남는다.
-        // 사람이 친 메시지는 마크다운으로 그리지 않는다 — 저기서의 `*`는 별표다.
-        m.body?.startsWith('[AI] ')
-          ? h('div.erd-chat-md', {}, renderMarkdown(m.body.slice(5)))
-          : h('p.erd-chat-body', {}, m.body),
-      )));
-
-    const box = input({ placeholder: this.tableKey ? `${this.tableKey} 에 대해…` : '메시지를 입력하세요' });
-    const send = () => {
-      const body = box.value.trim();
-      if (!body) return;
-      this.session.chat(body, this.tableKey ?? '');
-      box.value = '';
-    };
-    box.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        send();
-      }
+    return roomChatView({
+      messages: this.chat,
+      participants: this.participants.length,
+      placeholder: this.tableKey ? `${this.tableKey} 에 대해…` : '메시지를 입력하세요',
+      emptyText: '아직 대화가 없습니다. 설계 의도를 남겨두면 리뷰가 쉬워집니다.',
+      onSend: (body) => this.session.chat(body, this.tableKey ?? ''),
     });
-
-    return [
-      h('p.muted.small.erd-chat-note', {}, `${this.participants.length}명 참여 중`),
-      list,
-      h('div.erd-chat-input', {}, box,
-        h('button.btn.btn-small.btn-primary', { type: 'button', onclick: send }, '보내기')),
-    ];
   }
 
   // ---------- 패널 상호작용 ----------
