@@ -416,6 +416,9 @@ func (s *Server) routes() {
 	migs.Get("/:migId", s.handleGetMigration)
 	migs.Post("/:migId/status", s.handleMigrationStatus)
 	migs.Post("/:migId/review", s.handleReviewMigration)
+	// 담당자·리뷰어 지정. 후보 목록은 대상 커넥션을 만질 수 있는 사람만 담는다.
+	migs.Get("/:migId/people", s.handleListMigrationPeople)
+	migs.Put("/:migId/assignment", s.handleSetMigrationAssignment)
 	migs.Post("/:migId/precheck", s.handlePrecheckMigration)
 	migs.Post("/:migId/apply", s.handleApplyMigration)
 	migs.Post("/:migId/rollback", s.handleRollbackMigration)

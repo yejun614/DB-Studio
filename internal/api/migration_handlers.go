@@ -850,3 +850,131 @@ func displayName(u *model.User) string {
 	}
 	return u.Username
 }
+
+// ---------- 담당자 · 리뷰어 ----------
+
+// handleListMigrationPeople은 담당자·리뷰어로 지정할 수 있는 사람을 돌려준다.
+//
+// 아무나 담지 않는다. 마이그레이션을 만지려면 대상 커넥션에 migrate 등급이 필요하고,
+// 그 등급이 없는 사람을 지정하면 그 사람은 열어 보지도 못한다 — 고를 수는 있는데
+// 누르면 403이 나는 목록은 권한 설정이 잘못된 것처럼 보인다.
+func (s *Server) handleListMigrationPeople(c *fiber.Ctx) error {
+	_, conn, err := s.resolveMigration(c, c.Params("migId"), model.LevelMigrate)
+	if err != nil {
+		return err
+	}
+	people, err := s.st.ListActivePeople(c.Context())
+	if err != nil {
+		return err
+	}
+
+	out := []store.MigrationPerson{}
+	for _, p := range people {
+		u, err := s.st.GetUser(c.Context(), p.ID)
+		if err != nil {
+			// 목록을 만드는 중에 사용자가 지워질 수 있다. 그 한 명 때문에
+			// 대화상자 전체가 열리지 않는 것이 더 나쁘다.
+			continue
+		}
+		d, err := s.authz.ResolveScope(c.Context(), u, conn.Scope())
+		if err != nil {
+			return err
+		}
+		if !d.Allowed || !d.Level.Includes(model.LevelMigrate) {
+			continue
+		}
+		p.Level = string(d.Level)
+		out = append(out, p)
+	}
+	return c.JSON(fiber.Map{"items": out})
+}
+
+// handleSetMigrationAssignment는 담당자와 리뷰어를 정한다.
+//
+// 상태를 가리지 않는다(초안이든 적용 완료든 바꿀 수 있다). 실행이 끝난 뒤에도
+// "누가 맡았던 일인가"는 이력으로 남을 값이고, 실행 중 담당자가 바뀌는 일도 있다.
+func (s *Server) handleSetMigrationAssignment(c *fiber.Ctx) error {
+	mig, conn, err := s.resolveMigration(c, c.Params("migId"), model.LevelMigrate)
+	if err != nil {
+		return err
+	}
+	var body struct {
+		AssigneeID  string   `json:"assigneeId"`
+		ReviewerIDs []string `json:"reviewerIds"`
+	}
+	if err := c.BodyParser(&body); err != nil {
+		return fail(c, fiber.StatusBadRequest, "bad_request", "요청 본문을 해석할 수 없습니다")
+	}
+
+	// 지정 대상이 실제로 이 마이그레이션을 만질 수 있는지 서버에서 다시 본다.
+	// 화면이 걸러 주지만, 화면을 거치지 않는 요청도 있고 권한은 그 사이에 바뀐다.
+	assignee := strings.TrimSpace(body.AssigneeID)
+	if assignee != "" {
+		if code, msg := s.assignableReason(c, conn, assignee); code != "" {
+			return fail(c, fiber.StatusBadRequest, code, msg)
+		}
+	}
+	reviewers := []string{}
+	seen := map[string]bool{}
+	for _, id := range body.ReviewerIDs {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		if code, msg := s.assignableReason(c, conn, id); code != "" {
+			return fail(c, fiber.StatusBadRequest, code, msg)
+		}
+		seen[id] = true
+		reviewers = append(reviewers, id)
+	}
+
+	u := currentUser(c)
+	if err := s.st.SetMigrationAssignment(c.Context(), mig.ID, assignee, reviewers, u.ID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return fiber.NewError(fiber.StatusNotFound, "마이그레이션을 찾을 수 없습니다")
+		}
+		return err
+	}
+
+	updated, err := s.st.GetMigration(c.Context(), mig.ID, true)
+	if err != nil {
+		return err
+	}
+	s.audit(c, store.AuditParams{
+		Action: "migration.assigned", TargetType: "migration", TargetID: mig.ID,
+		Detail: map[string]any{
+			"connection": conn.Name, "title": mig.Title,
+			"assignee": updated.AssigneeName, "reviewers": len(updated.Reviewers),
+		},
+	})
+	return c.JSON(fiber.Map{
+		"migration":         updated,
+		"connection":        connSummary(conn),
+		"approvals":         store.ApprovalCount(updated.Reviews),
+		"requiredApprovals": migrate.RequiredApprovals(conn, updated.DestructiveCount),
+	})
+}
+
+// assignableReason은 그 사람을 지정할 수 없는 이유를 (코드, 문구)로 돌려준다.
+// 지정할 수 있으면 빈 코드를 돌려준다.
+//
+// error가 아니라 값으로 돌려주는 이유: 이 파일의 fail()은 응답을 쓰고 nil을
+// 반환한다. 그것을 그대로 넘기면 호출부의 err != nil 검사가 통과해 버려, 400을
+// 쓴 뒤에도 저장이 이어진다 — 실제로 그렇게 새어 나갔다.
+func (s *Server) assignableReason(c *fiber.Ctx, conn *model.Connection, userID string) (string, string) {
+	u, err := s.st.GetUser(c.Context(), userID)
+	if err != nil {
+		// 조회 실패와 없는 사용자를 굳이 나누지 않는다. 어느 쪽이든 이 id로는
+		// 지정할 수 없고, 지정을 이어 가면 외래키에서 500으로 터진다.
+		return "unknown_user", "없는 사용자입니다"
+	}
+	if model.UserStatus(u.Status) != model.UserActive {
+		return "inactive_user", fmt.Sprintf("%s 은 비활성화된 계정입니다", displayName(u))
+	}
+	d, err := s.authz.ResolveScope(c.Context(), u, conn.Scope())
+	if err != nil || !d.Allowed || !d.Level.Includes(model.LevelMigrate) {
+		return "no_access", fmt.Sprintf("%s 은 %s 의 마이그레이션 권한이 없습니다",
+			displayName(u), conn.Name)
+	}
+	return "", ""
+}
