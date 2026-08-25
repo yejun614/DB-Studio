@@ -172,3 +172,114 @@ func TestAssignRequiresMigrateLevel(t *testing.T) {
 		t.Errorf("권한 없는 사용자의 지정 = %d, 기대 403 또는 404", status)
 	}
 }
+
+// 승인·반려는 리뷰어로 지정된 사람만 남길 수 있다.
+//
+// 의견은 누구나 남길 수 있어야 한다 — 지나가다 본 사람의 지적까지 막으면 그 말은
+// 앱 밖으로 나가고 계획 옆에 남지 않는다.
+func TestOnlyDesignatedReviewersDecide(t *testing.T) {
+	e, conn, mig := assignEnv(t)
+	dana := member(t, e, "dana", conn.ID, model.LevelMigrate)
+	member(t, e, "bob", conn.ID, model.LevelMigrate)
+
+	alice := loginAs(t, e, "alice")
+	status, body := alice.do("PUT", "/api/v1/migrations/"+mig.ID+"/assignment",
+		map[string]any{"assigneeId": dana.ID, "reviewerIds": []string{dana.ID}})
+	if status != 200 {
+		t.Fatalf("지정 = %d: %v", status, body)
+	}
+	// 리뷰어를 지정했으니 리뷰 중이어야 한다.
+	got, err := e.st.GetMigration(context.Background(), mig.ID, false)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Status != store.MigrationInReview {
+		t.Fatalf("상태 = %q, 기대 in_review", got.Status)
+	}
+
+	// 지정되지 않은 사람: 승인·반려는 막히고 의견은 남는다.
+	bobC := loginAs(t, e, "bob")
+	for _, decision := range []string{"approved", "rejected"} {
+		status, body = bobC.do("POST", "/api/v1/migrations/"+mig.ID+"/review",
+			map[string]any{"decision": decision, "comment": "그냥"})
+		if status != 403 {
+			t.Errorf("지정되지 않은 사람의 %s = %d, 기대 403 (%v)", decision, status, body)
+		}
+	}
+	status, body = bobC.do("POST", "/api/v1/migrations/"+mig.ID+"/review",
+		map[string]any{"decision": "comment", "comment": "이 인덱스는 새벽에 거는 게 좋겠습니다"})
+	if status != 200 {
+		t.Fatalf("의견 = %d: %v", status, body)
+	}
+	got, err = e.st.GetMigration(context.Background(), mig.ID, false)
+	if err != nil {
+		t.Fatalf("get 2: %v", err)
+	}
+	if got.Status != store.MigrationInReview {
+		t.Errorf("의견 뒤 상태 = %q, 기대 in_review (의견은 상태를 바꾸지 않는다)", got.Status)
+	}
+	if store.ApprovalCount(got.Reviews) != 0 {
+		t.Errorf("의견이 승인으로 세어졌다: %d", store.ApprovalCount(got.Reviews))
+	}
+
+	// 지정된 사람의 승인은 통과한다.
+	danaC := loginAs(t, e, "dana")
+	status, body = danaC.do("POST", "/api/v1/migrations/"+mig.ID+"/review",
+		map[string]any{"decision": "approved", "comment": "확인했습니다"})
+	if status != 200 {
+		t.Fatalf("리뷰어 승인 = %d: %v", status, body)
+	}
+	got, err = e.st.GetMigration(context.Background(), mig.ID, false)
+	if err != nil {
+		t.Fatalf("get 3: %v", err)
+	}
+	if got.Status != store.MigrationApproved {
+		t.Errorf("승인 뒤 상태 = %q, 기대 approved", got.Status)
+	}
+}
+
+// 반려된 계획은 리뷰어를 다시 지정하면 다시 리뷰로 들어가고, 그때 지난 결정은 지워진다.
+//
+// 지우지 않으면 반려가 남아 있어, 새 검토가 들어오는 즉시 다시 반려로 돌아간다.
+func TestReassignReopensRejectedReview(t *testing.T) {
+	e, conn, mig := assignEnv(t)
+	dana := member(t, e, "dana", conn.ID, model.LevelMigrate)
+
+	alice := loginAs(t, e, "alice")
+	if status, body := alice.do("PUT", "/api/v1/migrations/"+mig.ID+"/assignment",
+		map[string]any{"assigneeId": dana.ID, "reviewerIds": []string{dana.ID}}); status != 200 {
+		t.Fatalf("지정 = %d: %v", status, body)
+	}
+
+	danaC := loginAs(t, e, "dana")
+	if status, body := danaC.do("POST", "/api/v1/migrations/"+mig.ID+"/review",
+		map[string]any{"decision": "rejected", "comment": "인덱스가 빠졌습니다"}); status != 200 {
+		t.Fatalf("반려 = %d: %v", status, body)
+	}
+	got, err := e.st.GetMigration(context.Background(), mig.ID, false)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Status != store.MigrationRejected {
+		t.Fatalf("상태 = %q, 기대 rejected", got.Status)
+	}
+
+	// 다시 부탁한다.
+	if status, body := alice.do("PUT", "/api/v1/migrations/"+mig.ID+"/assignment",
+		map[string]any{"assigneeId": dana.ID, "reviewerIds": []string{dana.ID}}); status != 200 {
+		t.Fatalf("재지정 = %d: %v", status, body)
+	}
+	got, err = e.st.GetMigration(context.Background(), mig.ID, false)
+	if err != nil {
+		t.Fatalf("get 2: %v", err)
+	}
+	if got.Status != store.MigrationInReview {
+		t.Errorf("재지정 뒤 상태 = %q, 기대 in_review", got.Status)
+	}
+	if len(got.Reviews) != 0 {
+		t.Errorf("지난 반려가 남았다: %d건 (남으면 새 검토가 들어오자마자 다시 반려된다)", len(got.Reviews))
+	}
+	if len(got.Reviewers) != 1 {
+		t.Errorf("리뷰어 지정 = %d명, 기대 1명", len(got.Reviewers))
+	}
+}

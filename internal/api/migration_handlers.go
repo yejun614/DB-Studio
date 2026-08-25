@@ -555,6 +555,16 @@ func (s *Server) handleReviewMigration(c *fiber.Ctx) error {
 	}
 
 	u := currentUser(c)
+	// 승인·반려는 리뷰어로 지정된 사람만 남긴다.
+	//
+	// 의견은 누구나 남길 수 있게 두는 이유: 지나가다 본 사람이 "이 인덱스는 운영
+	// 시간에 걸면 안 됩니다"라고 적는 길까지 막으면, 그 말은 앱 밖으로 나가고
+	// 계획 옆에 남지 않는다. 반면 승인은 책임이 따르는 결정이므로, 부탁받은
+	// 사람의 것이어야 "누구에게 물어봤고 누가 답했는가"가 이력에서 이어진다.
+	if decision != store.ReviewComment && !isDesignatedReviewer(mig, u.ID) {
+		return fail(c, fiber.StatusForbidden, "not_reviewer",
+			"리뷰어로 지정된 사람만 승인·반려할 수 있습니다. 의견은 누구나 남길 수 있습니다")
+	}
 	// 자기가 만든 계획을 자기가 승인하는 것은 검토가 아니다.
 	// 승인 2명이 필요한 경우(운영·파괴적 변경)에 이 규칙이 실질적인 안전장치가 된다.
 	if decision == store.ReviewApproved && mig.CreatedBy == u.ID &&
@@ -606,6 +616,16 @@ func (s *Server) handleReviewMigration(c *fiber.Ctx) error {
 		"review": review, "approvals": approvals,
 		"requiredApprovals": required, "status": nextStatus,
 	})
+}
+
+// isDesignatedReviewer는 그 사람이 이 마이그레이션의 리뷰어로 지정되어 있는지 본다.
+func isDesignatedReviewer(mig *store.Migration, userID string) bool {
+	for _, r := range mig.Reviewers {
+		if r.UserID == userID {
+			return true
+		}
+	}
+	return false
 }
 
 // handlePrecheckMigration은 실행 전 검사만 수행한다.
@@ -939,14 +959,26 @@ func (s *Server) handleSetMigrationAssignment(c *fiber.Ctx) error {
 	// 부탁받은 사람은 화면에 뜨지도 않는 계획을 기다리게 된다. 반대로 초안이 아닌
 	// 상태(이미 리뷰 중·승인됨·반려됨)에서는 건드리지 않는다 — 리뷰어를 한 명 더
 	// 부르는 것이 승인을 무르는 일이 되어서는 안 된다.
-	if len(reviewers) > 0 && mig.Status == store.MigrationDraft {
-		if err := s.st.SetMigrationStatus(c.Context(), mig.ID, store.MigrationInReview); err != nil {
-			var ite *store.InvalidTransitionError
-			if !errors.As(err, &ite) {
-				return err
+	if len(reviewers) > 0 {
+		// 반려된 계획은 초안을 거쳐 간다. draft 전이가 지난 결정을 지우기 때문이다 —
+		// 반려가 남아 있으면 새 검토가 들어오는 즉시 다시 반려 상태로 돌아간다.
+		steps := []string{}
+		switch mig.Status {
+		case store.MigrationDraft:
+			steps = []string{store.MigrationInReview}
+		case store.MigrationRejected:
+			steps = []string{store.MigrationDraft, store.MigrationInReview}
+		}
+		for _, next := range steps {
+			if err := s.st.SetMigrationStatus(c.Context(), mig.ID, next); err != nil {
+				var ite *store.InvalidTransitionError
+				if !errors.As(err, &ite) {
+					return err
+				}
+				// 전이할 수 없는 상태였다면 지정만 남기고 넘어간다. 지정 자체는 이미
+				// 저장됐고, 그것을 되돌리는 편이 더 놀랍다.
+				break
 			}
-			// 전이할 수 없는 상태였다면 지정만 남기고 넘어간다. 지정 자체는 이미
-			// 저장됐고, 그것을 되돌리는 편이 더 놀랍다.
 		}
 	}
 
