@@ -2134,6 +2134,18 @@ tr.is-destructive td { background: hsl(var(--h-danger) / 0.08); }
   gap: 6px 18px;
   margin: 0;
 }
+/* 담당자·리뷰어 줄. 메타(값)와 동작(버튼)이 한 줄에 있으므로 flex 로 둔다 —
+ * .mig-meta 의 격자에 넣으면 지정 버튼이 값처럼 보인다. */
+.mig-people {
+  display: flex; align-items: center; gap: 8px 18px; flex-wrap: wrap;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.mig-people-item { display: flex; align-items: center; gap: 8px; min-height: 26px; }
+.mig-people-list { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+/* 지정 버튼은 오른쪽 끝으로 민다. 이름이 몇이든 버튼 자리가 움직이지 않는다. */
+.mig-people > .btn { margin-left: auto; }
+
 .mig-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .mig-precheck h2, .mig-head h2 { display: flex; align-items: center; gap: 8px; }
 

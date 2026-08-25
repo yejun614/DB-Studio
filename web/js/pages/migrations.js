@@ -85,6 +85,8 @@ function migrationRow(item) {
       h('div', {}, h('dt', {}, '변경'), h('dd', {}, String(m.diff?.changes?.length ?? 0))),
       h('div', {}, h('dt', {}, '버전'),
         h('dd', {}, m.fromVersionNo ? `v${m.fromVersionNo}${m.toVersionNo ? ` → v${m.toVersionNo}` : ''}` : '—')),
+      h('div', {}, h('dt', {}, '담당'),
+        h('dd', {}, m.assigneeName || h('span.muted', {}, '미정'))),
       h('div', {}, h('dt', {}, '리뷰'), h('dd', {}, `${approvals}건`)),
       h('div', {}, h('dt', {}, '수정'), h('dd', {}, relativeTime(m.updatedAt))),
     ),
@@ -136,6 +138,7 @@ export async function renderMigrationDetail(outlet, params) {
         m.rolledBackAt ? metaRow('롤백 시각', formatDate(m.rolledBackAt)) : null,
         metaRow('SQL 문장', `${m.plan?.up?.length ?? 0}개`),
       ),
+      peopleRow(m, reload),
       m.error ? h('div.notice.notice-danger', {}, icon('alert'), h('div', {}, h('strong', {}, '실행 오류'), h('p', {}, m.error))) : null,
       actionBar(m, res, precheckBox, reload),
     ),
@@ -183,6 +186,119 @@ function pushPanel(m) {
 
 function metaRow(label, value) {
   return h('div.meta-row', {}, h('dt', {}, label), h('dd', {}, value));
+}
+
+// peopleRow는 "누가 끌고 가는가 · 누구의 확인을 기다리는가"를 한 줄로 보여준다.
+//
+// 상태 배지 옆이 아니라 메타 아래에 두는 이유: 이것은 계획의 속성이 아니라 사람의
+// 배정이고, 리뷰 대기가 길어질수록 가장 먼저 찾게 되는 값이다.
+function peopleRow(m, reload) {
+  const reviewers = m.reviewers ?? [];
+  return h('div.mig-people', {},
+    h('div.mig-people-item', {},
+      h('span.field-label', {}, '담당자'),
+      m.assigneeName
+        ? badge(m.assigneeName, 'accent')
+        : h('span.muted', {}, '아직 정하지 않았습니다')),
+    h('div.mig-people-item', {},
+      h('span.field-label', {}, '리뷰어'),
+      reviewers.length
+        ? h('span.mig-people-list', {}, reviewers.map((r) => badge(r.name || r.userId, 'neutral')))
+        : h('span.muted', {}, '아직 정하지 않았습니다')),
+    h('button.btn.btn-small', {
+      type: 'button',
+      onclick: () => openAssignDialog(m, reload),
+    }, icon('users'), '지정'),
+  );
+}
+
+// pendingReviewers는 지정됐지만 아직 의견을 남기지 않은 사람을 보여준다.
+//
+// 승인 수만 보면 "2/2 중 1"까지는 알아도 누구를 기다리는지는 모른다. 기다리는
+// 대상이 이름으로 보여야 재촉할 사람이 정해진다.
+function pendingReviewers(m) {
+  const decided = new Set((m.reviews ?? []).map((r) => r.reviewerId).filter(Boolean));
+  const waiting = (m.reviewers ?? []).filter((r) => !decided.has(r.userId));
+  if (waiting.length === 0) return null;
+  return h('p.field-help', {},
+    '기다리는 리뷰어: ',
+    ...waiting.map((r, i) => h('span', {}, i ? ', ' : '', h('b', {}, r.name || r.userId))));
+}
+
+// openAssignDialog는 담당자 한 명과 리뷰어 여럿을 함께 정한다.
+//
+// 후보는 서버가 고른다 — 대상 커넥션에 migrate 등급이 있는 사람만 온다. 지정해도
+// 열어 보지 못하는 사람을 고를 수 있으면, 부탁은 했는데 아무 일도 일어나지 않는다.
+function openAssignDialog(m, reload) {
+  const body = h('div', {}, spinner('사람 목록을 불러오는 중…'));
+  const footer = h('div.rollback-footer');
+  const close = openModal({
+    title: '담당자 · 리뷰어 지정',
+    width: 560,
+    body: () => body,
+    footer: () => footer,
+  });
+
+  (async () => {
+    let people;
+    try {
+      people = (await api.get(`/migrations/${encodeURIComponent(m.id)}/people`)).items ?? [];
+    } catch (err) {
+      mount(body, errorPanel(err));
+      return;
+    }
+    if (people.length === 0) {
+      mount(body, h('p.notice.notice-warn', {}, icon('alert'),
+        '이 DB의 마이그레이션 권한을 가진 사람이 없습니다. 먼저 권한을 주세요.'));
+      mount(footer, h('button.btn', { type: 'button', onclick: close }, '닫기'));
+      return;
+    }
+
+    const label = (p) => `${p.displayName || p.username} (${p.username})`;
+    const assignee = select(
+      [{ value: '', label: '정하지 않음' }, ...people.map((p) => ({ value: p.id, label: label(p) }))],
+      { value: m.assigneeId ?? '' },
+    );
+    const picked = new Set((m.reviewers ?? []).map((r) => r.userId));
+    const boxes = people.map((p) => {
+      // 이름을 box 로 두는 이유: 이 파일이 import 한 input 헬퍼를 가리면
+      // 나중에 이 블록에서 텍스트 칸을 만들 때 조용히 엉뚱한 것이 잡힌다.
+      const box = h('input', { type: 'checkbox', checked: picked.has(p.id) });
+      return { id: p.id, box, node: h('label.checkbox', {}, box, h('span', {}, label(p))) };
+    });
+
+    mount(body,
+      h('p.modal-message', {},
+        '담당자는 이 계획을 끝까지 끌고 갈 한 사람이고, 리뷰어는 검토를 부탁할 사람들입니다. ' +
+        '지정은 실행을 막거나 열지 않습니다 — 실행 조건은 그대로 승인 수입니다.'),
+      h('label.field', {}, h('span.field-label', {}, '담당자'), assignee),
+      h('div.field', {},
+        h('span.field-label', {}, '리뷰어'),
+        h('div.radio-list', {}, boxes.map((b) => b.node))),
+    );
+
+    mount(footer,
+      h('button.btn', { type: 'button', onclick: close }, '취소'),
+      h('button.btn.btn-primary', {
+        type: 'button',
+        onclick: async (e) => {
+          e.currentTarget.disabled = true;
+          try {
+            await api.put(`/migrations/${encodeURIComponent(m.id)}/assignment`, {
+              assigneeId: assignee.value,
+              reviewerIds: boxes.filter((b) => b.box.checked).map((b) => b.id),
+            });
+            close();
+            toast('담당자와 리뷰어를 저장했습니다', 'success');
+            reload();
+          } catch (err) {
+            toastError(err);
+            e.currentTarget.disabled = false;
+          }
+        },
+      }, icon('check'), '저장'),
+    );
+  })();
 }
 
 function actionBar(m, res, precheckBox, reload) {
@@ -389,6 +505,7 @@ function reviewsPanel(m, res, reload) {
         '운영 DB이거나 파괴적 변경이 포함되어 2명의 승인이 필요합니다. ' +
         '본인이 만든 계획은 승인할 수 없습니다.')
       : null,
+    pendingReviewers(m),
     reviews.length === 0
       ? h('p.muted', {}, '아직 리뷰가 없습니다')
       : h('div.mig-reviews', {}, reviews.map((r) => h('div.mig-review', {},
