@@ -284,23 +284,23 @@ func (s *Server) handleCreateMigration(c *fiber.Ctx) error {
 			strings.Join(plan.Warnings, " / "))
 	}
 
-	// 기준선이 없으면 지금 상태를 먼저 버전으로 확정한다.
-	// from_version이 없으면 나중에 "무엇으로부터의 변경인가"를 말할 수 없다.
+	// 계획을 만드는 시점에는 버전을 만들지 않는다(롤백 계획과 같은 규칙).
+	//
+	// 이력의 한 줄은 "DB 구조가 이렇게 되어 있었다"는 사실이어야 하는데, 계획은 아직
+	// 아무것도 바꾸지 않았다. 반려되거나 잊힌 계획이 남긴 줄은 아무 일도 가리키지
+	// 못한다. 버전은 실행이 끝난 뒤 결과로 등록된다(runner).
+	//
+	// 기준 버전은 지금 구조가 그 버전과 같을 때만 채운다. 어긋난 상태에서 최신 버전을
+	// 적어 두면 이력에 없는 상태를 있는 것처럼 말하게 된다. "무엇으로부터의 변경인가"는
+	// base_fingerprint와 diff에 남고, 실행 직전 사전 검사도 그 지문을 본다.
 	u := currentUser(c)
-	from, err := s.st.LatestSchemaVersion(c.Context(), conn.ID, false)
+	latest, err := s.st.LatestSchemaVersion(c.Context(), conn.ID, false)
 	if err != nil {
 		return err
 	}
-	if from == nil || from.Fingerprint != current.Fingerprint() {
-		from, _, err = s.st.SaveSchemaVersion(c.Context(), store.SaveVersionParams{
-			ConnectionID: conn.ID, Schema: current,
-			Source:   sourceForBaseline(from),
-			Note:     "마이그레이션 기준선",
-			AuthorID: u.ID, AuthorName: displayName(u),
-		})
-		if err != nil {
-			return err
-		}
+	var fromID *int64
+	if latest != nil && latest.Fingerprint == current.Fingerprint() {
+		fromID = &latest.ID
 	}
 
 	title := strings.TrimSpace(body.Title)
@@ -309,7 +309,7 @@ func (s *Server) handleCreateMigration(c *fiber.Ctx) error {
 	}
 	mig, err := s.st.CreateMigration(c.Context(), store.CreateMigrationParams{
 		ConnectionID: conn.ID, DocID: doc.ID, Title: title,
-		FromVersion: &from.ID, BaseFinger: current.Fingerprint(),
+		FromVersion: fromID, BaseFinger: current.Fingerprint(),
 		TargetSchema: doc.Schema, Plan: plan, Diff: diff, CreatedBy: u.ID,
 	})
 	if err != nil {
@@ -330,8 +330,6 @@ func (s *Server) handleCreateMigration(c *fiber.Ctx) error {
 	})
 }
 
-// sourceForBaseline은 기준선 버전의 출처를 정한다.
-// 첫 버전은 최초 임포트, 이후에 기준선을 다시 잡는 것은 외부 편집이 있었다는 뜻이다.
 // 버전 롤백.
 //
 // "v3으로 되돌린다"는 결국 **현재 구조에서 v3 구조로 가는 마이그레이션**이다.
@@ -478,13 +476,6 @@ func (s *Server) handleVersionRollback(c *fiber.Ctx) error {
 		"message": fmt.Sprintf("v%d 으로 되돌리는 계획을 만들었습니다. 검토·승인 후 실행하세요.",
 			target.VersionNo),
 	})
-}
-
-func sourceForBaseline(prev *store.SchemaVersion) string {
-	if prev == nil {
-		return store.VersionSourceImport
-	}
-	return store.VersionSourceExternal
 }
 
 // handleGetMigration은 마이그레이션 상세를 반환한다.

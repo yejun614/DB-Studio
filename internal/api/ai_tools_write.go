@@ -182,20 +182,15 @@ func applyCreateMigration(tc *toolContext, args json.RawMessage) (string, error)
 	}
 	plan := schema.BuildPlan(string(conn.Kind), diff)
 
-	// 기준선 버전이 없거나 어긋나면 지금 상태를 먼저 확정한다 (REST 경로와 동일).
-	from, err := tc.srv.st.LatestSchemaVersion(tc.ctx, conn.ID, false)
+	// 계획 시점에는 버전을 만들지 않는다 (REST 경로와 동일). 버전은 실행 결과로만
+	// 등록된다. 기준 버전은 지금 구조가 그 버전과 같을 때만 채운다.
+	latest, err := tc.srv.st.LatestSchemaVersion(tc.ctx, conn.ID, false)
 	if err != nil {
 		return "", err
 	}
-	if from == nil || from.Fingerprint != current.Fingerprint() {
-		from, _, err = tc.srv.st.SaveSchemaVersion(tc.ctx, store.SaveVersionParams{
-			ConnectionID: conn.ID, Schema: current,
-			Source: sourceForBaseline(from), Note: "마이그레이션 기준선",
-			AuthorID: tc.user.ID, AuthorName: displayName(tc.user),
-		})
-		if err != nil {
-			return "", err
-		}
+	var fromID *int64
+	if latest != nil && latest.Fingerprint == current.Fingerprint() {
+		fromID = &latest.ID
 	}
 
 	title := strings.TrimSpace(in.Title)
@@ -204,7 +199,7 @@ func applyCreateMigration(tc *toolContext, args json.RawMessage) (string, error)
 	}
 	mig, err := tc.srv.st.CreateMigration(tc.ctx, store.CreateMigrationParams{
 		ConnectionID: conn.ID, DocID: doc.ID, Title: title,
-		FromVersion: &from.ID, BaseFinger: current.Fingerprint(),
+		FromVersion: fromID, BaseFinger: current.Fingerprint(),
 		TargetSchema: doc.Schema, Plan: plan, Diff: diff, CreatedBy: tc.user.ID,
 	})
 	if err != nil {
