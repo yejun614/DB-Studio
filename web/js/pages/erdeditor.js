@@ -602,7 +602,7 @@ class Editor {
   // 대신 이름은 popover로 뜬다(CSS ::after) — 브라우저 기본 툴팁은 1초 가까이
   // 기다려야 하고, 도구 막대에서는 그 사이에 이미 다른 버튼을 찾고 있다.
   toolBtn(iconName, label, onclick, { needsEdit = false, disabled = false } = {}) {
-    return h('button.icon-btn.erd-tool-btn', {
+    return h('button.icon-btn.btn-tip', {
       type: 'button',
       disabled: disabled || (needsEdit && !this.canEdit),
       'data-tip': label,

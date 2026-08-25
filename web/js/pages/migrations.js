@@ -758,37 +758,48 @@ function versionTimeline(versions, conn, canMigrate) {
         badge(label, kind),
         h('span.muted', {}, formatDate(v.createdAt)),
         v.authorName ? h('span.muted', {}, v.authorName) : null,
+        // 다섯 개를 이름까지 붙여 늘어놓으면 한 줄을 넘겨 버전 하나가 두 줄이
+        // 된다. 이 화면은 "훑어서 언제 무엇이 바뀌었나"를 보는 곳이라 한 화면에
+        // 들어가는 버전 수가 버튼 이름보다 중요하다. 이름은 올렸을 때 뜬다.
         h('div.version-actions', {},
           // 비교보다 앞에 둔다. "그때 구조가 어땠나"는 "무엇이 달라졌나"보다 먼저
           // 오는 질문이고, 비교 화면은 그 답을 주지 않는다.
-          h('button.btn.btn-small', {
+          h('button.icon-btn.btn-tip', {
             type: 'button',
-            title: `v${v.versionNo} 의 구조를 ERD로 봅니다`,
+            'data-tip': '구조 보기',
+            'aria-label': `v${v.versionNo} 의 구조를 ERD로 봅니다`,
             onclick: () => navigate(
               `/structure?conn=${encodeURIComponent(conn.id)}&version=${v.id}`),
-          }, icon('workflow'), '구조 보기'),
-          h('button.btn.btn-small', {
+          }, icon('workflow')),
+          h('button.icon-btn.btn-tip', {
             type: 'button',
-            title: `v${v.versionNo} 의 CREATE 스크립트를 봅니다`,
+            'data-tip': 'SQL 보기',
+            'aria-label': `v${v.versionNo} 의 CREATE 스크립트를 봅니다`,
             onclick: () => showVersionSQL(conn, v),
-          }, icon('code'), 'SQL 보기'),
-          h('button.btn.btn-small', {
+          }, icon('code')),
+          h('button.icon-btn.btn-tip', {
             type: 'button',
+            'data-tip': '현재 DB와 비교',
+            'aria-label': `v${v.versionNo} 을 현재 DB 구조와 비교합니다`,
             onclick: () => showVersionDiff(conn.id, v, null, versions),
-          }, '현재 DB와 비교'),
+          }, icon('database')),
           other
-            ? h('button.btn.btn-small', {
+            ? h('button.icon-btn.btn-tip', {
               type: 'button',
-              title: `v${v.versionNo} 을 다른 버전과 비교합니다`,
+              'data-tip': '버전 비교',
+              'aria-label': `v${v.versionNo} 을 다른 버전과 비교합니다`,
               onclick: () => showVersionDiff(conn.id, v, other, versions),
-            }, '버전 비교')
+            }, icon('history'))
             : null,
+          // 되돌리기만 붉게 둔다. 나머지는 보기만 하는 버튼이고 이것만 DB를
+          // 바꾼다 — 아이콘만 남은 줄에서 그 차이가 모양으로 드러나야 한다.
           canMigrate && v.versionNo !== latest
-            ? h('button.btn.btn-small', {
+            ? h('button.icon-btn.danger.btn-tip', {
               type: 'button',
-              title: `이 버전(v${v.versionNo})의 구조로 되돌립니다`,
+              'data-tip': '롤백 — 이 구조로 되돌립니다',
+              'aria-label': `이 버전(v${v.versionNo})의 구조로 되돌립니다`,
               onclick: () => openVersionRollbackDialog(conn, v),
-            }, icon('refresh'), '롤백')
+            }, icon('undo'))
             : null,
         ),
       ),
