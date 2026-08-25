@@ -131,7 +131,11 @@ export async function renderMigrationDetail(outlet, params) {
           res.approvals >= res.requiredApprovals ? 'success' : 'neutral'),
       ),
       h('dl.mig-meta', {},
-        metaRow('기준 버전', m.fromVersionNo ? `v${m.fromVersionNo}` : '—'),
+        // 기준 버전이 비는 경우가 있다: 앱 밖에서 스키마가 바뀐 상태에서 만든
+        // 계획이다. 그 구조는 아직 이력에 없으므로 "—" 대신 그렇게 적는다.
+        metaRow('기준 버전', m.fromVersionNo
+          ? `v${m.fromVersionNo}`
+          : h('span.muted', {}, '이력에 없는 상태')),
         metaRow('결과 버전', m.toVersionNo ? `v${m.toVersionNo}` : '—'),
         metaRow('만든 시각', formatDate(m.createdAt)),
         m.appliedAt ? metaRow('적용 시각', formatDate(m.appliedAt)) : null,
