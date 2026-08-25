@@ -23,6 +23,9 @@ const (
 	MigrationApplied    = "applied"
 	MigrationRolledBack = "rolled_back"
 	MigrationFailed     = "failed"
+	// MigrationClosed는 실행하지 않기로 한 계획이다. 지우는 대신 닫아 두면
+	// "이런 계획을 세웠다가 접었다"는 사실과 그때의 리뷰가 남는다.
+	MigrationClosed = "closed"
 )
 
 // 리뷰 결정.
@@ -37,16 +40,21 @@ const (
 // 규칙을 표로 한곳에 모으는 이유: 전이 검사가 핸들러마다 흩어지면 새 경로를 추가할 때
 // 한 곳을 빠뜨리게 되고, 그러면 "승인 없이 실행" 같은 구멍이 생긴다.
 var allowedTransitions = map[string][]string{
-	MigrationDraft:    {MigrationInReview},
-	MigrationInReview: {MigrationApproved, MigrationRejected, MigrationDraft},
+	MigrationDraft:    {MigrationInReview, MigrationClosed},
+	MigrationInReview: {MigrationApproved, MigrationRejected, MigrationDraft, MigrationClosed},
 	// 승인 후에도 계획을 고칠 수 있어야 한다 — 다만 그때는 승인이 무효가 되므로
 	// draft로 돌아간다(핸들러가 리뷰 기록을 함께 지운다).
-	MigrationApproved: {MigrationApplied, MigrationFailed, MigrationDraft},
-	MigrationRejected: {MigrationDraft},
+	MigrationApproved: {MigrationApplied, MigrationFailed, MigrationDraft, MigrationClosed},
+	MigrationRejected: {MigrationDraft, MigrationClosed},
 	// 실패한 마이그레이션은 부분 적용 상태일 수 있다. 사람이 상태를 확인한 뒤
-	// 다시 계획을 세우도록 draft로만 돌린다.
-	MigrationFailed:  {MigrationDraft},
+	// 다시 계획을 세우도록 draft로만 돌린다. 닫을 수는 있다 — 부분 적용을 손으로
+	// 정리하고 이 계획은 더 쓰지 않기로 하는 경우가 있다.
+	MigrationFailed:  {MigrationDraft, MigrationClosed},
 	MigrationApplied: {MigrationRolledBack},
+	// 닫은 계획은 다시 열 수 있다. 초안으로 돌아가는 이유: 닫혀 있는 동안 대상
+	// DB가 바뀌었을 수 있고, 그때의 승인을 그대로 인정하면 지금 구조를 아무도
+	// 보지 않은 채 실행할 수 있다(draft 전이가 리뷰 기록을 지운다).
+	MigrationClosed: {MigrationDraft},
 	// 롤백된 마이그레이션은 이력이다. 다시 실행하려면 새 계획을 만든다 —
 	// 롤백 후 같은 계획을 재실행하는 것은 기준 상태가 달라 안전하지 않다.
 	MigrationRolledBack: {},
@@ -185,15 +193,18 @@ func (s *Store) CreateMigration(ctx context.Context, p CreateMigrationParams) (*
 
 	id := uuid.NewString()
 	now := nowString()
+	// 담당자는 만든 사람으로 시작한다. 계획을 만든 사람이 그것을 끌고 가는 것이
+	// 기본이고, 비워 두면 "누가 맡았나"의 답이 대부분 빈칸이 되어 그 칸을 아무도
+	// 보지 않게 된다. 다른 사람에게 넘기는 것은 지정 대화상자에서 한다.
 	_, err = s.db.ExecContext(ctx, `INSERT INTO migrations
 		(id, connection_id, doc_id, title, from_version, rollback_to_version, base_fingerprint,
 		 target_schema_json, up_sql, down_sql, plan_json, diff_json,
-		 destructive_count, irreversible, status, created_by, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 destructive_count, irreversible, status, created_by, assignee_id, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, p.ConnectionID, nullString(p.DocID), p.Title, p.FromVersion, p.RollbackTo, p.BaseFinger,
 		string(targetJSON), p.Plan.UpSQL(), p.Plan.DownSQL(), string(planJSON), string(diffJSON),
 		p.Diff.DestructiveCount, string(irrJSON), MigrationDraft,
-		nullString(p.CreatedBy), now, now)
+		nullString(p.CreatedBy), nullString(p.CreatedBy), now, now)
 	if err != nil {
 		return nil, fmt.Errorf("insert migration: %w", err)
 	}

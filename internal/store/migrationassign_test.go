@@ -30,8 +30,8 @@ func mkMigration(t *testing.T, ctx context.Context, st *Store) *Migration {
 	srv := mkServer(t, ctx, st, "pg")
 	conn := addDB(t, ctx, st, srv, "appdb")
 
-	before := &schema.Schema{}
-	after := &schema.Schema{Tables: []*schema.Table{{
+	before := &schema.Schema{Dialect: "postgres", Shape: schema.ShapeRelational}
+	after := &schema.Schema{Dialect: "postgres", Shape: schema.ShapeRelational, Tables: []*schema.Table{{
 		Name:    "orders",
 		Columns: []*schema.Column{{Name: "id", Type: schema.LogicalType{Base: schema.TypeInt}}},
 	}}}
