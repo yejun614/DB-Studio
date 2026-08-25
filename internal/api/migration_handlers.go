@@ -509,10 +509,10 @@ func (s *Server) handleMigrationStatus(c *fiber.Ctx) error {
 	// 실행/롤백은 전용 엔드포인트에서만 일어난다. 상태만 바꿔서 "적용됨"으로
 	// 만들 수 있으면 실행 기록 없는 적용이 생긴다.
 	switch next {
-	case store.MigrationInReview, store.MigrationDraft:
+	case store.MigrationInReview, store.MigrationDraft, store.MigrationClosed:
 	default:
 		return fail(c, fiber.StatusBadRequest, "bad_request",
-			"이 엔드포인트로는 리뷰 요청(in_review) 또는 초안(draft)으로만 바꿀 수 있습니다")
+			"이 엔드포인트로는 리뷰 요청(in_review)·초안(draft)·닫기(closed)로만 바꿀 수 있습니다")
 	}
 
 	if err := s.st.SetMigrationStatus(c.Context(), mig.ID, next); err != nil {
@@ -778,7 +778,7 @@ func validMigrationStatus(status string) bool {
 	switch status {
 	case store.MigrationDraft, store.MigrationInReview, store.MigrationApproved,
 		store.MigrationRejected, store.MigrationApplied, store.MigrationRolledBack,
-		store.MigrationFailed:
+		store.MigrationFailed, store.MigrationClosed:
 		return true
 	}
 	return false
@@ -933,6 +933,23 @@ func (s *Server) handleSetMigrationAssignment(c *fiber.Ctx) error {
 		return err
 	}
 
+	// 리뷰어를 정했으면 그것이 곧 리뷰 요청이다.
+	//
+	// 지정해 놓고 "리뷰 요청"을 따로 눌러야 하면 그 한 걸음을 빠뜨리는 일이 생기고,
+	// 부탁받은 사람은 화면에 뜨지도 않는 계획을 기다리게 된다. 반대로 초안이 아닌
+	// 상태(이미 리뷰 중·승인됨·반려됨)에서는 건드리지 않는다 — 리뷰어를 한 명 더
+	// 부르는 것이 승인을 무르는 일이 되어서는 안 된다.
+	if len(reviewers) > 0 && mig.Status == store.MigrationDraft {
+		if err := s.st.SetMigrationStatus(c.Context(), mig.ID, store.MigrationInReview); err != nil {
+			var ite *store.InvalidTransitionError
+			if !errors.As(err, &ite) {
+				return err
+			}
+			// 전이할 수 없는 상태였다면 지정만 남기고 넘어간다. 지정 자체는 이미
+			// 저장됐고, 그것을 되돌리는 편이 더 놀랍다.
+		}
+	}
+
 	updated, err := s.st.GetMigration(c.Context(), mig.ID, true)
 	if err != nil {
 		return err
@@ -942,6 +959,7 @@ func (s *Server) handleSetMigrationAssignment(c *fiber.Ctx) error {
 		Detail: map[string]any{
 			"connection": conn.Name, "title": mig.Title,
 			"assignee": updated.AssigneeName, "reviewers": len(updated.Reviewers),
+			"status": updated.Status,
 		},
 	})
 	return c.JSON(fiber.Map{
