@@ -3575,6 +3575,15 @@ a.stat:hover { border-color: var(--text-mute); background: hsl(var(--h-muted) / 
 .pick-opt:hover, .pick-opt.is-cursor { background: var(--surface-2); }
 .pick-empty { margin: 0; padding: 9px 10px; font-size: 12.5px; color: var(--text-mute); }
 
+/* 구조 화면의 초안 바로가기. 도구 막대 안에서 버튼들과 높이를 맞춘다. */
+.structure-draft-pick { height: 32px; padding: 0 26px 0 10px; font-size: 12.5px; max-width: 260px; }
+
+/* 구조 화면의 대화 패널은 ERD 편집기의 것을 그대로 쓴다(.erd-chat-*).
+ * 다른 모양으로 만들면 같은 일을 하는 두 화면이 서로 다르게 읽힌다. */
+.structure-view .erd-chat-list { display: flex; flex-direction: column; gap: 10px; overflow-y: auto; max-height: 52vh; }
+.structure-view .erd-chat-send { display: flex; gap: 8px; align-items: flex-end; margin-top: 10px; }
+.structure-view .erd-chat-send textarea { flex: 1; }
+
 .share-invite-row { display: flex; gap: 8px; align-items: center; }
 .share-invite-row select { flex: 1; min-width: 0; }
 

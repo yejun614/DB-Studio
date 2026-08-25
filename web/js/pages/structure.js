@@ -5,8 +5,12 @@
 // 그래서 **스키마는 편집할 수 없다.** 편집할 수 있는 것은 읽는 사람의 정리뿐이다 —
 // 카드를 어디에 놓을지, 어디에 메모를 붙일지, 무엇을 묶어 볼지.
 //
-// 그 정리는 계정별로 저장된다. 결제를 보는 사람과 배송을 보는 사람은 같은 스키마를
-// 다르게 늘어놓아야 하고, 한 사람의 정리가 다른 사람의 것을 덮어쓰면 둘 다 못 쓴다.
+// 그 정리는 커넥션마다 하나 있는 **구조 문서**에 있고, 같은 DB를 보는 사람들이 함께
+// 고친다(0032). 그래서 이 화면은 ERD 편집기와 같은 방·같은 op·같은 채팅을 쓴다 —
+// 편집은 소켓으로 즉시 나가고, 서버가 seq를 붙여 모두에게 되돌려준다.
+//
+// 과거 버전을 보는 중에는 방을 열지 않는다. 그 화면은 지금이 아니라 그때를 보는
+// 곳이라 함께 고칠 것이 없다.
 import { api } from '../core/api.js';
 import { state, kindLabel } from '../core/store.js';
 import {
@@ -18,11 +22,10 @@ import { navigate } from '../core/router.js';
 import { serverDbPicker } from '../core/connpick.js';
 import { panelResizeHandle, attachPanelResize } from '../core/panelresize.js';
 import { errorPanel } from './users.js';
-
-// 배치를 저장하기까지 기다리는 시간.
-// 카드를 옮길 때마다 저장하면 드래그 한 번에 요청이 수십 개 나간다. 반대로 너무
-// 길면 탭을 닫았을 때 방금 한 정리를 잃는다.
-const SAVE_DELAY = 1200;
+import { ErdSession } from '../core/erdsocket.js';
+// 구조 화면과 ERD 편집기는 같은 op를 주고받는다. 반영 규칙을 두 벌로 두면
+// 언젠가 어긋나고, 그때 조용히 사라지는 것은 남의 편집이다.
+import { applyLightOp } from './erdeditor.js';
 
 // 메모와 그룹에 쓸 색. ERD 편집기와 같은 팔레트여야 두 화면이 같은 언어로 읽힌다.
 const TINTS = [
@@ -84,8 +87,17 @@ class StructureView {
     this.servers = servers ?? [];
     this.data = null;
     this.selection = null;
-    this.saveTimer = null;
-    this.dirty = false;
+    // 실시간 방 상태. docID가 비어 있으면 과거 시점을 보는 중이다.
+    this.docID = '';
+    this.canEdit = false;
+    this.session = null;
+    this.participants = [];
+    this.you = null;
+    // 오른쪽 패널은 인스펙터와 대화가 번갈아 쓴다. 둘을 같이 띄우면 캔버스가 좁아지고,
+    // 좁은 캔버스는 이 화면의 목적(전체를 훑어보기)을 정면으로 해친다.
+    this.tab = 'inspect';
+    this.chat = [];
+    this.unread = 0;
   }
 
   async start() {
@@ -97,7 +109,8 @@ class StructureView {
   stop() {
     // 떠나기 전에 미뤄둔 저장을 반드시 보낸다. 여기서 흘리면 사람이 방금 정리한
     // 배치가 아무 표시 없이 사라지고, 다음에 열었을 때 원래대로 돌아가 있다.
-    this.flushSave();
+    this.session?.close();
+    this.session = null;
     this.canvas?.destroy();
     if (this.unbind) this.unbind();
   }
@@ -107,21 +120,20 @@ class StructureView {
       usable: this.targets,
       servers: this.servers,
       currentId: this.conn.id,
-      onPick: (id) => {
-        this.flushSave();
-        navigate(`/structure?conn=${encodeURIComponent(id)}`);
-      },
+      onPick: (id) => navigate(`/structure?conn=${encodeURIComponent(id)}`),
     });
 
     this.versionSelect = select([{ value: '', label: '현재 DB (최신)' }], { value: this.versionParam });
     this.versionSelect.addEventListener('change', () => {
-      this.flushSave();
       const v = this.versionSelect.value;
       navigate(`/structure?conn=${encodeURIComponent(this.conn.id)}`
         + (v ? `&version=${encodeURIComponent(v)}` : ''));
     });
 
-    this.saveChip = h('span.structure-save');
+    // 저장 표시가 아니라 연결 표시다. 편집은 op로 즉시 나가므로 "저장 대기"라는
+    // 상태가 없다 — 대신 "지금 연결되어 있는가"가 사람이 알아야 할 사실이다.
+    this.statusChip = h('span.erd-conn-status', {}, '연결 중…');
+    this.participantsBox = h('div.erd-participants');
     this.sourceInfo = h('span.muted.small');
     this.canvasWrap = h('div.erd-canvas-wrap');
     this.panel = h('aside.erd-panel');
@@ -140,7 +152,7 @@ class StructureView {
           h('span.muted', {}, `${this.conn.name} · ${kindLabel(this.conn.kind)}`),
           this.sourceInfo,
         ),
-        h('div.erd-head-side', {}, this.saveChip),
+        h('div.erd-head-side', {}, this.participantsBox, this.statusChip),
       ),
       h('div.card.filter-bar', {},
         ...this.picker.nodes,
@@ -165,22 +177,31 @@ class StructureView {
       onSelect: (key) => this.select(key ? { kind: 'table', id: key } : null),
       onSelectNote: (id) => this.select({ kind: 'note', id }),
       onSelectGroup: (id) => this.select({ kind: 'group', id }),
-      // 배치를 바꾸는 세 가지. 캔버스가 이미 로컬 상태를 갱신했으므로
-      // 여기서는 "저장해야 한다"고 표시만 한다.
-      onTableMove: () => this.markDirty(),
-      onNoteMove: () => this.markDirty(),
-      onNoteResize: () => this.markDirty(),
-      onGroupMove: () => this.markDirty(),
-      onGroupResize: () => this.markDirty(),
-      onToggleCollapse: (key) => this.toggleCollapse(key),
+      // 배치를 바꾸는 것들. 캔버스가 로컬 상태를 이미 갱신했으므로 같은 변경을
+      // op로 보내기만 한다 — 서버가 seq를 붙여 모두에게 되돌려준다.
+      onTableMove: (key, x, y) => this.op('table.move', { key, x, y }),
+      onNoteMove: (id, x, y) => this.op('note.update', { id, x, y }),
+      onNoteResize: (id, w, h) => this.op('note.update', { id, w, h }),
+      onGroupMove: (id, x, y) => this.op('group.update', { id, x, y }),
+      onGroupResize: (id, w, h) => this.op('group.update', { id, w, h }),
+      onToggleCollapse: (key, geom) => this.op('table.move', {
+        key, x: geom.x, y: geom.y, collapsed: !geom.layout.collapsed,
+      }),
+      // 커서는 편집이 아니라 존재의 표시다. 저장하지 않고 흘려보낸다.
+      onCursorMove: (pt) => this.session?.presence({ cursor: pt }),
       // 두 번 눌러도 인스펙터로 간다. 편집기가 두 벌이면 한쪽만 고치게 된다.
       onEditNote: (note) => this.select({ kind: 'note', id: note.id }),
       onEditGroup: (group) => this.select({ kind: 'group', id: group.id }),
     });
 
-    // 탭을 닫거나 새로고침할 때도 미뤄둔 저장을 보낸다.
-    const onHide = () => this.flushSave();
+    // 탭이 숨으면 소켓을 잠시 놓는다. 열어 둔 탭마다 참여자로 남으면 "지금 누가
+    // 보고 있는가"가 뜻을 잃는다.
+    const onHide = () => this.session?.suspend();
+    const onShow = () => this.session?.resume();
     window.addEventListener('pagehide', onHide);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') onHide(); else onShow();
+    });
     this.unbind = () => window.removeEventListener('pagehide', onHide);
   }
 
@@ -219,13 +240,14 @@ class StructureView {
     this.data = res;
 
     // 캔버스가 기대하는 모양(문서)으로 맞춘다. 스키마는 서버가 준 것 그대로이고,
-    // 배치·메모·그룹은 이 사람의 것이다.
+    // 배치·메모·묶음은 구조 문서(함께 보는 것)의 것이다.
     this.doc = {
       schema: res.schema,
       layout: res.layout ?? {},
       notes: res.notes ?? [],
       groups: res.groups ?? [],
     };
+    this.canEdit = Boolean(res.canEdit);
 
     this.selection = null;
     this.canvas.setSelection(null);
@@ -236,11 +258,14 @@ class StructureView {
     this.renderPanel();
     this.renderSource();
     this.renderDBNotes();
+    // 실시간 방에 붙는다. 주소가 문서 하나를 가리키므로 커넥션을 바꾸면 방도 바뀐다.
+    this.connect(res.documentId ?? '');
+    this.loadDrafts();
 
     // 서버가 새 테이블에 자리를 잡아 줬으면 그 사실을 남긴다.
     // 저장해 두지 않으면 다음에 열 때 또 새로 배치되어, 옮겨 둔 것과 섞인다.
     if (res.placed > 0) {
-      this.markDirty();
+      // 자리는 서버가 이미 문서에 넣어 두었다(구조 문서 갱신). 여기서는 알리기만 한다.
       toast(`새 테이블 ${res.placed}개를 배치했습니다`, 'info');
     }
   }
@@ -297,11 +322,26 @@ class StructureView {
   renderToolbar() {
     const readOnly = this.data?.source?.kind === 'version';
     mount(this.toolbar,
+      // 메모·묶음은 함께 보는 것이라 편집 등급(erd)이 있어야 손댈 수 있다.
+      // 없는 사람에게 버튼만 보여주면 눌러 본 뒤에야 알게 된다.
+      this.canEdit && !readOnly
+        ? h('div.erd-tool-group', {},
+          h('button.btn.btn-small', { type: 'button', onclick: () => this.addNote() },
+            icon('edit'), '메모'),
+          h('button.btn.btn-small', { type: 'button', onclick: () => this.addGroup() },
+            icon('list'), '그룹'),
+        )
+        : null,
       h('div.erd-tool-group', {},
-        h('button.btn.btn-small', { type: 'button', onclick: () => this.addNote() },
-          icon('edit'), '메모'),
-        h('button.btn.btn-small', { type: 'button', onclick: () => this.addGroup() },
-          icon('list'), '그룹'),
+        h('button.btn.btn-small', {
+          type: 'button',
+          class: this.tab === 'chat' ? 'btn btn-small btn-active' : 'btn btn-small',
+          onclick: () => {
+            this.tab = this.tab === 'chat' ? 'inspect' : 'chat';
+            this.renderPanel();
+          },
+        }, icon('chat'), '대화',
+        this.unread > 0 ? badge(String(this.unread), 'info') : null),
       ),
       h('div.erd-tool-group', {},
         h('button.icon-btn', { type: 'button', title: '축소', onclick: () => this.canvas.zoom(1.25) }, '−'),
@@ -320,6 +360,9 @@ class StructureView {
           icon('refresh'), '새로고침'),
         // 구조에서 곧바로 설계를 시작하는 흐름. 지금 보고 있는 것을 그대로
         // 초안으로 옮기므로, ERD 화면에서 커넥션을 다시 고를 필요가 없다.
+        // 작업 중인 초안으로 건너뛰는 길. 한 DB에 초안이 여럿일 수 있으므로
+        // 고르개로 둔다 — 목록 화면을 거쳐 다시 찾아 들어갈 이유가 없다.
+        this.drafts?.length ? this.draftPicker() : null,
         h('button.btn.btn-small', { type: 'button', onclick: () => this.createDraft() },
           icon('plus'), '이 구조로 초안 만들기'),
         // 버전 이력으로 돌아가는 길. 여기 오는 흔한 경로가 그 화면의 "구조 보기"이고,
@@ -359,6 +402,12 @@ class StructureView {
   }
 
   renderPanel() {
+    if (this.tab === 'chat') {
+      this.unread = 0;
+      mount(this.panel, this.chatView());
+      this.renderToolbar();
+      return;
+    }
     if (this.selection?.kind === 'note') {
       const note = this.note(this.selection.id);
       if (note) {
@@ -447,13 +496,6 @@ class StructureView {
 
   // ---------- 배치 편집 ----------
 
-  toggleCollapse(key) {
-    const box = this.doc.layout[key] ?? { x: 80, y: 80 };
-    this.doc.layout[key] = { ...box, collapsed: !box.collapsed };
-    this.canvas.render();
-    this.markDirty();
-  }
-
   addNote() {
     const box = h('textarea.input.textarea', { rows: 3, placeholder: '메모 내용' });
     openModal({
@@ -461,7 +503,7 @@ class StructureView {
       width: 460,
       body: () => [
         box,
-        h('p.field-help', {}, '이 메모는 내 계정에만 저장됩니다. 다른 사람에게는 보이지 않습니다.'),
+        h('p.field-help', {}, '이 메모는 이 DB를 보는 모두에게 보입니다.'),
       ],
       footer: (close) => [
         h('button.btn', { type: 'button', onclick: close }, '취소'),
@@ -469,9 +511,10 @@ class StructureView {
           type: 'button',
           onclick: () => {
             const at = this.canvas.center(100, 40);
-            this.doc.notes.push({ id: newLocalID('n'), text: box.value, ...at, color: '' });
+            const note = { id: newLocalID('n'), text: box.value, ...at, color: '' };
+            this.doc.notes.push(note);
             this.canvas.render();
-            this.markDirty();
+            this.op('note.add', note);
             close();
           },
         }, '추가'),
@@ -489,7 +532,7 @@ class StructureView {
       if (note.text === box.value) return;
       note.text = box.value;
       this.canvas.render();
-      this.markDirty();
+      this.op('note.update', { id: note.id, text: note.text });
     };
     box.addEventListener('blur', commit);
 
@@ -505,7 +548,7 @@ class StructureView {
           this.tintPicker(note.color ?? '', (value) => {
             note.color = value;
             this.canvas.render();
-            this.markDirty();
+            this.op('note.update', { id: note.id, color: value });
             this.renderPanel();
           })),
         h('p.field-help', {}, '크기는 캔버스에서 오른쪽 아래 모서리를 끌어 정합니다.'),
@@ -515,7 +558,7 @@ class StructureView {
             this.doc.notes = this.doc.notes.filter((n) => n.id !== note.id);
             this.canvas.setDoc(this.doc);
             this.select(null);
-            this.markDirty();
+            this.op('note.delete', { id: note.id });
           },
         }, icon('trash'), '메모 삭제'),
       ),
@@ -530,7 +573,7 @@ class StructureView {
       if (next === (group.label ?? '')) return;
       group.label = next;
       this.canvas.render();
-      this.markDirty();
+      this.op('group.update', { id: group.id, label: next });
     };
     nameInput.addEventListener('blur', commit);
     nameInput.addEventListener('keydown', (e) => {
@@ -551,17 +594,17 @@ class StructureView {
           this.tintPicker(group.color ?? '', (value) => {
             group.color = value;
             this.canvas.render();
-            this.markDirty();
+            this.op('group.update', { id: group.id, color: value });
             this.renderPanel();
           })),
-        h('p.field-help', {}, '크기와 위치는 캔버스에서 끌어 정합니다. 정리는 내 계정에만 저장됩니다.'),
+        h('p.field-help', {}, '크기와 위치는 캔버스에서 끌어 정합니다. 이 정리는 함께 봅니다.'),
         h('button.btn.btn-danger-ghost.btn-block', {
           type: 'button',
           onclick: () => {
             this.doc.groups = this.doc.groups.filter((g) => g.id !== group.id);
             this.canvas.setDoc(this.doc);
             this.select(null);
-            this.markDirty();
+            this.op('group.delete', { id: group.id });
           },
         }, icon('trash'), '그룹 삭제'),
       ),
@@ -608,12 +651,13 @@ class StructureView {
           type: 'button',
           onclick: () => {
             const at = this.canvas.center(160, 120);
-            this.doc.groups.push({
+            const group = {
               id: newLocalID('g'), label: nameInput.value.trim(), ...at,
               w: 320, h: 240, color,
-            });
+            };
+            this.doc.groups.push(group);
             this.canvas.render();
-            this.markDirty();
+            this.op('group.add', group);
             close();
           },
         }, '추가'),
@@ -647,7 +691,47 @@ class StructureView {
     this.canvas.setDoc(this.doc);
     this.canvas.fitView();
     this.canvas.render();
-    this.markDirty();
+    // 카드마다 op 하나. 좌표 대입이라 순서가 뒤바뀌어도 결과가 같고, 함께 보는
+    // 사람의 화면도 같은 자리로 움직인다.
+    for (const [key, box] of Object.entries(next)) {
+      this.op('table.move', { key, x: box.x, y: box.y });
+    }
+  }
+
+  // loadDrafts는 이 커넥션의 ERD 초안 목록을 받아 둔다.
+  //
+  // 실패해도 조용히 넘어간다. 초안 바로가기는 편의이고, 그것 때문에 구조가 안 보이면
+  // 잃는 것이 더 크다.
+  async loadDrafts() {
+    try {
+      const res = await api.get('/erd/documents/');
+      // 목록은 {items: [{document, connection, ...}]} 모양이다.
+      this.drafts = (res.items ?? [])
+        .map((it) => it.document)
+        .filter((d) => d && d.connectionId === this.conn.id)
+        .sort((x, y) => String(y.updatedAt).localeCompare(String(x.updatedAt)));
+    } catch {
+      this.drafts = [];
+    }
+    this.renderToolbar();
+  }
+
+  // draftPicker는 이 DB의 초안 중 하나로 건너뛰는 고르개다.
+  draftPicker() {
+    const picker = select([
+      { value: '', label: `ERD 초안 (${this.drafts.length})` },
+      ...this.drafts.map((d) => ({
+        value: d.id,
+        label: `${d.name}${d.status && d.status !== 'draft' ? ` · ${draftStatusLabel(d.status)}` : ''}`,
+      })),
+    ], { value: '' });
+    picker.classList.add('structure-draft-pick');
+    picker.title = '이 DB로 작업 중인 ERD 초안으로 갑니다';
+    picker.addEventListener('change', () => {
+      if (!picker.value) return;
+      navigate(`/erd/${encodeURIComponent(picker.value)}`);
+    });
+    return picker;
   }
 
   // createDraft는 지금 보고 있는 커넥션으로 ERD 초안을 만든다.
@@ -689,48 +773,208 @@ class StructureView {
     });
   }
 
-  // ---------- 저장 ----------
+  // ---------- 실시간 ----------
 
-  markDirty() {
-    this.dirty = true;
-    mount(this.saveChip, '저장 대기 중…');
-    this.saveChip.className = 'structure-save is-pending';
-    clearTimeout(this.saveTimer);
-    this.saveTimer = setTimeout(() => this.save(), SAVE_DELAY);
-  }
-
-  // flushSave는 미뤄둔 저장을 지금 보낸다.
+  // op는 편집 하나를 방에 보낸다.
   //
-  // 화면을 떠날 때 부르므로 응답을 기다리지 않는다. 기다리면 페이지 전환이
-  // 그만큼 멈추고, 실패해도 그때는 알릴 화면이 이미 없다.
-  flushSave() {
-    if (!this.dirty) return;
-    clearTimeout(this.saveTimer);
-    this.save();
+  // 로컬 반영은 호출부가 이미 했다. 낙관적으로 먼저 그리지 않으면 왕복 지연 때문에
+  // 드래그와 타이핑이 끊기기 때문이다 — 서버는 같은 op에 seq를 붙여 되돌려주고,
+  // 거부하면 문서 전체를 함께 보내 화면을 바로잡는다.
+  op(kind, payload) {
+    if (!this.session || !this.canEdit) return null;
+    return this.session.send(kind, payload);
   }
 
-  async save() {
-    if (!this.doc) return;
-    this.dirty = false;
-    const body = {
-      layout: this.doc.layout ?? {},
-      notes: this.doc.notes ?? [],
-      groups: this.doc.groups ?? [],
+  // connect는 이 커넥션의 구조 문서 방에 붙는다.
+  //
+  // 과거 버전을 보는 중에는 방이 없다(documentId가 비어 온다). 그 화면은 지금이
+  // 아니라 그때를 보는 곳이라 함께 고칠 것이 없다.
+  connect(docID) {
+    if (this.session && this.docID === docID) return;
+    this.session?.close();
+    this.session = null;
+    this.docID = docID;
+    if (!docID) {
+      this.setStatus('past');
+      return;
+    }
+    this.session = new ErdSession(docID, {
+      onStatus: (state) => this.setStatus(state),
+      onInit: (msg) => this.onDocument(msg),
+      onState: (msg) => this.onDocument(msg),
+      onOp: (op, mine, hasDoc) => this.onOp(op, mine, hasDoc),
+      onReject: (msg) => this.onReject(msg),
+      onPresence: (list) => this.onPresence(list),
+      onCursor: (msg) => this.onCursor(msg),
+      onChat: (m) => this.onChat(m),
+      onError: (message) => {
+        toast(message, 'error');
+        // 거부된 편집의 미리보기가 화면에 남지 않게 문서를 다시 받는다.
+        this.session?.resync(true);
+      },
+    });
+    this.session.connect();
+  }
+
+  setStatus(state) {
+    const map = {
+      connected: ['실시간 연결됨', 'is-ok'],
+      reconnecting: ['다시 연결하는 중…', 'is-warn'],
+      disconnected: ['연결 끊김', 'is-bad'],
+      error: ['연결 오류', 'is-bad'],
+      past: ['과거 시점 보기', ''],
     };
-    try {
-      await api.put(`/connections/${encodeURIComponent(this.conn.id)}/structure/view`, body);
-      // 저장하는 동안 또 옮겼으면 다시 저장 대기 상태다. 여기서 "저장됨"으로
-      // 덮어쓰면 아직 저장되지 않은 것을 저장됐다고 말하게 된다.
-      if (this.dirty) return;
-      mount(this.saveChip, '저장됨');
-      this.saveChip.className = 'structure-save is-ok';
-    } catch (err) {
-      this.dirty = true;
-      mount(this.saveChip, '저장 실패');
-      this.saveChip.className = 'structure-save is-bad';
-      toast(`배치를 저장하지 못했습니다: ${err.message}`, 'error');
+    const [label, cls] = map[state] ?? ['연결 중…', ''];
+    mount(this.statusChip, label);
+    this.statusChip.className = `erd-conn-status ${cls}`.trim();
+  }
+
+  // onDocument는 서버가 보낸 문서 전체로 화면을 맞춘다(접속·재동기화·거부 뒤).
+  onDocument(msg) {
+    if (!msg.document) return;
+    const doc = msg.document;
+    this.doc = {
+      schema: doc.schema,
+      layout: doc.layout ?? {},
+      notes: doc.notes ?? [],
+      groups: doc.groups ?? [],
+    };
+    if (msg.you) this.you = msg.you;
+    if (msg.chat) {
+      this.chat = msg.chat;
+      if (this.tab === 'chat') this.renderPanel();
+    }
+    this.canEdit = Boolean(msg.you?.canEdit ?? this.canEdit);
+    this.pruneSelection();
+    this.canvas.setDoc(this.doc);
+    this.canvas.render();
+    this.renderPanel();
+  }
+
+  onOp(op, mine, hasDoc) {
+    if (hasDoc) return; // 문서가 함께 왔으므로 이미 반영됐다
+    applyLightOp(this.doc, op);
+    this.pruneSelection();
+    this.canvas.setDoc(this.doc);
+    this.canvas.render();
+    // 지금 인스펙터에 떠 있는 대상이 바뀌었으면 패널도 다시 그린다.
+    if (this.touchesSelection(op)) this.renderPanel();
+  }
+
+  onReject(msg) {
+    toast(msg.reason ?? '편집이 거부되었습니다', 'error');
+    if (msg.document) this.onDocument(msg);
+  }
+
+  // touchesSelection은 이 op가 지금 고른 대상을 건드리는지 본다.
+  // 남이 저쪽 끝에서 카드를 옮길 때마다 패널을 다시 그리면 입력하던 칸이 튄다.
+  touchesSelection(op) {
+    if (!this.selection) return false;
+    const p = op.payload ?? {};
+    switch (this.selection.kind) {
+      case 'table': return op.kind === 'table.move' && p.key === this.selection.id;
+      case 'note': return op.kind.startsWith('note.') && p.id === this.selection.id;
+      case 'group': return op.kind.startsWith('group.') && p.id === this.selection.id;
+      default: return false;
     }
   }
+
+  // pruneSelection은 사라진 대상을 고른 상태를 풀어 준다.
+  // 없는 메모를 편집하는 패널이 남아 있으면 그 뒤의 편집이 줄줄이 거부된다.
+  pruneSelection() {
+    const sel = this.selection;
+    if (!sel) return;
+    if (sel.kind === 'note' && !this.note(sel.id)) this.selection = null;
+    if (sel.kind === 'group' && !this.group(sel.id)) this.selection = null;
+    this.canvas.setSelection(this.selection);
+  }
+
+  onPresence(list) {
+    this.participants = list ?? [];
+    this.canvas.setParticipants(this.participants, this.you?.clientId);
+    this.renderParticipants();
+    this.canvas.renderCursors();
+  }
+
+  onCursor(msg) {
+    if (!msg.cursor || msg.clientId === this.you?.clientId) return;
+    const who = this.participants.find((x) => x.clientId === msg.clientId);
+    this.canvas.setCursor(msg.clientId, {
+      x: msg.cursor.x, y: msg.cursor.y,
+      color: who?.color ?? '#888', name: who?.userName ?? '',
+    });
+  }
+
+  renderParticipants() {
+    const others = this.participants.filter((p) => p.clientId !== this.you?.clientId);
+    mount(this.participantsBox, others.slice(0, 6).map((p) => h('span.erd-avatar', {
+      style: { background: p.color ?? '#888' },
+      'data-tip': p.userName + (p.canEdit ? '' : ' (읽기 전용)'),
+    }, (p.userName ?? '?').slice(0, 1))));
+  }
+
+  // ---------- 대화 ----------
+
+  onChat(message) {
+    this.chat.push(message);
+    if (this.tab === 'chat') {
+      this.renderPanel();
+      return;
+    }
+    // 대화를 보고 있지 않으면 읽지 않은 수만 표시한다. 탭을 강제로 열면
+    // 지금 보고 있던 테이블이 화면에서 사라진다.
+    this.unread += 1;
+    this.renderToolbar();
+  }
+
+  chatView() {
+    const box = h('textarea.input.textarea', {
+      rows: 2, placeholder: '이 DB를 보는 사람들에게 남기기',
+      onkeydown: (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          send();
+        }
+      },
+    });
+    const send = () => {
+      const body = box.value.trim();
+      if (!body || !this.session) return;
+      this.session.chat(body);
+      box.value = '';
+    };
+    const list = h('div.erd-chat-list', {}, this.chat.length === 0
+      ? h('p.muted.small', {}, '아직 대화가 없습니다. 이 구조를 함께 보는 사람들에게 남겨 보세요.')
+      : this.chat.map((m) => h('div.erd-chat-msg', {},
+        h('div.erd-chat-msg-head', {},
+          h('strong', {}, m.userName || '알 수 없음'),
+          h('span.muted.small', {}, relativeTime(m.createdAt))),
+        h('p', {}, m.body))));
+    // 새 줄이 아래에 쌓이므로 열 때마다 맨 아래를 보여준다.
+    queueMicrotask(() => { list.scrollTop = list.scrollHeight; });
+
+    return [
+      h('div.erd-panel-head', {},
+        h('h2', {}, '대화'),
+        h('button.icon-btn', {
+          type: 'button', title: '닫기', onclick: () => { this.tab = 'inspect'; this.renderPanel(); },
+        }, icon('x'))),
+      h('div.erd-panel-body', {},
+        list,
+        this.session
+          ? h('div.erd-chat-send', {}, box,
+            h('button.btn.btn-small.btn-primary', { type: 'button', onclick: send }, '보내기'))
+          : h('p.field-help', {}, '과거 시점을 보는 중에는 대화에 참여할 수 없습니다.'),
+      ),
+    ];
+  }
+
+}
+
+// draftStatusLabel은 초안 상태를 고르개에 짧게 적는다.
+function draftStatusLabel(status) {
+  const map = { in_review: '리뷰 중', applied: '적용됨', archived: '보관' };
+  return map[status] ?? status;
 }
 
 function keyOf(tbl) {
