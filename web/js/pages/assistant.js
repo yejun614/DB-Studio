@@ -10,7 +10,7 @@ import {
   badge, envBadge, toast, toastError, relativeTime, openModal, confirmDialog,
 } from '../core/ui.js';
 import { navigate, currentPath } from '../core/router.js';
-import { openFloatPanel, panelModal } from '../core/floatpanel.js';
+import { openFloatPanel, panelModal, isPanelOpen, closeFloatPanel } from '../core/floatpanel.js';
 import { renderMarkdown } from '../core/markdown.js';
 import { errorPanel } from './users.js';
 import { serverDbPicker, groupedSelect } from '../core/connpick.js';
@@ -46,6 +46,19 @@ export async function renderAssistant(outlet, params, query) {
 
 // ASSISTANT_PANEL은 떠 있는 어시스턴트 창의 이름이다. 하나만 열린다.
 export const ASSISTANT_PANEL = 'assistant';
+
+// toggleAssistantPopup은 떠 있으면 닫고 없으면 연다.
+//
+// 사이드바 메뉴가 이것을 쓴다. 열려 있는데 같은 메뉴를 눌러도 아무 일이 없으면,
+// 사람은 "안 눌렸나" 하고 다시 누른다 — 그러다 창을 옮겨 둔 것을 잊고 화면 밖에서
+// 찾게 된다. 누르는 것으로 닫을 수 있어야 그 자리에서 확인이 끝난다.
+export function toggleAssistantPopup(sessionId = '') {
+  if (isPanelOpen(ASSISTANT_PANEL)) {
+    closeFloatPanel(ASSISTANT_PANEL);
+    return null;
+  }
+  return openAssistantPopup(sessionId);
+}
 
 // openAssistantPopup은 어시스턴트를 팝업으로 연다.
 //

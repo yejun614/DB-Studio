@@ -31,7 +31,7 @@ import { renderBackups } from './pages/backups.js';
 import { renderMacros, renderMacroRuns } from './pages/macros.js';
 import { renderMacroEditor } from './pages/macroeditor.js';
 import { renderTriggers } from './pages/triggers.js';
-import { renderAssistant, openAssistantPopup } from './pages/assistant.js';
+import { renderAssistant, toggleAssistantPopup } from './pages/assistant.js';
 import { renderManual } from './pages/manual.js';
 import { renderAbout } from './pages/about.js';
 import { renderAudit } from './pages/audit.js';
@@ -214,7 +214,7 @@ function buildShell() {
         nav.appendChild(h('button.nav-item.nav-tool', {
           type: 'button',
           dataset: { path: item.path },
-          onclick: () => openAssistantPopup(),
+          onclick: () => toggleAssistantPopup(),
         }, icon(item.icon, 18), h('span', {}, item.label)));
         continue;
       }
