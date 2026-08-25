@@ -3580,12 +3580,6 @@ a.stat:hover { border-color: var(--text-mute); background: hsl(var(--h-muted) / 
 /* 다른 시점을 보고 있는 참여자. 커서가 서로 보이지 않는 이유가 여기서 읽힌다. */
 .erd-avatar.is-elsewhere { opacity: 0.45; }
 
-/* 구조 화면의 대화 패널은 ERD 편집기의 것을 그대로 쓴다(.erd-chat-*).
- * 다른 모양으로 만들면 같은 일을 하는 두 화면이 서로 다르게 읽힌다. */
-.structure-view .erd-chat-list { display: flex; flex-direction: column; gap: 10px; overflow-y: auto; max-height: 52vh; }
-.structure-view .erd-chat-send { display: flex; gap: 8px; align-items: flex-end; margin-top: 10px; }
-.structure-view .erd-chat-send textarea { flex: 1; }
-
 .share-invite-row { display: flex; gap: 8px; align-items: center; }
 .share-invite-row select { flex: 1; min-width: 0; }
 

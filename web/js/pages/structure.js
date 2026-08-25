@@ -993,23 +993,24 @@ class StructureView {
   }
 
   chatView() {
+    // 패널의 직계 자식으로 둔다(.erd-panel-body 로 싸지 않는다). 목록이 flex: 1 로
+    // 남는 높이를 먹고 입력칸이 아래에 붙는 구조가 ERD 설계 화면과 같아야 한다.
     return [
       h('div.erd-panel-head', {},
         h('h2', {}, '대화'),
         h('button.icon-btn', {
           type: 'button', title: '속성으로', onclick: () => { this.tab = 'inspect'; this.renderPanel(); },
         }, icon('x'))),
-      h('div.erd-panel-body', {},
-        ...roomChatView({
-          messages: this.chat,
-          participants: this.participants.length,
-          placeholder: '이 DB를 보는 사람들에게 남기기',
-          emptyText: '아직 대화가 없습니다. 이 구조를 함께 보는 사람들에게 남겨 보세요.',
-          onSend: (body) => this.session?.chat(body),
-          // 방은 DB 기준이라 과거 시점에서도 대화는 된다. 방이 아예 없는 경우
-          // (문서를 열지 못한 상태)에만 입력칸을 내린다.
-          disabledNote: this.session ? '' : '연결되지 않아 대화를 보낼 수 없습니다.',
-        })),
+      ...roomChatView({
+        messages: this.chat,
+        participants: this.participants.length,
+        placeholder: '이 DB를 보는 사람들에게 남기기',
+        emptyText: '아직 대화가 없습니다. 이 구조를 함께 보는 사람들에게 남겨 보세요.',
+        onSend: (body) => this.session?.chat(body),
+        // 방은 DB 기준이라 과거 시점에서도 대화는 된다. 방이 아예 없는 경우
+        // (문서를 열지 못한 상태)에만 입력칸을 내린다.
+        disabledNote: this.session ? '' : '연결되지 않아 대화를 보낼 수 없습니다.',
+      }),
     ];
   }
 
