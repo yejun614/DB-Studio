@@ -422,22 +422,28 @@ func (s *Server) handleVersionRollback(c *fiber.Ctx) error {
 			strings.Join(plan.Warnings, " / "))
 	}
 
-	// 지금 상태가 버전으로 남아 있지 않으면 먼저 확정한다.
-	// 그러지 않으면 되돌린 뒤 "무엇으로부터 되돌렸는가"를 말할 수 없다.
-	from, err := s.st.LatestSchemaVersion(c.Context(), conn.ID, false)
+	// 계획을 만드는 시점에는 버전을 만들지 않는다.
+	//
+	// 이력의 한 줄은 "DB 구조가 이렇게 되어 있었다"는 사실이어야 하는데, 계획은
+	// 아직 아무것도 바꾸지 않았다. 승인되지 않거나 반려되면 그 줄은 영영 뜻을 갖지
+	// 못한 채 남는다. 순서는 계획 → 리뷰 → 승인 → 실행이고, 버전은 실행이 끝난 뒤
+	// 결과로 등록된다(runner).
+	//
+	// 그러면 "무엇으로부터 되돌렸는가"는 어디에 남는가: 마이그레이션 자체다.
+	// base_fingerprint 는 계획 시점의 실제 구조를 가리키고, diff 에는 되돌릴 변경이
+	// 그대로 들어 있다. 실행 직전 사전 검사가 그 지문과 실제 DB를 대조하므로,
+	// 기준선 버전이 없다고 해서 안전장치가 약해지지는 않는다.
+	latest, err := s.st.LatestSchemaVersion(c.Context(), conn.ID, false)
 	if err != nil {
 		return err
 	}
-	if from == nil || from.Fingerprint != current.Fingerprint() {
-		from, _, err = s.st.SaveSchemaVersion(c.Context(), store.SaveVersionParams{
-			ConnectionID: conn.ID, Schema: current,
-			Source:   sourceForBaseline(from),
-			Note:     "롤백 기준선",
-			AuthorID: u.ID, AuthorName: displayName(u),
-		})
-		if err != nil {
-			return err
-		}
+	// 기준 버전은 "지금 구조가 그 버전과 같을 때"만 채운다. 외부 편집으로 어긋난
+	// 상태에서 최신 버전을 적어 두면, 이력에 없는 상태를 있는 것처럼 말하게 된다.
+	var fromID *int64
+	fromNo := 0
+	if latest != nil && latest.Fingerprint == current.Fingerprint() {
+		fromID = &latest.ID
+		fromNo = latest.VersionNo
 	}
 
 	var body struct {
@@ -451,7 +457,7 @@ func (s *Server) handleVersionRollback(c *fiber.Ctx) error {
 
 	mig, err := s.st.CreateMigration(c.Context(), store.CreateMigrationParams{
 		ConnectionID: conn.ID, Title: title,
-		FromVersion: &from.ID, RollbackTo: &target.ID,
+		FromVersion: fromID, RollbackTo: &target.ID,
 		BaseFinger:   current.Fingerprint(),
 		TargetSchema: target.Schema, Plan: plan, Diff: diff, CreatedBy: u.ID,
 	})
@@ -463,7 +469,7 @@ func (s *Server) handleVersionRollback(c *fiber.Ctx) error {
 		Action: "version.rollback.plan", TargetType: "migration", TargetID: mig.ID,
 		Detail: map[string]any{
 			"connection": conn.Name, "toVersion": target.VersionNo,
-			"fromVersion": from.VersionNo, "changes": len(diff.Changes),
+			"fromVersion": fromNo, "changes": len(diff.Changes),
 			"destructive": diff.DestructiveCount, "statements": len(plan.Up),
 		},
 	})

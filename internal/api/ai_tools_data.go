@@ -1017,21 +1017,15 @@ func applyRollbackVersion(tc *toolContext, args json.RawMessage) (string, error)
 		return "", err
 	}
 
-	// 지금 상태가 버전으로 남아 있지 않으면 먼저 확정한다.
-	// 그러지 않으면 되돌린 뒤 "무엇으로부터 되돌렸는가"를 말할 수 없다.
-	from, err := tc.srv.st.LatestSchemaVersion(tc.ctx, conn.ID, false)
+	// 계획 시점에는 버전을 만들지 않는다(REST 경로와 같다). 버전은 실행 결과로만
+	// 등록된다 — 승인되지 않은 계획이 이력에 줄을 남기면 그 줄은 뜻을 갖지 못한다.
+	latest, err := tc.srv.st.LatestSchemaVersion(tc.ctx, conn.ID, false)
 	if err != nil {
 		return "", err
 	}
-	if from == nil || from.Fingerprint != current.Fingerprint() {
-		from, _, err = tc.srv.st.SaveSchemaVersion(tc.ctx, store.SaveVersionParams{
-			ConnectionID: conn.ID, Schema: current,
-			Source: sourceForBaseline(from), Note: "롤백 기준선",
-			AuthorID: tc.user.ID, AuthorName: tc.user.Username,
-		})
-		if err != nil {
-			return "", err
-		}
+	var fromID *int64
+	if latest != nil && latest.Fingerprint == current.Fingerprint() {
+		fromID = &latest.ID
 	}
 
 	title := fmt.Sprintf("v%d 으로 롤백", target.VersionNo)
@@ -1040,7 +1034,7 @@ func applyRollbackVersion(tc *toolContext, args json.RawMessage) (string, error)
 	}
 	mig, err := tc.srv.st.CreateMigration(tc.ctx, store.CreateMigrationParams{
 		ConnectionID: conn.ID, Title: title,
-		FromVersion: &from.ID, RollbackTo: &target.ID,
+		FromVersion: fromID, RollbackTo: &target.ID,
 		BaseFinger:   current.Fingerprint(),
 		TargetSchema: target.Schema, Plan: plan, Diff: diff, CreatedBy: tc.user.ID,
 	})
