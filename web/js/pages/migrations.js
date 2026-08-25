@@ -215,6 +215,11 @@ function peopleRow(m, reload) {
       type: 'button',
       onclick: () => openAssignDialog(m, reload),
     }, icon('users'), '지정'),
+    // 초안에서 다음에 할 일은 하나다: 볼 사람을 정하는 것.
+    (m.status === 'draft' || m.status === 'rejected') && reviewers.length === 0
+      ? h('p.field-help.mig-people-hint', {},
+        '리뷰어를 지정하면 리뷰가 시작됩니다.')
+      : null,
   );
 }
 
@@ -322,29 +327,14 @@ function openAssignDialog(m, reload) {
 function actionBar(m, res, precheckBox, reload) {
   const buttons = [];
 
-  if (m.status === 'draft') {
-    // 리뷰어를 지정하면 자동으로 리뷰 중이 되므로, 이 버튼은 "누구를 콕 집지 않고
-    // 열어 두는" 경우를 위한 것이다.
-    buttons.push(h('button.btn.btn-primary', {
-      type: 'button',
-      onclick: () => changeStatus(m.id, 'in_review', reload),
-    }, icon('play'), '리뷰 요청'));
-  }
-  if (m.status === 'rejected' || m.status === 'failed') {
-    buttons.push(h('button.btn.btn-primary', {
-      type: 'button',
-      onclick: () => changeStatus(m.id, 'draft', reload),
-    }, icon('undo'), '초안으로 되돌리기'));
-  }
+  // 리뷰는 리뷰어를 지정하면 시작된다. 따로 "리뷰 요청"을 누를 자리를 두지 않는다 —
+  // 누구에게도 부탁하지 않은 채 열려 있는 리뷰는 아무도 자기 일로 여기지 않는다.
+  // 반려된 계획도 리뷰어를 다시 지정하면 다시 리뷰로 들어간다.
   if (m.status === 'in_review') {
     buttons.push(h('button.btn', {
       type: 'button',
       onclick: () => openReviewDialog(m, res, reload),
     }, icon('check'), '검토하기'));
-    buttons.push(h('button.btn', {
-      type: 'button',
-      onclick: () => changeStatus(m.id, 'draft', reload),
-    }, '초안으로 되돌리기'));
   }
   if (m.status === 'approved') {
     buttons.push(h('button.btn', {
@@ -355,10 +345,6 @@ function actionBar(m, res, precheckBox, reload) {
       type: 'button',
       onclick: () => openApplyDialog(m, res, reload),
     }, icon('play'), '실행'));
-    buttons.push(h('button.btn', {
-      type: 'button',
-      onclick: () => changeStatus(m.id, 'draft', reload),
-    }, '초안으로 되돌리기'));
   }
   if (m.status === 'applied' || m.status === 'failed') {
     buttons.push(h('button.btn.btn-danger', {
@@ -527,11 +513,12 @@ function reviewsPanel(m, res, reload) {
     h('h2', {}, '리뷰',
       badge(`승인 ${res.approvals}/${res.requiredApprovals}`,
         res.approvals >= res.requiredApprovals ? 'success' : 'neutral')),
-    res.requiredApprovals > 1
-      ? h('p.field-help', {},
-        '운영 DB이거나 파괴적 변경이 포함되어 2명의 승인이 필요합니다. ' +
-        '본인이 만든 계획은 승인할 수 없습니다.')
-      : null,
+    h('p.field-help', {},
+      '승인·반려는 ', h('b', {}, '리뷰어로 지정된 사람'), '만 남길 수 있습니다. ',
+      '의견은 누구나 남길 수 있습니다.',
+      res.requiredApprovals > 1
+        ? ' 운영 DB이거나 파괴적 변경이 포함되어 2명의 승인이 필요하며, 본인이 만든 계획은 승인할 수 없습니다.'
+        : ''),
     pendingReviewers(m),
     reviews.length === 0
       ? h('p.muted', {}, '아직 리뷰가 없습니다')
@@ -585,7 +572,15 @@ function executionPanel(m) {
 // ---------- 대화상자 ----------
 
 function openReviewDialog(m, res, reload) {
-  const commentInput = textarea({ placeholder: '검토 의견 (반려 시 필수는 아니지만 남겨주세요)' });
+  // 승인·반려는 지정된 리뷰어의 것이다. 서버가 막지만, 화면에서도 눌리지 않아야
+  // 한다 — 누를 수 있는 버튼이 403으로 돌아오는 것은 설명이 아니라 사고다.
+  const me = state.user?.id;
+  const isReviewer = (m.reviewers ?? []).some((r) => r.userId === me);
+  const commentInput = textarea({
+    placeholder: isReviewer
+      ? '검토 의견 (반려 시 필수는 아니지만 남겨주세요)'
+      : '의견 (예: 이 인덱스는 트래픽이 적은 시간에 거는 편이 좋겠습니다)',
+  });
   const decide = async (decision, close) => {
     try {
       const out = await api.post(`/migrations/${encodeURIComponent(m.id)}/review`, {
@@ -603,7 +598,7 @@ function openReviewDialog(m, res, reload) {
     title: '마이그레이션 검토',
     width: 560,
     body: () => [
-      h('p.modal-message', {}, `"${m.title}" 을 검토합니다.`),
+      h('p.modal-message', {}, `"${m.title}" 을 ${isReviewer ? '검토합니다' : '봅니다'}.`),
       h('dl.mig-meta', {},
         metaRow('변경', `${m.diff?.changes?.length ?? 0}건`),
         metaRow('파괴적 변경', `${m.destructiveCount}건`),
@@ -614,19 +609,29 @@ function openReviewDialog(m, res, reload) {
         ? h('p.notice.notice-warn', {}, icon('alert'),
           '데이터 손실이 발생할 수 있는 변경이 포함되어 있습니다. SQL을 직접 확인하세요.')
         : null,
+      isReviewer
+        ? null
+        : h('p.notice.notice-info', {}, icon('activity'),
+          h('span', {},
+            '리뷰어로 지정되지 않아 ', h('b', {}, '의견만'), ' 남길 수 있습니다. ',
+            '승인·반려가 필요하면 담당자에게 리뷰어 지정을 요청하세요.')),
       commentInput,
     ],
     footer: (close) => [
       h('button.btn', { type: 'button', onclick: close }, '취소'),
       h('button.btn', {
         type: 'button', onclick: () => decide('comment', close),
-      }, '의견만 남기기'),
-      h('button.btn.btn-danger', {
-        type: 'button', onclick: () => decide('rejected', close),
-      }, '반려'),
-      h('button.btn.btn-primary', {
-        type: 'button', onclick: () => decide('approved', close),
-      }, '승인'),
+      }, isReviewer ? '의견만 남기기' : '의견 남기기'),
+      isReviewer
+        ? h('button.btn.btn-danger', {
+          type: 'button', onclick: () => decide('rejected', close),
+        }, '반려')
+        : null,
+      isReviewer
+        ? h('button.btn.btn-primary', {
+          type: 'button', onclick: () => decide('approved', close),
+        }, '승인')
+        : null,
     ],
   });
 }

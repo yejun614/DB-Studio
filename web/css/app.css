@@ -2145,6 +2145,8 @@ tr.is-destructive td { background: hsl(var(--h-danger) / 0.08); }
 .mig-people-list { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 /* 지정 버튼은 오른쪽 끝으로 민다. 이름이 몇이든 버튼 자리가 움직이지 않는다. */
 .mig-people > .btn { margin-left: auto; }
+/* 안내 한 줄은 사람 줄 아래에 통째로 눕는다(줄바꿈된 flex 항목). */
+.mig-people-hint { flex-basis: 100%; margin: 0; }
 
 .mig-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .mig-precheck h2, .mig-head h2 { display: flex; align-items: center; gap: 8px; }
