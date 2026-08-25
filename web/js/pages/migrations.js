@@ -22,6 +22,7 @@ const STATUS = {
   applied: ['적용됨', 'success'],
   rolled_back: ['롤백됨', 'neutral'],
   failed: ['실패', 'danger'],
+  closed: ['닫힘', 'neutral'],
 };
 
 export function migrationStatusBadge(status) {
@@ -275,6 +276,11 @@ function openAssignDialog(m, reload) {
       h('p.modal-message', {},
         '담당자는 이 계획을 끝까지 끌고 갈 한 사람이고, 리뷰어는 검토를 부탁할 사람들입니다. ' +
         '지정은 실행을 막거나 열지 않습니다 — 실행 조건은 그대로 승인 수입니다.'),
+      m.status === 'draft'
+        ? h('p.notice.notice-info', {}, icon('activity'),
+          '리뷰어를 한 명이라도 고르면 이 계획은 바로 ', h('b', {}, '리뷰 중'),
+          ' 이 됩니다. 따로 "리뷰 요청"을 누를 필요가 없습니다.')
+        : null,
       h('label.field', {}, h('span.field-label', {}, '담당자'), assignee),
       h('div.field', {},
         h('span.field-label', {}, '리뷰어'),
@@ -308,11 +314,19 @@ function openAssignDialog(m, reload) {
 function actionBar(m, res, precheckBox, reload) {
   const buttons = [];
 
-  if (m.status === 'draft' || m.status === 'rejected' || m.status === 'failed') {
+  if (m.status === 'draft') {
+    // 리뷰어를 지정하면 자동으로 리뷰 중이 되므로, 이 버튼은 "누구를 콕 집지 않고
+    // 열어 두는" 경우를 위한 것이다.
     buttons.push(h('button.btn.btn-primary', {
       type: 'button',
       onclick: () => changeStatus(m.id, 'in_review', reload),
     }, icon('play'), '리뷰 요청'));
+  }
+  if (m.status === 'rejected' || m.status === 'failed') {
+    buttons.push(h('button.btn.btn-primary', {
+      type: 'button',
+      onclick: () => changeStatus(m.id, 'draft', reload),
+    }, icon('undo'), '초안으로 되돌리기'));
   }
   if (m.status === 'in_review') {
     buttons.push(h('button.btn', {
@@ -351,21 +365,22 @@ function actionBar(m, res, precheckBox, reload) {
     onclick: () => openPushDialog(m, res.connection, reload),
   }, icon('copy'), 'Git에 올리기'));
 
-  if (m.status !== 'applied' && m.status !== 'rolled_back') {
-    // 같은 줄의 다른 버튼과 크기를 맞춘다. 한 줄에 높이가 다른 버튼이 섞이면
-    // 그 하나만 다른 성격의 것으로 보인다(실제로는 같은 자리의 같은 종류다).
+  // 진행하지 않기로 한 계획은 지우는 대신 닫는다. 지우면 "이런 계획을 세웠다가
+  // 접었다"는 사실과 그때의 리뷰까지 사라져, 같은 논의가 다시 올라왔을 때 왜
+  // 접었는지 아무도 모른다. 닫힌 계획은 다시 열 수 있다.
+  if (m.status !== 'applied' && m.status !== 'rolled_back' && m.status !== 'closed') {
     buttons.push(h('button.btn', {
       type: 'button',
-      onclick: async () => {
-        try {
-          await api.del(`/migrations/${encodeURIComponent(m.id)}`);
-          toast('마이그레이션을 삭제했습니다', 'success');
-          navigate('/migrations');
-        } catch (err) {
-          toastError(err);
-        }
-      },
-    }, icon('trash'), '삭제'));
+      onclick: () => changeStatus(m.id, 'closed', reload),
+    }, icon('x'), '닫기'));
+  }
+  if (m.status === 'closed') {
+    // 닫혀 있는 동안 대상 DB가 바뀌었을 수 있으므로 초안으로 돌아간다.
+    // 그때의 승인은 지금 구조를 본 것이 아니다.
+    buttons.push(h('button.btn.btn-primary', {
+      type: 'button',
+      onclick: () => changeStatus(m.id, 'draft', reload),
+    }, icon('refresh'), '다시 열기'));
   }
 
   return h('div.mig-actions', {}, buttons);
