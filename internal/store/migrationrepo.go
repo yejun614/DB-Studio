@@ -100,6 +100,25 @@ type Migration struct {
 	RolledBackAt *time.Time `json:"rolledBackAt,omitempty"`
 
 	Reviews []*MigrationReview `json:"reviews,omitempty"`
+
+	// AssigneeID는 이 마이그레이션을 끌고 가는 사람이다. 비어 있으면 아직 정하지 않았다.
+	AssigneeID   string `json:"assigneeId,omitempty"`
+	AssigneeName string `json:"assigneeName,omitempty"`
+	// Reviewers는 검토를 부탁받은 사람들이다(리뷰 결정과 다르다 — Reviews 참고).
+	Reviewers []*MigrationReviewer `json:"reviewers"`
+}
+
+// MigrationReviewer는 검토를 부탁받은 사람이다.
+//
+// MigrationReview(결정)와 이름이 비슷해 헷갈리기 쉬우므로 뜻을 적어 둔다.
+// 이것은 "봐 달라"는 요청이고, 저것은 "봤다"는 기록이다. 한 사람이 리뷰어로
+// 지정되었는데 아직 결정하지 않은 상태가 정상적으로 존재한다.
+type MigrationReviewer struct {
+	MigrationID string    `json:"migrationId,omitempty"`
+	UserID      string    `json:"userId"`
+	Name        string    `json:"name"`
+	AddedBy     string    `json:"addedBy,omitempty"`
+	AddedAt     time.Time `json:"addedAt"`
 }
 
 // ExecutionStep은 문장 하나의 실행 결과다.
@@ -196,6 +215,11 @@ func (s *Store) GetMigration(ctx context.Context, id string, withBody bool) (*Mi
 		return nil, err
 	}
 	m.Reviews = reviews
+	reviewers, err := s.ListMigrationReviewers(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	m.Reviewers = reviewers
 	return m, nil
 }
 
@@ -206,11 +230,13 @@ const migrationSelect = `SELECT
 	m.base_fingerprint, m.up_sql, m.down_sql, m.plan_json, m.diff_json, m.target_schema_json,
 	m.destructive_count, m.irreversible, m.status, m.applied_statements, m.execution_log,
 	m.error, COALESCE(m.created_by, ''), m.created_at, m.updated_at,
-	m.applied_at, COALESCE(m.applied_by, ''), m.rolled_back_at
+	m.applied_at, COALESCE(m.applied_by, ''), m.rolled_back_at,
+	COALESCE(m.assignee_id, ''), COALESCE(au.display_name, au.username, '')
 	FROM migrations m
 	LEFT JOIN schema_versions fv ON fv.id = m.from_version
 	LEFT JOIN schema_versions tv ON tv.id = m.to_version
-	LEFT JOIN schema_versions rv ON rv.id = m.rollback_to_version`
+	LEFT JOIN schema_versions rv ON rv.id = m.rollback_to_version
+	LEFT JOIN users au ON au.id = m.assignee_id`
 
 // ListMigrations는 마이그레이션 목록을 반환한다 (본문 제외).
 //
@@ -279,7 +305,8 @@ func scanMigration(row interface{ Scan(...any) error }, withBody bool) (*Migrati
 		&m.BaseFinger, &m.UpSQL, &m.DownSQL, &planJSON, &diffJSON, &targetJSON,
 		&m.DestructiveCount, &irrJSON, &m.Status, &m.AppliedStatements, &execJSON,
 		&m.Error, &m.CreatedBy, &createdAt, &updatedAt,
-		&appliedAt, &m.AppliedBy, &rolledBackAt); err != nil {
+		&appliedAt, &m.AppliedBy, &rolledBackAt,
+		&m.AssigneeID, &m.AssigneeName); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, err
 		}
@@ -617,4 +644,129 @@ func (s *Store) DeleteMigration(ctx context.Context, id string) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// ---------- 담당자 · 리뷰어 ----------
+
+// ListMigrationReviewers는 검토를 부탁받은 사람들을 돌려준다.
+//
+// 이름을 users에서 조인해 오는 이유: 지정 시점의 이름을 복사해 두면 사람이 이름을
+// 바꾼 뒤 화면과 실제가 어긋난다. 리뷰 결정(migration_reviews)은 반대로 그 시점의
+// 이름을 남긴다 — 그것은 "그때 누가 승인했는가"라는 기록이라 지금의 이름으로
+// 바뀌면 안 된다.
+func (s *Store) ListMigrationReviewers(ctx context.Context, migrationID string) ([]*MigrationReviewer, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT
+		r.migration_id, r.user_id, COALESCE(u.display_name, u.username, ''),
+		COALESCE(r.added_by, ''), r.added_at
+		FROM migration_reviewers r
+		LEFT JOIN users u ON u.id = r.user_id
+		WHERE r.migration_id = ?
+		ORDER BY r.added_at, r.user_id`, migrationID)
+	if err != nil {
+		return nil, fmt.Errorf("list migration reviewers: %w", err)
+	}
+	defer rows.Close()
+
+	out := []*MigrationReviewer{}
+	for rows.Next() {
+		var r MigrationReviewer
+		var addedAt string
+		if err := rows.Scan(&r.MigrationID, &r.UserID, &r.Name, &r.AddedBy, &addedAt); err != nil {
+			return nil, fmt.Errorf("scan migration reviewer: %w", err)
+		}
+		r.AddedAt = parseTime(addedAt)
+		out = append(out, &r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate migration reviewers: %w", err)
+	}
+	return out, nil
+}
+
+// SetMigrationAssignment는 담당자와 리뷰어를 한 번에 정한다.
+//
+// 둘을 한 트랜잭션에서 바꾸는 이유: 화면이 한 대화상자에서 함께 고르므로, 절반만
+// 저장되면 사용자는 무엇이 반영됐는지 알 수 없다.
+//
+// 리뷰어는 지우고 다시 넣는다(합집합이 아니다). 지정은 "지금 이 사람들에게
+// 부탁한다"는 현재 상태이며, 뺀 사람이 남아 있으면 그 사람은 자기 이름이 왜
+// 붙어 있는지 알 수 없다. 이미 남긴 리뷰 결정은 다른 표에 있어 그대로 남는다.
+//
+// updated_at은 건드리지 않는다. 그 값은 "계획이 언제 바뀌었나"를 뜻하고 목록의
+// 수정 시각으로 쓰인다 — 담당자를 바꿨다고 계획이 바뀐 것처럼 보이면 안 된다.
+func (s *Store) SetMigrationAssignment(ctx context.Context, migrationID, assigneeID string, reviewerIDs []string, actorID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin set assignment: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx,
+		`UPDATE migrations SET assignee_id = ? WHERE id = ?`, nullString(assigneeID), migrationID)
+	if err != nil {
+		return fmt.Errorf("set assignee: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM migration_reviewers WHERE migration_id = ?`, migrationID); err != nil {
+		return fmt.Errorf("clear reviewers: %w", err)
+	}
+	now := nowString()
+	seen := map[string]bool{}
+	for _, id := range reviewerIDs {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO migration_reviewers (migration_id, user_id, added_by, added_at)
+			 VALUES (?, ?, ?, ?)`, migrationID, id, nullString(actorID), now); err != nil {
+			return fmt.Errorf("add reviewer: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit set assignment: %w", err)
+	}
+	return nil
+}
+
+// MigrationPerson은 담당자·리뷰어 후보다.
+//
+// /users 를 쓰지 않는 이유는 매크로 공유와 같다: 그 경로는 슈퍼어드민 전용이고
+// 비밀번호 해시까지 실어 나른다. 여기서 필요한 것은 이름과 id 뿐이다.
+type MigrationPerson struct {
+	ID          string `json:"id"`
+	Username    string `json:"username"`
+	DisplayName string `json:"displayName"`
+	Role        string `json:"role"`
+	// Level은 이 사람이 대상 커넥션에 대해 가진 등급이다. API가 채운다.
+	Level string `json:"level,omitempty"`
+}
+
+// ListActivePeople은 활성 사용자 전체를 이름만으로 돌려준다.
+//
+// 누가 후보인지(대상 커넥션을 만질 수 있는지)는 접근 정책을 판정해야 알 수 있고,
+// 그 판정은 store가 아니라 auth의 일이다. 여기서는 재료만 준다.
+func (s *Store) ListActivePeople(ctx context.Context) ([]MigrationPerson, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, username, COALESCE(display_name, ''), role FROM users
+		 WHERE status = 'active' ORDER BY username`)
+	if err != nil {
+		return nil, fmt.Errorf("list active people: %w", err)
+	}
+	defer rows.Close()
+
+	out := []MigrationPerson{}
+	for rows.Next() {
+		var p MigrationPerson
+		if err := rows.Scan(&p.ID, &p.Username, &p.DisplayName, &p.Role); err != nil {
+			return nil, fmt.Errorf("scan person: %w", err)
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
 }
