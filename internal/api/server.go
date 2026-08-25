@@ -314,7 +314,6 @@ func (s *Server) routes() {
 	// 구조 화면: 현재(또는 특정 버전) 스키마를 ERD로 본다.
 	// 배치·메모·그룹은 계정별로 저장되므로 저장 경로가 같은 커넥션 아래에 있다.
 	conns.Get("/:id/structure", s.handleGetStructure)
-	conns.Put("/:id/structure/view", s.handleSaveStructureView)
 
 	// 분산 스토리지(하둡·Ceph). 커넥션 아래에 두는 이유는 권한과 자격증명이
 	// 커넥션의 것이기 때문이다(storage_handlers.go 참고).

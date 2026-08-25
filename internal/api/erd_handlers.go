@@ -366,6 +366,13 @@ func (s *Server) handleDeleteERDDocument(c *fiber.Ctx) error {
 	if _, err := s.requireERDManage(c, doc); err != nil {
 		return err
 	}
+	// 구조 문서는 커넥션에 딸린 것이지 사람이 만든 초안이 아니다. 지우면 그 DB를
+	// 보는 모두의 메모와 묶음이 함께 사라지고, 다음에 화면을 열면 빈 문서가 새로
+	// 만들어져 "사라졌다"는 사실조차 남지 않는다.
+	if doc.Kind == store.DocKindStructure {
+		return fail(c, fiber.StatusBadRequest, "structure_document",
+			"구조 문서는 지울 수 없습니다. 구조 화면의 메모·묶음은 그 화면에서 지웁니다")
+	}
 	if err := s.st.DeleteERDDocument(c.Context(), doc.ID); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return fiber.NewError(fiber.StatusNotFound, "문서를 찾을 수 없습니다")

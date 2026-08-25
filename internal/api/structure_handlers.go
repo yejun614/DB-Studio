@@ -1,12 +1,14 @@
 package api
 
 import (
+	"errors"
 	"math"
-	"strconv"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 
 	"dbstudio/internal/erd"
+	"dbstudio/internal/model"
 	"dbstudio/internal/schema"
 	"dbstudio/internal/store"
 )
@@ -15,17 +17,15 @@ import (
 //
 // ERD 설계 화면과 같은 캔버스를 쓰지만 목적이 반대다. 저쪽은 "만들고 싶은 것"을
 // 그리고, 이쪽은 "지금 있는 것"을 보여준다. 그래서 스키마는 편집할 수 없고,
-// 편집할 수 있는 것은 읽는 사람의 정리(위치·메모·묶음)뿐이며 그것은 계정별로 남는다.
+// 편집할 수 있는 것은 사람이 얹은 정리(위치·메모·묶음)뿐이다.
+//
+// 그 정리는 커넥션마다 하나 있는 **구조 문서**(erd_documents.kind='structure')에 있고,
+// 같은 DB를 보는 사람들이 함께 고친다. 그래서 ERD 편집기가 쓰던 것이 그대로 붙는다:
+// 실시간 방·커서·채팅·되돌리기, 그리고 클러스터에서의 소켓 중계까지.
+// (0022는 이것을 계정별로 두었다. 바꾼 이유는 0032에 적혀 있다.)
 //
 // 버전을 고를 수 있게 한 이유: 구조를 보는 일은 대개 "언제부터 이랬지"와 함께 온다.
 // 최신만 보여주면 그 질문에 답하려고 다른 화면으로 나가야 한다.
-
-// maxStructureNotes는 한 사람이 붙일 수 있는 메모·그룹 수의 상한이다.
-// 개인 설정이지만 서버가 저장하므로, 무한히 늘어날 수 있는 값에는 상한이 있어야 한다.
-const (
-	maxStructureNotes  = 200
-	maxStructureGroups = 100
-)
 
 // handleGetStructure는 커넥션의 구조를 ERD 형태로 반환한다.
 //
@@ -65,31 +65,124 @@ func (s *Server) handleGetStructure(c *fiber.Ctx) error {
 	}
 	sc.Sort()
 
-	u := currentUser(c)
-	view, err := s.st.GetStructureView(c.Context(), u.ID, conn.ID)
+	doc, placed, err := s.structureDocument(c, conn, sc, v == nil)
 	if err != nil {
 		return err
 	}
 
-	// 저장된 배치에 없는 테이블은 자동 배치로 자리를 준다.
-	//
-	// 스키마는 계속 바뀌므로 새 테이블은 언제나 생긴다. 좌표가 없으면 전부 (0,0)에
-	// 겹쳐 쌓이는데, 그러면 테이블 하나가 추가됐을 뿐인데 화면이 망가진 것처럼 보인다.
-	placed := placeMissing(sc, view.Layout)
+	// 편집 등급을 함께 알려 준다. 화면이 도구를 보여줄지 정하는 근거이고,
+	// 소켓도 같은 기준으로 판정하므로 둘이 어긋나지 않는다.
+	canEdit := false
+	if d, lerr := s.requireLevel(c, conn.ID, model.LevelERD); lerr == nil {
+		canEdit = d.Allowed
+	}
 
 	return c.JSON(fiber.Map{
 		"connection": connSummary(conn),
 		"source":     source,
 		"dialect":    sc.Dialect,
 		"schema":     sc,
-		"layout":     view.Layout,
-		"notes":      view.Notes,
-		"groups":     view.Groups,
+		"layout":     doc.Layout,
+		"notes":      doc.Notes,
+		"groups":     doc.Groups,
+		// documentId는 실시간 방의 열쇠다. 과거 버전을 보는 중에는 비어 있다 —
+		// 그 화면은 지금이 아니라 그때를 보는 곳이라 함께 고칠 것이 없다.
+		"documentId": structureDocIDFor(doc, v == nil),
+		"canEdit":    canEdit && v == nil,
 		// 새로 자리를 잡은 테이블 수. 화면이 "N개가 새로 놓였습니다"를 알릴 수 있다.
 		"placed":      placed,
 		"stats":       sc.Stats(),
 		"notesFromDB": sc.Notes,
 	})
+}
+
+// structureDocIDFor는 실시간 방 열쇠를 정한다. 과거 버전 보기에서는 비운다.
+func structureDocIDFor(doc *erd.Document, live bool) string {
+	if !live || doc == nil {
+		return ""
+	}
+	return doc.ID
+}
+
+// structureDocument는 이 커넥션의 구조 문서를 열고, 스키마 레이어를 지금 것으로 맞춘다.
+//
+// 문서를 처음 만들 때 그 사람의 옛 개인 정리(0022의 erd_structure_views)를 씨앗으로
+// 옮긴다. 공유로 바뀌었다고 그동안 정리한 것이 사라지면, 사람은 바뀐 것이 아니라
+// 잃은 것으로 받아들인다.
+func (s *Server) structureDocument(c *fiber.Ctx, conn *model.Connection, sc *schema.Schema, live bool) (*erd.Document, int, error) {
+	ctx := c.Context()
+	docID, err := s.st.GetStructureDocumentID(ctx, conn.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		docID, err = s.createStructureDocument(c, conn, sc)
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+	doc, err := s.st.GetERDDocument(ctx, docID)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// 과거 버전을 보는 중이면 문서의 정리만 얹고 스키마는 건드리지 않는다.
+	// 그 시점 구조를 지금 것으로 갈아 끼우면 보러 온 것이 사라진다.
+	layout := map[string]*erd.Box{}
+	for k, b := range doc.Layout {
+		layout[k] = b
+	}
+	placed := placeMissing(sc, layout)
+	if !live {
+		doc.Layout = layout
+		return doc, placed, nil
+	}
+
+	// 실제 DB가 문서의 스냅샷과 다르면 갈아 끼운다. 지문으로 비교하는 이유:
+	// 테이블을 옮기기만 해도 달라지는 값이 아니라 구조만 반영하는 값이다.
+	if doc.Schema == nil || doc.Schema.Fingerprint() != sc.Fingerprint() || placed > 0 {
+		if err := s.erdHub.RefreshSchema(ctx, docID, sc, layout); err != nil {
+			return nil, 0, err
+		}
+		doc, err = s.st.GetERDDocument(ctx, docID)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	return doc, placed, nil
+}
+
+// createStructureDocument는 커넥션의 구조 문서를 만든다.
+func (s *Server) createStructureDocument(c *fiber.Ctx, conn *model.Connection, sc *schema.Schema) (string, error) {
+	ctx := c.Context()
+	u := currentUser(c)
+	seed, err := s.st.GetStructureView(ctx, u.ID, conn.ID)
+	if err != nil {
+		return "", err
+	}
+	layout := seed.Layout
+	if layout == nil {
+		layout = map[string]*erd.Box{}
+	}
+	placeMissing(sc, layout)
+
+	doc := &erd.Document{
+		ID:           uuid.NewString(),
+		Name:         conn.Name + " 구조",
+		ConnectionID: conn.ID,
+		Dialect:      string(conn.Kind),
+		Status:       "applied",
+		Kind:         store.DocKindStructure,
+		Schema:       sc,
+		Layout:       layout,
+		Notes:        seed.Notes,
+		Groups:       seed.Groups,
+	}
+	if err := s.st.CreateERDDocument(ctx, doc, u.ID, "구조 화면의 공유 정리", nil); err != nil {
+		return "", err
+	}
+	s.audit(c, store.AuditParams{
+		Action: "structure.document.created", TargetType: "erd_document", TargetID: doc.ID,
+		Detail: map[string]any{"connection": conn.Name, "seededNotes": len(seed.Notes)},
+	})
+	return doc.ID, nil
 }
 
 // 새 카드를 놓을 때 기존 카드와 겹쳤다고 볼 거리.
@@ -146,40 +239,4 @@ func placeMissing(sc *schema.Schema, layout map[string]*erd.Box) int {
 		placed++
 	}
 	return placed
-}
-
-// handleSaveStructureView는 이 사람의 배치를 저장한다.
-func (s *Server) handleSaveStructureView(c *fiber.Ctx) error {
-	// 모니터링 등급이면 충분하다. 저장되는 것은 스키마가 아니라 이 사람의 화면이며,
-	// 다른 사람에게 보이지 않는다.
-	conn, _, err := s.resolveSchemaAccess(c, c.Params("id"))
-	if err != nil {
-		return err
-	}
-
-	var body store.StructureView
-	if err := c.BodyParser(&body); err != nil {
-		return fail(c, fiber.StatusBadRequest, "bad_request", "요청 본문을 해석할 수 없습니다")
-	}
-	if len(body.Notes) > maxStructureNotes {
-		return fail(c, fiber.StatusBadRequest, "too_many",
-			"메모는 "+strconv.Itoa(maxStructureNotes)+"개까지 붙일 수 있습니다")
-	}
-	if len(body.Groups) > maxStructureGroups {
-		return fail(c, fiber.StatusBadRequest, "too_many",
-			"그룹은 "+strconv.Itoa(maxStructureGroups)+"개까지 만들 수 있습니다")
-	}
-	for _, n := range body.Notes {
-		if len([]rune(n.Text)) > 4000 {
-			return fail(c, fiber.StatusBadRequest, "bad_request", "메모가 너무 깁니다 (4000자 제한)")
-		}
-	}
-
-	u := currentUser(c)
-	if err := s.st.SaveStructureView(c.Context(), u.ID, conn.ID, &body); err != nil {
-		return err
-	}
-	// 감사 로그에 남기지 않는다. 자기 화면의 카드 위치를 옮긴 기록이 쌓이면
-	// 정작 조사해야 할 항목이 그 사이에 묻힌다.
-	return c.JSON(fiber.Map{"saved": true})
 }

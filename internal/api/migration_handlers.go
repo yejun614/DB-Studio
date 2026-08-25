@@ -258,6 +258,13 @@ func (s *Server) handleCreateMigration(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	// 구조 문서는 실제 DB의 사본이라 자기 자신과의 차이가 언제나 없다. 후보 목록에서
+	// 이미 빼 두었지만, 문서 id를 직접 보내는 길이 남아 있으므로 여기서도 막는다.
+	if doc.Kind == store.DocKindStructure {
+		return fail(c, fiber.StatusBadRequest, "structure_document",
+			"구조 문서는 지금 DB의 모습이라 마이그레이션을 만들 수 없습니다. "+
+				"고칠 것이 있으면 초안을 만들어 그 위에서 설계하세요")
+	}
 	if err := requireERDConnection(conn, "마이그레이션을 생성"); err != nil {
 		return err
 	}
