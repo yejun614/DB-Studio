@@ -740,8 +740,12 @@ function versionTimeline(versions, conn, canMigrate) {
   if (!versions || versions.length === 0) {
     return emptyState('아직 확정된 버전이 없습니다. 현재 상태를 버전으로 등록해 기준선을 만드세요.');
   }
-  // 최신 버전으로 되돌리는 것은 의미가 없다(이미 그 구조이거나, 그렇지 않다면
-  // 외부 편집이 있었다는 뜻이라 "외부 편집 등록"이 맞는 동작이다).
+  // 최신 버전에도 되돌리기를 둔다.
+  //
+  // 앱 밖에서 스키마를 고치면(외부 편집) 현재 DB가 최신 버전과 달라진다. 그때
+  // 필요한 동작이 바로 "최신 버전으로 되돌리기"다 — 손으로 넣은 인덱스나 컬럼을
+  // 확정된 구조로 되돌리는 길이 이력 화면에 없으면, 사람은 그 차이를 SQL로 직접
+  // 지우게 된다. 차이가 없을 때는 미리보기가 "되돌릴 것이 없습니다"로 막는다.
   const latest = versions[0]?.versionNo;
   // 한 줄에 담기는 정보를 세로로 쌓으면 카드 하나가 화면 높이의 5분의 1을 먹는다.
   // 버전 이력은 "훑어서 언제 무엇이 바뀌었나"를 보는 화면이므로, 한 화면에 들어가는
@@ -793,11 +797,16 @@ function versionTimeline(versions, conn, canMigrate) {
             : null,
           // 되돌리기만 붉게 둔다. 나머지는 보기만 하는 버튼이고 이것만 DB를
           // 바꾼다 — 아이콘만 남은 줄에서 그 차이가 모양으로 드러나야 한다.
-          canMigrate && v.versionNo !== latest
+          canMigrate
             ? h('button.icon-btn.danger.btn-tip', {
               type: 'button',
-              'data-tip': '롤백 — 이 구조로 되돌립니다',
-              'aria-label': `이 버전(v${v.versionNo})의 구조로 되돌립니다`,
+              // 최신 버전에서는 "왜 여기에 되돌리기가 있는가"가 바로 보여야 한다.
+              'data-tip': v.versionNo === latest
+                ? '롤백 — 현재 DB가 이 버전과 다를 때 되돌립니다'
+                : '롤백 — 이 구조로 되돌립니다',
+              'aria-label': v.versionNo === latest
+                ? `현재 DB를 최신 버전(v${v.versionNo})의 구조로 되돌립니다`
+                : `이 버전(v${v.versionNo})의 구조로 되돌립니다`,
               onclick: () => openVersionRollbackDialog(conn, v),
             }, icon('undo'))
             : null,
