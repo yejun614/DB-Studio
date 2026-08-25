@@ -3549,13 +3549,19 @@ a.stat:hover { border-color: var(--text-mute); background: hsl(var(--h-muted) / 
 .pick-field > .icon { position: absolute; left: 10px; color: var(--text-mute); pointer-events: none; }
 .pick-search { padding-left: 34px; }
 
+/* 후보 목록은 화면에 띄운다. 흐름 안에서 펼치면 열 때마다 대화상자 높이가
+ * 출렁이고, absolute 로 띄우면 대화상자 본문의 스크롤 상자에서 잘린다.
+ * fixed 는 둘 다 피한다 — 자리(left·top·width·max-height)는 JS가 잡는다. */
 .pick-list { display: none; }
 .pick-list.is-open {
   display: flex; flex-direction: column;
-  max-height: 190px; overflow-y: auto;
+  position: fixed;
+  z-index: 200; /* 대화상자 덮개(100)보다 위 */
+  overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: var(--surface-2);
+  background: var(--surface);
+  box-shadow: 0 12px 28px hsl(0 0% 0% / 0.35);
 }
 .pick-opt {
   display: flex; align-items: baseline; gap: 8px;
@@ -3564,7 +3570,7 @@ a.stat:hover { border-color: var(--text-mute); background: hsl(var(--h-muted) / 
   color: var(--text); font: inherit; font-size: 13px; text-align: left;
   cursor: pointer;
 }
-.pick-opt:hover, .pick-opt.is-cursor { background: var(--surface-3, var(--surface)); }
+.pick-opt:hover, .pick-opt.is-cursor { background: var(--surface-2); }
 .pick-empty { margin: 0; padding: 9px 10px; font-size: 12.5px; color: var(--text-mute); }
 
 .share-invite-row { display: flex; gap: 8px; align-items: center; }

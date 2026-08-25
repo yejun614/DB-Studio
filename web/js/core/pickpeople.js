@@ -3,10 +3,16 @@
 // 체크박스를 늘어놓던 자리를 대신한다. 사람이 열 명을 넘어가면 목록을 눈으로 훑어
 // 찾는 것이 느려지고, 대화상자 높이도 사람 수만큼 늘어난다.
 //
-// 메뉴를 띄우지 않고 **흐름 안에서 펼치는** 이유: 이 고르개가 놓이는 자리는 대개
-// 대화상자이고, 대화상자 본문은 스크롤 상자다(.modal-body { overflow-y: auto }).
-// 절대 위치로 띄운 메뉴는 그 상자 경계에서 잘린다 — 목록의 아래쪽 몇 명이 조용히
-// 사라지는 종류의 어긋남이다.
+// 후보 목록은 **화면에 띄운다**(position: fixed). 흐름 안에서 펼치면 목록이 열릴
+// 때마다 대화상자 높이가 출렁여, 고르는 동안 아래쪽 칸과 버튼이 계속 움직인다.
+//
+// absolute 가 아니라 fixed 인 이유: 이 고르개가 놓이는 자리는 대개 대화상자이고
+// 그 본문은 스크롤 상자다(.modal-body { overflow-y: auto }). absolute 로 띄우면
+// 그 상자 경계에서 잘려 목록 아래쪽 몇 명이 조용히 사라진다. fixed 는 뷰포트를
+// 기준으로 놓이므로 잘리지 않는다.
+//
+// 대신 위치를 스스로 계산해야 한다 — 열릴 때, 창 크기가 바뀔 때, 그리고 어딘가
+// 스크롤될 때(fixed 는 스크롤을 따라가지 않는다).
 import { h, mount, icon } from './dom.js';
 
 /**
@@ -19,6 +25,9 @@ import { h, mount, icon } from './dom.js';
  * @param {(ids: string[]) => void} [opts.onChange] 고른 것이 바뀔 때
  * @returns {{node: HTMLElement, value: string[]}}
  */
+// 목록 높이 상한. 이보다 길면 목록 안에서 스크롤한다 — 대화상자를 밀어내지 않는다.
+const MAX_LIST_HEIGHT = 220;
+
 export function peoplePicker({
   items, selected = [], placeholder = '이름으로 검색', emptyText = '고를 수 있는 사람이 없습니다',
   onChange,
@@ -63,10 +72,54 @@ export function peoplePicker({
       : h('span.muted.small', {}, '아직 고르지 않았습니다'));
   };
 
+  // place는 목록을 검색 칸 바로 아래(자리가 없으면 위)에 놓는다.
+  const place = () => {
+    const r = search.getBoundingClientRect();
+    const margin = 12;
+    const gap = 4;
+    const below = window.innerHeight - r.bottom - margin;
+    const above = r.top - margin;
+    // 아래가 좁고 위가 더 넓으면 위로 뒤집는다. 화면 아래쪽에서 열면 목록이
+    // 두세 줄만 보이는 일이 생긴다.
+    const flip = below < 140 && above > below;
+    const height = Math.max(80, Math.min(MAX_LIST_HEIGHT, flip ? above : below));
+    list.style.left = `${Math.round(r.left)}px`;
+    list.style.width = `${Math.round(r.width)}px`;
+    list.style.maxHeight = `${Math.round(height)}px`;
+    if (flip) {
+      list.style.top = 'auto';
+      list.style.bottom = `${Math.round(window.innerHeight - r.top + gap)}px`;
+    } else {
+      list.style.bottom = 'auto';
+      list.style.top = `${Math.round(r.bottom + gap)}px`;
+    }
+  };
+
+  // 스크롤·리사이즈를 따라 자리만 다시 잡는다. 목록을 닫아 버리면 대화상자를
+  // 조금 스크롤했다고 고르던 것이 사라진다.
+  const follow = () => {
+    if (!box.isConnected) {
+      // 대화상자가 닫히면서 통째로 사라진 경우다. 남은 청취자를 여기서 걷는다.
+      detach();
+      return;
+    }
+    place();
+  };
+  const attach = () => {
+    window.addEventListener('resize', follow);
+    // capture: 대화상자 본문처럼 중간에 있는 스크롤 상자의 스크롤도 잡아야 한다.
+    document.addEventListener('scroll', follow, true);
+  };
+  const detach = () => {
+    window.removeEventListener('resize', follow);
+    document.removeEventListener('scroll', follow, true);
+  };
+
   const drawList = () => {
     if (!open) {
       mount(list, []);
       list.classList.remove('is-open');
+      detach();
       return;
     }
     list.classList.add('is-open');
@@ -74,10 +127,14 @@ export function peoplePicker({
     if (found.length === 0) {
       mount(list, h('p.pick-empty', {},
         items.length === 0 ? emptyText : '일치하는 사람이 없습니다'));
+      place();
+      attach();
       return;
     }
     if (cursor >= found.length) cursor = found.length - 1;
     if (cursor < 0) cursor = 0;
+    place();
+    attach();
     mount(list, found.map((p, i) => h('button', {
       type: 'button',
       class: `pick-opt${i === cursor ? ' is-cursor' : ''}`,
