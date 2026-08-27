@@ -8,7 +8,7 @@ import {
 } from '../core/ui.js';
 import { navigate } from '../core/router.js';
 import { serverDbPicker } from '../core/connpick.js';
-import { peoplePicker } from '../core/pickpeople.js';
+import { peoplePicker } from '../core/searchpick.js';
 import { codeBlock } from '../core/highlight.js';
 import { errorPanel } from './users.js';
 import { openPushDialog } from './vcs.js';

@@ -16,6 +16,7 @@ import {
 } from '../core/ui.js';
 import { ErdSession, throttle } from '../core/erdsocket.js';
 import { roomChatView } from '../core/roomchat.js';
+import { searchPicker } from '../core/searchpick.js';
 import { codeBlock, codeEditor } from '../core/highlight.js';
 import {
   ErdCanvas, CARD_W, tableKey, tableDisplay, refKey, newLocalID, truncate,
@@ -1947,15 +1948,21 @@ class Editor {
 
     // 타입은 컬럼과 같은 고르개를 쓴다. 도메인만 다른 방식으로 타입을 정하면
     // "여기서는 왜 안 되지"가 생긴다.
-    const typeSelect = select([
-      { value: '', label: '(목록에서 고르기)' },
-      ...categories(cat).flatMap((group) => group.types.map((t) => ({
-        value: t.name, label: `${group.name} · ${t.label} — ${t.name}`,
+    const typePick = searchPicker({
+      items: categories(cat).flatMap((group) => group.types.map((t) => ({
+        value: t.name,
+        label: `${group.name} · ${t.label}`,
+        hint: t.name,
+        group: group.name,
       }))),
-    ], { value: parseType(domain?.type ?? '', cat)?.def?.name ?? '' });
+      value: parseType(domain?.type ?? '', cat)?.def?.name ?? '',
+      placeholder: '타입 이름이나 설명으로 검색 (예: int, 정수, 날짜)',
+      emptyLabel: '(목록에서 고르기)',
+      onPick: () => syncArg(),
+    });
     const argWrap = h('div');
     const syncArg = () => {
-      const def = (cat.types ?? []).find((t) => t.name === typeSelect.value);
+      const def = (cat.types ?? []).find((t) => t.name === typePick.value);
       mount(argWrap, def?.param
         ? field(paramLabel(def), input({
           value: def.default ?? '',
@@ -1965,15 +1972,13 @@ class Editor {
         : null);
       if (def) typeInput.value = buildType(def, { arg: def.default ?? '' });
     };
-    typeSelect.addEventListener('change', syncArg);
-
     const save = h('button.btn.btn-primary', { type: 'button' }, domain ? '저장' : '추가');
     const close = openModal({
       title: domain ? `도메인 ${domain.name}` : '도메인 추가',
       width: 560,
       body: [
         field('이름', nameInput, '컬럼 타입 자리에서 이 이름으로 고릅니다.'),
-        field('타입 고르기', typeSelect),
+        field('타입 고르기', typePick.node),
         argWrap,
         field('타입', typeInput, '고르개로 채우거나 직접 적을 수 있습니다.'),
         field('NULL 여부', nullSelect),
@@ -2081,12 +2086,24 @@ class Editor {
       h('span.field-label', {}, '직접 입력'), manualInput,
       h('span.field-help', {}, '대상 DB의 타입 문자열을 그대로 씁니다. 목록에 없는 타입도 적을 수 있습니다.'));
 
-    const typeSelect = select([
-      { value: '', label: '(고르기)' },
-      ...categories(cat).flatMap((group) => group.types.map((t) => ({
-        value: t.name, label: `${group.name} · ${t.label} — ${t.name}`,
+    // 타입은 수십 개다. select 로 두면 스크롤로 훑어야 하고, "int" 나 "정수" 중
+    // 어느 쪽으로 떠오르든 찾는 길이 하나뿐이다. 입력으로 걸러 고른다.
+    const typePick = searchPicker({
+      items: categories(cat).flatMap((group) => group.types.map((t) => ({
+        value: t.name,
+        label: `${group.name} · ${t.label}`,
+        hint: t.name,
+        group: group.name,
       }))),
-    ], { value: state0.def?.name ?? '' });
+      value: state0.def?.name ?? '',
+      placeholder: '타입 이름이나 설명으로 검색 (예: int, 정수, 날짜)',
+      emptyLabel: '(고르기)',
+      onPick: (next) => {
+        state0.def = (cat.types ?? []).find((t) => t.name === next) ?? null;
+        state0.arg = state0.def?.default ?? '';
+        refresh();
+      },
+    });
 
     const domainSelect = select([
       { value: '', label: '(도메인 없이 타입 직접 지정)' },
@@ -2118,7 +2135,7 @@ class Editor {
       const def = state0.def;
       // 도메인을 골랐으면 타입 칸은 볼 수만 있게 둔다. 두 곳에서 타입을 정하면
       // 어느 쪽이 이겼는지 화면만 보고 알 수 없다.
-      typeSelect.disabled = usingDomain || state0.manual;
+      typePick.disabled = usingDomain || state0.manual;
       manualInput.disabled = usingDomain;
       manualWrap.style.display = state0.manual ? '' : 'none';
       arrayBox.style.display = cat.arrays && !state0.manual && !usingDomain ? '' : 'none';
@@ -2143,11 +2160,6 @@ class Editor {
       preview.textContent = usingDomain ? (dom?.type ?? '') : (compose() || '(타입을 고르세요)');
     };
 
-    typeSelect.addEventListener('change', () => {
-      state0.def = (cat.types ?? []).find((t) => t.name === typeSelect.value) ?? null;
-      state0.arg = state0.def?.default ?? '';
-      refresh();
-    });
     domainSelect.addEventListener('change', refresh);
     manualInput.addEventListener('input', refresh);
     unsignedBox.addEventListener('change', refresh);
@@ -2168,7 +2180,7 @@ class Editor {
         domains.length
           ? field('도메인', domainSelect, '도메인을 고르면 그 정의(타입·NULL 여부·기본값)를 따릅니다.')
           : h('p.field-help', {}, '도메인을 만들어 두면 여기서 골라 재사용할 수 있습니다 (상단 "도메인").'),
-        field('타입', typeSelect),
+        field('타입', typePick.node),
         paramWrap,
         unsignedBox,
         arrayBox,

@@ -3549,7 +3549,10 @@ a.stat:hover { border-color: var(--text-mute); background: hsl(var(--h-muted) / 
  * 안내 문구를 읽기 전에 보인다. */
 .pick-field { position: relative; display: flex; align-items: center; }
 .pick-field > .icon { position: absolute; left: 10px; color: var(--text-mute); pointer-events: none; }
-.pick-search { padding-left: 34px; }
+/* 하나만 고르는 판(searchPicker). 칩 줄이 없고 칸 하나로 끝난다. */
+.pick.is-single .pick-input { width: 100%; }
+.pick.is-disabled { opacity: 0.55; }
+.pick-input { padding-left: 34px; }
 
 /* 후보 목록은 화면에 띄운다. 흐름 안에서 펼치면 열 때마다 대화상자 높이가
  * 출렁이고, absolute 로 띄우면 대화상자 본문의 스크롤 상자에서 잘린다.
