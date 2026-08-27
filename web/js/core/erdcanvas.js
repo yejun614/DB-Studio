@@ -11,6 +11,7 @@
 // 경로가 필요하고, 그 경로가 데이터와 어긋나면 화면마다 다른 그림이 나온다.
 // 예외는 드래그 중 좌표뿐이다 — 왕복이나 재렌더를 기다리면 카드가 마우스를 못 따라온다.
 import { h, mount, icon } from './dom.js';
+import { columnIcon, chosenIconFor } from './colicon.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -256,16 +257,28 @@ export class ErdCanvas {
         const isPK = (tbl.primaryKey?.columns ?? []).some((c) => eqName(c, col.name));
         const isFK = (tbl.foreignKeys ?? []).some((fk) =>
           (fk.columns ?? []).some((c) => eqName(c, col.name)));
+        // 아이콘은 ●/◆ 를 대신한다. 표식이 붙던 컬럼만 달라 보이던 것과 달리
+        // 모든 줄이 같은 자리에서 시작하므로, 이름은 아이콘이 없을 때도 밀어 둔다.
+        const ic = columnIcon(col, { isPK, isFK }, chosenIconFor(geom.layout, col.name));
+        if (ic) {
+          const mark = icon(ic, 12);
+          mark.setAttribute('x', 9);
+          mark.setAttribute('y', y - 10);
+          mark.classList.add('erd-col-icon');
+          if (isPK) mark.classList.add('is-pk');
+          else if (isFK) mark.classList.add('is-fk');
+          g.appendChild(mark);
+        }
         g.appendChild(svgEl('text', {
-          class: `erd-col${isPK ? ' is-pk' : ''}`, x: 10, y,
-        }, `${isPK ? '● ' : isFK ? '◆ ' : ''}${truncate(col.name, 22)}`));
+          class: `erd-col${isPK ? ' is-pk' : ''}`, x: 26, y,
+        }, truncate(col.name, 20)));
         g.appendChild(svgEl('text', {
           class: 'erd-col-type', x: geom.w - 10, y, 'text-anchor': 'end',
         }, `${truncate(col.rawType || col.type?.base || '', 16)}${col.nullable ? '' : ' *'}`));
       });
       if (geom.extra) {
         g.appendChild(svgEl('text', {
-          class: 'erd-col-more', x: 10, y: HEAD_H + MAX_VISIBLE_ROWS * ROW_H + 14,
+          class: 'erd-col-more', x: 26, y: HEAD_H + MAX_VISIBLE_ROWS * ROW_H + 14,
         }, `… ${count - MAX_VISIBLE_ROWS}개 더`));
       }
     }

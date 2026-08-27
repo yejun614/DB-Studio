@@ -17,6 +17,7 @@ import {
 import { ErdSession, throttle } from '../core/erdsocket.js';
 import { roomChatView } from '../core/roomchat.js';
 import { searchPicker, suggestInput } from '../core/searchpick.js';
+import { COLUMN_ICONS, columnIcon, autoColumnIcon, chosenIconFor } from '../core/colicon.js';
 import { codeBlock, codeEditor } from '../core/highlight.js';
 import {
   ErdCanvas, CARD_W, tableKey, tableDisplay, refKey, newLocalID, truncate,
@@ -1294,6 +1295,21 @@ class Editor {
       },
     }, icon('key', 12));
 
+    // 아이콘 단추. 고른 것이 없으면 자동으로 정해진 아이콘을 그대로 보여준다 —
+    // 비어 있는 자리를 보여주면 "여기에 무엇이 들어가는지" 눌러 봐야 알 수 있고,
+    // 카드에 이미 그려져 있는 것과도 어긋난다.
+    const isFK = (ref.table()?.foreignKeys ?? []).some((fk) =>
+      (fk.columns ?? []).some((c) => c.toLowerCase() === col.name.toLowerCase()));
+    const chosen = chosenIconFor(this.doc.layout?.[ref.serverKey], col.name);
+    const shownIcon = columnIcon(col, { isPK, isFK }, chosen);
+    const iconBtn = h('button.erd-col-icon-btn', {
+      type: 'button',
+      class: chosen ? 'is-set' : '',
+      disabled: ro,
+      title: chosen ? '아이콘 바꾸기' : '아이콘 (타입·키에서 자동)',
+      onclick: () => this.openColumnIconDialog(ref, col, { isPK, isFK }),
+    }, shownIcon ? icon(shownIcon, 13) : h('span.erd-icon-none', {}, '—'));
+
     const moveBtn = (dir, label) => h('button.icon-btn', {
       type: 'button', title: label,
       disabled: ro || (dir < 0 ? index === 0 : index === total - 1),
@@ -1319,7 +1335,7 @@ class Editor {
     }
 
     return h('div.erd-col-row', {},
-      h('div.erd-col-row-main', {}, pkBtn, nameInput, typeInput, ro ? null : pickBtn),
+      h('div.erd-col-row-main', {}, pkBtn, iconBtn, nameInput, typeInput, ro ? null : pickBtn),
       h('div.erd-col-row-sub', {},
         nullBox,
         autoBadge,
@@ -1335,6 +1351,54 @@ class Editor {
       ),
       col.comment ? h('p.erd-col-comment', {}, col.comment) : null,
     );
+  }
+
+  // openColumnIconDialog는 컬럼 아이콘을 고른다.
+  //
+  // 인스펙터 안에 펼치지 않고 창을 여는 이유: 아이콘이 서른 개 가까이 되는데
+  // 컬럼 줄마다 그 격자를 둘 자리가 없다. 고르면 바로 보내고 닫는다 — 아이콘은
+  // 되돌리기 쉬운 표시 정보라 확인 단추를 한 번 더 누르게 할 이유가 없다.
+  openColumnIconDialog(ref, col, flags) {
+    const auto = autoColumnIcon(col, flags);
+    const chosen = chosenIconFor(this.doc.layout?.[ref.serverKey], col.name);
+
+    const send = (value) => {
+      // 좌표는 보내는 순간 다시 읽는다. table.move는 위치가 필수인 패치라,
+      // 창을 여는 동안 누가 카드를 옮겼다면 옛 자리로 되돌려 놓게 된다.
+      const now = this.doc.layout?.[ref.serverKey] ?? {};
+      this.send('table.move', {
+        key: ref.serverKey,
+        x: now.x ?? 0,
+        y: now.y ?? 0,
+        // 보낸 컬럼만 바뀐다. 지도를 통째로 보내면 같은 표를 함께 보는 사람의
+        // 아이콘을 지우게 된다.
+        columnIcons: { [col.name.toLowerCase()]: value },
+      });
+      close();
+    };
+
+    const cell = (value, on, node, label) => h('button.erd-icon-btn', {
+      type: 'button',
+      class: on ? 'is-on' : '',
+      title: label,
+      onclick: () => send(value),
+    }, node);
+
+    const close = openModal({
+      title: `${col.name} 아이콘`,
+      width: 420,
+      body: () => h('div', {},
+        h('div.erd-icon-auto', {},
+          cell('', !chosen, h('span.erd-icon-auto-face', {}, icon(auto, 14), h('span', {}, '자동')),
+            '타입과 키에 맞춰 고릅니다'),
+          cell('none', chosen === 'none', h('span.erd-icon-none', {}, '표시 안 함'),
+            '이 컬럼에는 아이콘을 붙이지 않습니다'),
+        ),
+        h('div.erd-icon-picker.is-wide', {}, COLUMN_ICONS.map((name) =>
+          cell(name, chosen === name, icon(name, 15), name))),
+        h('p.field-help', {}, '아이콘은 설계 메모입니다. 마이그레이션에는 들어가지 않습니다.'),
+      ),
+    });
   }
 
   // appearanceEditor는 카드의 표시 방식(아이콘·색)을 고른다.
@@ -2615,6 +2679,16 @@ export function applyLightOp(doc, op) {
       const next = { ...prev, x: p.x, y: p.y };
       for (const k of ['collapsed', 'color', 'icon', 'width']) {
         if (p[k] !== undefined) next[k] = p[k];
+      }
+      // 컬럼 아이콘은 **보낸 것만** 덮어쓴다(서버의 applyTableMove와 같다).
+      // 통째로 갈아 끼우면 방금 다른 사람이 고른 아이콘이 내 화면에서만 사라진다.
+      if (p.columnIcons) {
+        const icons = { ...(prev.columnIcons ?? {}) };
+        for (const [name, ic] of Object.entries(p.columnIcons)) {
+          if (ic) icons[name.toLowerCase()] = ic;
+          else delete icons[name.toLowerCase()];
+        }
+        next.columnIcons = icons;
       }
       doc.layout[p.key] = next;
       break;

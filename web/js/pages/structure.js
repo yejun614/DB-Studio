@@ -23,6 +23,7 @@ import { serverDbPicker } from '../core/connpick.js';
 import { panelResizeHandle, attachPanelResize } from '../core/panelresize.js';
 import { errorPanel } from './users.js';
 import { ErdSession } from '../core/erdsocket.js';
+import { columnIcon, chosenIconFor } from '../core/colicon.js';
 import { roomChatView, scrollChatToBottom } from '../core/roomchat.js';
 // 구조 화면과 ERD 편집기는 같은 op를 주고받는다. 반영 규칙을 두 벌로 두면
 // 언젠가 어긋나고, 그때 조용히 사라지는 것은 남의 편집이다.
@@ -516,8 +517,14 @@ class StructureView {
             .some((c) => c.toLowerCase() === col.name.toLowerCase());
           const isFK = (tbl.foreignKeys ?? []).some((fk) =>
             (fk.columns ?? []).some((c) => c.toLowerCase() === col.name.toLowerCase()));
+          // 표식은 카드와 같은 아이콘을 쓴다. 목록과 다이어그램이 서로 다른 표식을
+          // 쓰면 "이 줄이 카드의 어느 줄인가"를 이름으로 다시 맞춰 봐야 한다.
+          const ic = columnIcon(col, { isPK, isFK },
+            chosenIconFor(this.doc?.layout?.[keyOf(tbl)], col.name));
           return h('div.structure-col', {},
-            h('span.structure-col-mark', {}, isPK ? icon('key', 12) : isFK ? '◆' : ''),
+            h('span.structure-col-mark', {
+              class: isPK ? 'is-pk' : isFK ? 'is-fk' : '',
+            }, ic ? icon(ic, 12) : ''),
             h('span.structure-col-name', {}, col.name),
             h('span.structure-col-type', {}, col.rawType || col.type?.base || ''),
             col.nullable ? null : badge('NOT NULL', 'neutral'),

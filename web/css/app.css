@@ -1853,6 +1853,11 @@ option { background: var(--surface); color: var(--text); }
 .erd-col-more { fill: var(--text-mute); font: italic 11px var(--sans); }
 
 .erd-card-icon { color: var(--text-dim); }
+/* 컬럼 아이콘. 이름보다 옅게 두어 표식으로 읽히게 한다 — 같은 굵기면 줄마다
+ * 아이콘이 먼저 눈에 들어와 이름을 훑기 어려워진다. 키만 색으로 구분한다. */
+.erd-col-icon { color: var(--text-mute); opacity: 0.85; }
+.erd-col-icon.is-pk { color: var(--warn); opacity: 1; }
+.erd-col-icon.is-fk { color: var(--primary); opacity: 1; }
 /* 색을 지정한 카드는 머리띠로 표시한다. 카드 전체를 칠하면 컬럼 글씨가 읽히지 않는다. */
 .erd-card-g[style*="--card-accent"] .erd-card-head { fill: var(--card-accent); fill-opacity: 0.22; }
 .erd-card-g[style*="--card-accent"] .erd-card-bg { stroke: var(--card-accent); }
@@ -1925,7 +1930,7 @@ option { background: var(--surface); color: var(--text); }
 /* 컬럼 한 줄: [기본키] [이름] [타입] [타입 고르기].
  * 고르개 버튼은 타입 칸 바로 옆이어야 "이 칸을 고르는 버튼"으로 읽힌다. */
 .erd-col-row-main {
-  display: grid; grid-template-columns: auto 1fr 1fr auto;
+  display: grid; grid-template-columns: auto auto 1fr 1fr auto;
   gap: 6px; align-items: center;
 }
 .erd-col-row-main .input { min-width: 0; }
@@ -1943,6 +1948,18 @@ option { background: var(--surface); color: var(--text); }
   background: hsl(var(--h-warning) / 0.12);
 }
 .erd-pk-toggle:disabled { opacity: 0.5; cursor: not-allowed; }
+/* 아이콘 단추. 기본키 토글과 같은 크기라 두 표식이 나란히 읽힌다. */
+.erd-col-icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0;
+  border: 1px solid transparent; border-radius: 6px;
+  background: none; color: var(--text-mute); cursor: pointer;
+}
+.erd-col-icon-btn:hover:not(:disabled) { color: var(--text); border-color: var(--border); }
+/* 직접 고른 아이콘은 테두리를 남긴다. 자동값과 눈으로 갈리지 않으면
+ * "이건 내가 고른 것인가"를 창을 열어 봐야 안다. */
+.erd-col-icon-btn.is-set { color: var(--text-dim); border-color: var(--border); }
+.erd-col-icon-btn:disabled { opacity: 0.6; cursor: default; }
 .erd-col-order { display: inline-flex; gap: 2px; margin-left: auto; }
 .erd-move-arrow { font-size: 9px; line-height: 1; }
 .erd-col-row-sub {
@@ -1972,6 +1989,12 @@ option { background: var(--surface); color: var(--text); }
 .erd-icon-btn:hover { color: var(--text); border-color: var(--text-mute); }
 .erd-icon-btn.is-on { color: var(--primary); border-color: var(--primary); background: var(--surface-2); }
 .erd-icon-none { font-size: 12px; }
+/* 창 안에서는 높이를 묶지 않는다. 인스펙터와 달리 자리가 넉넉하다. */
+.erd-icon-picker.is-wide { max-height: 264px; gap: 6px; }
+.erd-icon-picker.is-wide .erd-icon-btn { width: 34px; height: 34px; }
+.erd-icon-auto { display: flex; gap: 6px; margin-bottom: 10px; }
+.erd-icon-auto .erd-icon-btn { width: auto; height: 34px; padding: 0 12px; }
+.erd-icon-auto-face { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
 .tint-none { color: var(--text-mute); background: var(--surface-2) !important; }
 .erd-sub-hint { margin-left: auto; font-size: 10.5px; color: var(--text-mute); font-weight: 400; }
 .erd-chip-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
@@ -2069,6 +2092,8 @@ option { background: var(--surface); color: var(--text); }
   width: 14px; flex-shrink: 0; text-align: center;
   color: var(--text-dim); line-height: 1;
 }
+.structure-col-mark.is-pk { color: var(--warn); }
+.structure-col-mark.is-fk { color: var(--primary); }
 .structure-col-name { font-weight: 500; min-width: 0; word-break: break-all; }
 .structure-col-type {
   color: var(--text-dim);
