@@ -37,6 +37,10 @@ export class ErdCanvas {
     // tool은 **빈 곳을 끌 때** 무엇을 할지다: 'pan'이면 화면 이동, 'select'면 범위 선택.
     // 기본은 pan이다 — 이 값을 바꾸지 않는 화면(구조)은 지금까지와 똑같이 움직인다.
     this.tool = 'pan';
+    // spaceHeld는 스페이스바를 누르고 있는 동안 켜진다. 그동안은 도구와 무관하게
+    // 화면 이동이다 — 그림 도구들의 공통 관례이고, 도구를 바꾸고 되돌리는 두 번의
+    // 클릭보다 손이 덜 움직인다.
+    this.spaceHeld = false;
 
     this.svg = document.createElementNS(SVG_NS, 'svg');
     this.svg.classList.add('erd-canvas');
@@ -451,7 +455,7 @@ export class ErdCanvas {
       // 일이 가장 잦다. 이 캔버스에는 스크롤바가 없어서 끌기 말고는 화면을 옮길
       // 방법이 없으므로, 어떤 도구에서도 이동으로 가는 길이 하나는 열려 있어야 한다.
       const middle = e.button === 1;
-      const wantBand = this.canPick && !middle && (this.tool === 'select'
+      const wantBand = this.canPick && !middle && !this.spaceHeld && (this.tool === 'select'
         ? !(e.ctrlKey || e.metaKey)
         : (e.shiftKey || e.ctrlKey || e.metaKey));
       if (wantBand) {
@@ -465,19 +469,11 @@ export class ErdCanvas {
         svg.setPointerCapture?.(e.pointerId);
         return;
       }
-      // 빈 곳을 끌면 화면 이동. 선택 해제도 함께 한다.
-      this.drag = { mode: 'pan', startClient: { x: e.clientX, y: e.clientY }, view: { ...this.view } };
-      // 화면을 손으로 옮기기 시작했다. 따라가기와 두 힘이 동시에 당기면
-      // 어느 쪽도 원하는 곳을 볼 수 없다.
-      this.opts.onManualPan?.();
-      if (this.marks.length) {
-        const many = this.marks.length > 1;
-        this.marks = [];
-        if (many) this.opts.onMarks?.([]);
-        else this.opts.onSelect?.(null);
-        this.render();
-      }
-      svg.setPointerCapture?.(e.pointerId);
+      // 빈 곳을 끌면 화면 이동. 빈 곳을 눌렀으니 선택도 놓는다 — 스페이스바로
+      // 옮기는 중이라면 놓지 않는다(보는 자리를 바꾸는 일이지 고른 것을 놓는 일이
+      // 아니다. 골라 둔 열 장을 옮겨 보려고 화면을 밀었더니 선택이 풀리면, 그 뒤의
+      // 정렬·복제를 다시 골라야 한다).
+      this.startPan(e, { clearSelection: !this.spaceHeld });
     };
     const onPointerMove = (e) => {
       const point = this.toCanvas(e.clientX, e.clientY);
@@ -634,16 +630,51 @@ export class ErdCanvas {
       }
     };
 
+    // 스페이스바: 누르고 있는 동안만 화면 이동.
+    //
+    // 스페이스는 **캔버스를 보고 있을 때만** 우리 것이다.
+    //
+    // 입력 칸만 걸러서는 부족하다. 스페이스는 단추·체크박스를 누르는 키이기도 하고
+    // 모달이 열리면 포커스는 그 대화상자에 있다. 그 자리에서 우리가 삼키면 키보드로
+    // 단추를 누를 수 없게 된다 — 그래서 "포커스가 캔버스 쪽에 있는가"로 판단한다.
+    const canTakeSpace = () => {
+      const el = document.activeElement;
+      if (!el || el === document.body) return true;
+      if (el.isContentEditable) return false;
+      return this.wrap.contains(el);
+    };
+    const onKeyDown = (e) => {
+      if (e.code !== 'Space' && e.key !== ' ') return;
+      if (!canTakeSpace()) return;
+      // 기본 동작(페이지 스크롤)을 막는다. 캔버스를 보고 있는데 페이지가 튀면
+      // 지금 무엇을 보고 있었는지 잃는다.
+      e.preventDefault();
+      this.setSpaceHeld(true);
+    };
+    const onKeyUp = (e) => {
+      if (e.code !== 'Space' && e.key !== ' ') return;
+      this.setSpaceHeld(false);
+    };
+    // 창을 벗어나면(다른 탭·다른 창) keyup을 못 받는다. 그대로 두면 돌아왔을 때
+    // 계속 스페이스를 누르고 있는 상태로 남아, 카드를 끌 수 없게 된다.
+    const onBlur = () => this.setSpaceHeld(false);
+
     svg.addEventListener('wheel', onWheel, { passive: false });
     svg.addEventListener('pointerdown', onPointerDown);
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onBlur);
 
     this.unbind = () => {
       svg.removeEventListener('wheel', onWheel);
       svg.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onBlur);
     };
   }
 
@@ -762,6 +793,33 @@ export class ErdCanvas {
     return out;
   }
 
+  // startPan은 화면 이동 드래그를 시작한다.
+  //
+  // clearSelection은 "빈 곳을 눌렀다"는 뜻일 때만 켠다. 스페이스바로 옮기는 것은
+  // 보는 자리를 바꾸는 일이지 고른 것을 놓는 일이 아니다 — 골라 둔 열 장을 옮겨
+  // 보려고 화면을 밀었더니 선택이 풀리면, 그 뒤의 정렬·복제를 다시 골라야 한다.
+  startPan(e, { clearSelection = false } = {}) {
+    this.drag = { mode: 'pan', startClient: { x: e.clientX, y: e.clientY }, view: { ...this.view } };
+    // 화면을 손으로 옮기기 시작했다. 따라가기와 두 힘이 동시에 당기면
+    // 어느 쪽도 원하는 곳을 볼 수 없다.
+    this.opts.onManualPan?.();
+    if (clearSelection && this.marks.length) {
+      const many = this.marks.length > 1;
+      this.marks = [];
+      if (many) this.opts.onMarks?.([]);
+      else this.opts.onSelect?.(null);
+      this.render();
+    }
+    this.svg.setPointerCapture?.(e.pointerId);
+  }
+
+  // setSpaceHeld는 스페이스바 상태를 반영한다(커서 포함).
+  setSpaceHeld(on) {
+    if (this.spaceHeld === on) return;
+    this.spaceHeld = on;
+    this.svg.classList.toggle('is-space-pan', on);
+  }
+
   // moveLinks는 끌고 있는 카드의 좌표를 반영해 관계선만 다시 그린다.
   //
   // 선 레이어만 갈아 끼우는 이유: 카드까지 다시 그리면 지금 잡고 있는 요소가 버려져
@@ -791,6 +849,13 @@ export class ErdCanvas {
 
   onCardPointerDown(e, key, geom) {
     e.stopPropagation();
+    // 스페이스바를 누르고 있으면 무엇을 눌렀든 화면 이동이다. 카드 위에서만 안 되면
+    // "빈 곳을 찾아 눌러야 하는" 도구가 되는데, 카드가 화면을 덮은 상태에서 옮기려는
+    // 순간이 바로 그 도구가 필요한 순간이다.
+    if (this.spaceHeld) {
+      this.startPan(e);
+      return;
+    }
     if (this.pickToggle(e, 'table', key)) return;
     // 이미 여럿을 고른 상태에서 그중 하나를 잡은 것이라면 선택을 그대로 둔다.
     // 여기서 하나로 줄이면 함께 옮기려고 잡은 순간 나머지가 풀린다.
@@ -819,6 +884,10 @@ export class ErdCanvas {
 
   onNotePointerDown(e, note, mode = 'move') {
     e.stopPropagation();
+    if (this.spaceHeld) {
+      this.startPan(e);
+      return;
+    }
     if (mode !== 'resize' && this.pickToggle(e, 'note', note.id)) return;
     // 고르는 것과 옮기는 것은 다른 권한이다. 읽기 전용 참여자도 메모를 골라
     // 내용을 인스펙터에서 읽을 수 있어야 한다.
@@ -846,6 +915,10 @@ export class ErdCanvas {
 
   onGroupPointerDown(e, group, mode) {
     e.stopPropagation();
+    if (this.spaceHeld) {
+      this.startPan(e);
+      return;
+    }
     if (mode !== 'resize' && this.pickToggle(e, 'group', group.id)) return;
     if (!this.isSelected('group', group.id)) {
       this.selection = { kind: 'group', id: group.id };

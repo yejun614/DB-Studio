@@ -1832,6 +1832,9 @@ option { background: var(--surface); color: var(--text); }
  * 화면이 움직이는지 범위가 그려지는지 알게 된다. */
 .erd-canvas.is-select { cursor: crosshair; }
 .erd-canvas.is-select:active { cursor: crosshair; }
+/* 스페이스바를 누르고 있는 동안은 도구와 무관하게 화면 이동이다. 커서도 그렇게 말한다. */
+.erd-canvas.is-space-pan, .erd-canvas.is-select.is-space-pan { cursor: grab; }
+.erd-canvas.is-space-pan:active, .erd-canvas.is-select.is-space-pan:active { cursor: grabbing; }
 .erd-hint { fill: var(--text-mute); font-size: 15px; font-family: var(--sans); }
 
 /* 관계선 */
