@@ -16,7 +16,7 @@ import {
 } from '../core/ui.js';
 import { ErdSession, throttle } from '../core/erdsocket.js';
 import { roomChatView } from '../core/roomchat.js';
-import { searchPicker } from '../core/searchpick.js';
+import { searchPicker, suggestInput } from '../core/searchpick.js';
 import { codeBlock, codeEditor } from '../core/highlight.js';
 import {
   ErdCanvas, CARD_W, tableKey, tableDisplay, refKey, newLocalID, truncate,
@@ -1662,7 +1662,7 @@ class Editor {
   }
 
   addNote() {
-    const box = h('textarea.input.textarea', { rows: 3, placeholder: '메모 내용' });
+    const box = h('textarea.input.textarea', { rows: 3, placeholder: '메모 내용', autofocus: true });
     openModal({
       title: '메모 추가',
       width: 460,
@@ -1685,7 +1685,7 @@ class Editor {
   }
 
   addGroup() {
-    const nameInput = input({ placeholder: '예: 주문 도메인' });
+    const nameInput = input({ placeholder: '예: 주문 도메인', autofocus: true });
     let color = '#3b82f6';
     const swatches = h('div.tint-picker', {}, TABLE_COLORS.filter((c) => c.value).map((c) =>
       h('button.tint-swatch', {
@@ -2110,6 +2110,22 @@ class Editor {
       ...domains.map((d) => ({ value: d.name, label: `${d.name} — ${d.type}` })),
     ], { value: state0.domain });
 
+    // 기본값을 여기서도 정한다. 타입을 고르는 순간이 기본값을 떠올리는 순간이고
+    // (created_at 을 만들면서 now() 를 같이 정한다), 창을 닫고 컬럼 줄로 돌아가
+    // 다시 찾아 적는 것은 같은 일을 두 번 하는 것이다.
+    //
+    // 제안은 서버 카탈로그에서 온다. 함수 이름이 DB마다 다르므로(now() /
+    // GETDATE() / SYSTIMESTAMP) 화면이 짐작하면 DB를 하나 더 지원할 때마다 두 곳을
+    // 고쳐야 한다. 고를 수만 있는 것이 아니라 그대로 적을 수도 있다 — 목록에 없는
+    // 식을 못 적게 하면 이 칸은 쓸 수 없게 된다.
+    const defaultPick = suggestInput({
+      items: defaultsFor(cat, state0.def),
+      value: col.default ?? '',
+      placeholder: '예: 0, \'\', now() — 비우면 기본값 없음',
+    });
+    const defaultWrap = field('기본값', defaultPick.node,
+      '비워 두면 기본값을 두지 않습니다. 함수는 대상 DB의 문법 그대로 적습니다.');
+
     const unsignedBox = checkbox('UNSIGNED (음수 없음)', { checked: state0.unsigned });
     const arrayBox = checkbox('배열 ([])', { checked: state0.array });
     // 자동 증가를 타입 창에 둔 이유: 붙일 수 있는 타입이 정해져 있고(정수 계열),
@@ -2153,6 +2169,11 @@ class Editor {
           oninput: () => { state0.arg = paramWrap.querySelector('input').value; refresh(); },
         })));
 
+      // 도메인을 고르면 기본값도 도메인이 정한다. 두 곳에서 정하면 어느 쪽이
+      // 이겼는지 화면만 보고 알 수 없다.
+      defaultWrap.style.display = usingDomain ? 'none' : '';
+      defaultPick.setItems(defaultsFor(cat, state0.manual ? null : def));
+
       const dom = domains.find((d) => d.name === domainSelect.value);
       mount(noteLine, usingDomain
         ? `도메인 "${dom?.name}" 의 정의를 씁니다: ${dom?.type}`
@@ -2185,6 +2206,7 @@ class Editor {
         unsignedBox,
         arrayBox,
         autoWrap,
+        defaultWrap,
         manualToggle,
         manualWrap,
         noteLine,
@@ -2220,6 +2242,8 @@ class Editor {
         && autoBox.querySelector('input').checked;
       this.send('column.update', {
         table: ref.serverKey, name, type: text, domain: '', identity: wantsAuto,
+        // 기본값도 함께 보낸다. 비우면 서버가 "기본값 없음"으로 정리한다.
+        default: defaultPick.value.trim(),
       });
       close();
     });
@@ -2837,6 +2861,19 @@ function identityFits(def, arg) {
 //
 // 버튼·체크박스에 포커스가 있는 것은 입력이 아니다. 그 구분이 없으면
 // "버튼을 눌렀는데 화면이 그대로"가 된다.
+// defaultsFor는 이 타입에 어울리는 기본값 제안을 고른다.
+//
+// 분류로 거르는 이유: 문자 컬럼에 now() 를 먼저 보여줄 이유가 없다. 대신 분류가
+// 없는 제안(어느 타입에서나 쓰는 것)은 언제나 남기고, 타입을 아직 고르지 않았거나
+// 직접 입력 중이면 전부 보여준다 — 그때는 무엇이 맞는지 우리가 모른다.
+function defaultsFor(cat, def) {
+  const all = cat?.defaults ?? [];
+  const list = def
+    ? all.filter((d) => !d.for?.length || d.for.includes(def.category))
+    : all;
+  return list.map((d) => ({ value: d.expr, label: d.expr, hint: d.label }));
+}
+
 function isTyping(root) {
   const el = document.activeElement;
   if (!el || !root.contains(el)) return false;

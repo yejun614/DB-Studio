@@ -46,7 +46,11 @@ export function openModal({ title, body, footer, width = 560, onClose }) {
   const content = typeof body === 'function' ? body(close) : body;
   const foot = typeof footer === 'function' ? footer(close) : footer;
 
-  const dialog = h('div.modal', { style: { maxWidth: `${width}px` }, role: 'dialog', 'aria-modal': 'true' },
+  // tabindex 를 두는 이유: 달라고 한 칸이 없을 때 여기에 포커스를 준다.
+  // 포커스가 대화상자 밖(뒤 화면)에 남아 있으면 Tab 이 뒤 화면을 돌아다닌다.
+  const dialog = h('div.modal', {
+    style: { maxWidth: `${width}px` }, role: 'dialog', 'aria-modal': 'true', tabindex: '-1',
+  },
     h('header.modal-head', {},
       h('h2', {}, title),
       h('button.icon-btn', { type: 'button', title: '닫기', onclick: close }, icon('x')),
@@ -65,9 +69,15 @@ export function openModal({ title, body, footer, width = 560, onClose }) {
   document.addEventListener('keydown', onKey);
   document.body.appendChild(overlay);
 
-  // 첫 입력 요소로 포커스를 옮겨 키보드만으로 작업할 수 있게 한다.
-  const first = dialog.querySelector('input, select, textarea, button:not(.icon-btn)');
-  first?.focus();
+  // 포커스는 **달라고 한 칸에만** 준다(autofocus).
+  //
+  // 예전에는 첫 입력 요소를 자동으로 붙잡았는데, 그 칸이 고르개면 창을 열자마자
+  // 목록이 펼쳐진다 — 읽으려고 연 창에서 목록이 화면을 덮는다. 달라고 한 칸이
+  // 없으면 대화상자 자체에 포커스를 둔다: Esc·Tab 은 그대로 되고, 아무 칸도
+  // 건드리지 않는다.
+  const wanted = dialog.querySelector('[autofocus]');
+  if (wanted) wanted.focus();
+  else dialog.focus();
 
   return close;
 }

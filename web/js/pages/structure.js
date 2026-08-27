@@ -553,7 +553,7 @@ class StructureView {
   // ---------- 배치 편집 ----------
 
   addNote() {
-    const box = h('textarea.input.textarea', { rows: 3, placeholder: '메모 내용' });
+    const box = h('textarea.input.textarea', { rows: 3, placeholder: '메모 내용', autofocus: true });
     openModal({
       title: '메모 추가',
       width: 460,
@@ -678,7 +678,7 @@ class StructureView {
   }
 
   addGroup() {
-    const nameInput = input({ placeholder: '예: 주문 도메인' });
+    const nameInput = input({ placeholder: '예: 주문 도메인', autofocus: true });
     let color = TINTS[1].value;
     const swatches = h('div.tint-picker', {}, TINTS.map((c) => h('button.tint-swatch', {
       type: 'button',

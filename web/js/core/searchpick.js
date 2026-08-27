@@ -214,6 +214,109 @@ export function searchPicker({
 }
 
 /**
+ * suggestInput은 **자유 입력**에 제안 목록을 붙인다.
+ *
+ * searchPicker 와 다른 점: 값이 목록에 매이지 않는다. 기본값 칸이 그런 자리다 —
+ * now() 같은 흔한 식은 골라 넣되, DB마다 다른 표현이나 우리가 모르는 함수도 그대로
+ * 적을 수 있어야 한다. 목록에 없는 것을 못 적게 하면 그 칸은 쓸 수 없게 된다.
+ *
+ * @param {object} opts
+ * @param {Array<{value: string, label?: string, hint?: string}>} opts.items 제안
+ * @param {string} [opts.value] 처음 값
+ * @param {string} [opts.placeholder]
+ * @param {(value: string) => void} [opts.onChange] 값이 바뀔 때
+ * @returns {{node: HTMLElement, input: HTMLInputElement, value: string, setItems: Function}}
+ */
+export function suggestInput({ items = [], value = '', placeholder = '', onChange }) {
+  let rows = items.map((it) => ({ value: it.value, label: it.label ?? it.value, hint: it.hint ?? it.value }));
+  let open = false;
+  let cursor = 0;
+
+  const box = h('input.input.pick-input.is-free', {
+    type: 'text', value, placeholder, autocomplete: 'off', spellcheck: false,
+  });
+  const field = h('div.pick-field', {}, icon('sparkles'), box);
+  const { list, place, attach, detach } = createList(box);
+  const node = h('div.pick.is-single', {}, field, list);
+
+  // 제안은 "지금 적은 것으로 시작하는가"까지 본다. 빈 칸에서는 전부 보여준다 —
+  // 무엇을 적을 수 있는지 모르는 것이 이 칸의 어려움이다.
+  const visible = () => matches(rows, box.value);
+
+  const draw = () => {
+    if (!open || rows.length === 0) {
+      mount(list, []);
+      list.classList.remove('is-open');
+      detach();
+      return;
+    }
+    const found = visible();
+    if (found.length === 0) {
+      mount(list, []);
+      list.classList.remove('is-open');
+      detach();
+      return;
+    }
+    list.classList.add('is-open');
+    if (cursor >= found.length) cursor = found.length - 1;
+    if (cursor < 0) cursor = 0;
+    place();
+    attach();
+    mount(list, found.map((it, i) => optionRow(it, i === cursor, () => pick(it.value))));
+  };
+
+  const pick = (next) => {
+    box.value = next;
+    open = false;
+    draw();
+    onChange?.(next);
+  };
+
+  box.addEventListener('focus', () => { open = true; cursor = 0; draw(); });
+  box.addEventListener('blur', () => { open = false; draw(); onChange?.(box.value); });
+  box.addEventListener('input', () => { open = true; cursor = 0; draw(); onChange?.(box.value); });
+  box.addEventListener('keydown', (e) => {
+    const found = visible();
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      open = true;
+      cursor += e.key === 'ArrowDown' ? 1 : -1;
+      if (cursor < 0) cursor = found.length - 1;
+      if (cursor >= found.length) cursor = 0;
+      draw();
+      return;
+    }
+    // Enter는 목록이 펼쳐져 있을 때만 고른다. 접혀 있으면 적은 것이 답이므로
+    // 대화상자의 기본 동작(저장)을 막지 않는다.
+    if (e.key === 'Enter' && open && found[cursor]) {
+      e.preventDefault();
+      pick(found[cursor].value);
+      return;
+    }
+    if (e.key === 'Escape' && open) {
+      e.stopPropagation();
+      open = false;
+      draw();
+    }
+  });
+
+  return {
+    node,
+    input: box,
+    get value() { return box.value; },
+    set value(v) { box.value = v ?? ''; },
+    // setItems는 제안 목록을 갈아 끼운다. 타입을 바꾸면 제안도 달라진다.
+    setItems(next) {
+      rows = (next ?? []).map((it) => ({
+        value: it.value, label: it.label ?? it.value, hint: it.hint ?? it.value,
+      }));
+      cursor = 0;
+      draw();
+    },
+  };
+}
+
+/**
  * peoplePicker는 검색 칸 + 고른 사람 칩 + 후보 목록을 묶어 돌려준다(여럿 고르기).
  * @param {object} opts
  * @param {Array<{id: string, label: string, sub?: string}>} opts.items 후보
