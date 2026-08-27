@@ -2,9 +2,12 @@ package erdhub
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 
 	"dbstudio/internal/erd"
+	"dbstudio/internal/store"
 )
 
 // 되돌리기에서 가장 위험한 실수는 "마지막 편집"을 문서 단위로 잡는 것이다.
@@ -30,6 +33,116 @@ func tableNames(doc *erd.Document) []string {
 		out = append(out, t.Name)
 	}
 	return out
+}
+
+// reload는 저장된 문서를 다시 읽는다.
+func reload(t *testing.T, ctx context.Context, st *store.Store, docID string) *erd.Document {
+	t.Helper()
+	doc, err := st.GetERDDocument(ctx, docID)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	return doc
+}
+
+// sendBatch는 같은 묶음 이름을 단 op 여러 개를 한 메시지로 보낸다.
+func sendBatch(t *testing.T, ctx context.Context, c *Client, batch string, ops ...[3]string) {
+	t.Helper()
+	parts := make([]string, 0, len(ops))
+	for _, op := range ops {
+		parts = append(parts, fmt.Sprintf(`{"id":%q,"kind":%q,"payload":%s,"batch":%q}`,
+			op[0], op[1], op[2], batch))
+	}
+	msg := fmt.Sprintf(`{"type":"ops","ops":[%s]}`, strings.Join(parts, ","))
+	if err := c.Handle(ctx, []byte(msg)); err != nil {
+		t.Fatalf("handle ops: %v", err)
+	}
+}
+
+// 스택 깊이는 op 수가 아니라 되돌리기 횟수다.
+//
+// op 수로 자르면 묶음의 앞부분만 잘려 나가, 되돌렸을 때 함께 옮긴 것의 절반만
+// 제자리로 돌아온다. 아무도 만든 적 없는 배치가 남는 셈이다.
+func TestUndoDepthCountsSteps(t *testing.T) {
+	stack := []*erd.Op{}
+	// 큰 묶음 하나(깊이보다 많은 op) + 낱개 편집 여러 개.
+	for i := 0; i < undoDepth+10; i++ {
+		stack = push(stack, &erd.Op{ID: fmt.Sprintf("b%d", i), Batch: "big"})
+	}
+	if got := steps(stack); got != 1 {
+		t.Fatalf("묶음 하나의 되돌리기 횟수 = %d (1이어야 합니다)", got)
+	}
+	if len(stack) != undoDepth+10 {
+		t.Errorf("묶음이 잘렸습니다: op %d개 남음", len(stack))
+	}
+
+	for i := 0; i < undoDepth; i++ {
+		stack = push(stack, &erd.Op{ID: fmt.Sprintf("s%d", i)})
+	}
+	if got := steps(stack); got != undoDepth {
+		t.Errorf("되돌리기 횟수 = %d, 기대값 %d", got, undoDepth)
+	}
+	// 가장 오래된 것(큰 묶음)이 통째로 밀려났어야 한다.
+	for _, op := range stack {
+		if op.Batch == "big" {
+			t.Fatal("밀려난 묶음의 op가 남아 있습니다(반쪽 되돌리기가 됩니다)")
+		}
+	}
+}
+
+// 한 동작에서 나온 편집은 한 번에 되돌아가야 한다.
+//
+// 여러 카드를 골라 함께 끌면 카드마다 op가 하나씩 생긴다. 묶이지 않으면 Ctrl+Z가
+// 카드를 하나씩 되돌려, 한 번 옮긴 것을 다섯 번 되돌려야 한다. 그동안 화면에는
+// 아무도 만든 적 없는 중간 배치가 남는다 — 사람이 보기에 그것은 고장이다.
+func TestUndoRestoresWholeBatch(t *testing.T) {
+	ctx, st, hub, docID := fixture(t)
+	c := join(t, ctx, hub, docID, "c1", "A", true)
+	drain(c)
+
+	for _, name := range []string{"users", "orders", "items"} {
+		sendOp(t, ctx, c, "add-"+name, erd.OpTableAdd, fmt.Sprintf(`{"name":%q}`, name))
+		recv(t, c, "ops")
+	}
+	// 셋을 같은 자리에서 시작시킨다(되돌린 뒤 확인할 기준점).
+	sendBatch(t, ctx, c, "place",
+		[3]string{"p1", string(erd.OpTableMove), `{"key":"users","x":10,"y":10}`},
+		[3]string{"p2", string(erd.OpTableMove), `{"key":"orders","x":20,"y":20}`},
+		[3]string{"p3", string(erd.OpTableMove), `{"key":"items","x":30,"y":30}`})
+	drain(c)
+
+	// 셋을 함께 옮긴다(한 묶음).
+	sendBatch(t, ctx, c, "drag-1",
+		[3]string{"m1", string(erd.OpTableMove), `{"key":"users","x":110,"y":10}`},
+		[3]string{"m2", string(erd.OpTableMove), `{"key":"orders","x":120,"y":20}`},
+		[3]string{"m3", string(erd.OpTableMove), `{"key":"items","x":130,"y":30}`})
+	drain(c)
+
+	undo(t, ctx, c)
+	doc := reload(t, ctx, st, docID)
+	for key, want := range map[string]float64{"users": 10, "orders": 20, "items": 30} {
+		if got := doc.Layout[key].X; got != want {
+			t.Errorf("%s x = %v, 기대값 %v (묶음이 한 번에 되돌아가지 않았습니다)", key, got, want)
+		}
+	}
+
+	// 다시실행도 한 번에 되돌아온다.
+	redo(t, ctx, c)
+	doc = reload(t, ctx, st, docID)
+	for key, want := range map[string]float64{"users": 110, "orders": 120, "items": 130} {
+		if got := doc.Layout[key].X; got != want {
+			t.Errorf("다시실행 후 %s x = %v, 기대값 %v", key, got, want)
+		}
+	}
+
+	// 묶음 밖의 편집까지 함께 딸려 가면 안 된다. 한 번 더 되돌리면 이번에는
+	// 묶음 이전의 배치(place)까지 돌아가야 한다 — 그 앞의 테이블 추가가 아니라.
+	undo(t, ctx, c)
+	undo(t, ctx, c)
+	doc = reload(t, ctx, st, docID)
+	if len(doc.Schema.Tables) != 3 {
+		t.Errorf("테이블 수 = %d (묶음 되돌리기가 옆 편집까지 되돌렸습니다)", len(doc.Schema.Tables))
+	}
 }
 
 func TestUndoOnlyTouchesMyEdit(t *testing.T) {

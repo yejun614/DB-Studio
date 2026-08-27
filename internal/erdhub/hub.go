@@ -51,6 +51,10 @@ const maxChatLen = 4000
 // 드래그 중 좌표 op가 묶여 오는 것을 허용하면서, 한 번에 과도한 작업을 막는다.
 const maxOpsPerMessage = 64
 
+// maxBatchLen은 편집 묶음 이름의 길이 제한이다. 클라이언트가 만든 짧은 식별자만
+// 들어오면 되고, 이 값은 op 로그에 그대로 남는다.
+const maxBatchLen = 64
+
 // Hub는 문서별 방을 관리한다.
 type Hub struct {
 	st  *store.Store
@@ -339,6 +343,12 @@ func (c *Client) handleOps(ctx context.Context, msg *inbound) error {
 			c.sendError("편집 ID가 없습니다")
 			return nil
 		}
+		// 묶음 이름은 클라이언트가 만든 문자열이고 op 로그에 그대로 남는다.
+		// 길이를 재지 않으면 로그 한 줄이 얼마든지 커질 수 있다.
+		if len(op.Batch) > maxBatchLen {
+			c.sendError("편집 묶음 이름이 너무 깁니다")
+			return nil
+		}
 		op.Actor, op.ActorName = c.p.UserID, c.p.UserName
 		if op.BaseSeq == 0 {
 			op.BaseSeq = msg.BaseSeq
@@ -574,7 +584,7 @@ func (h *Hub) SubmitOp(ctx context.Context, docID string, op *erd.Op) (*erd.Docu
 	// 소켓 밖에서 온 편집(AI 툴·SQL 불러오기)도 되돌릴 수 있어야 한다.
 	// 방이 없다는 것은 아무도 열어 두지 않았다는 뜻일 뿐, 편집한 사람은 있다.
 	if op.Actor != "" && op.Kind != erd.OpSchemaImport {
-		h.undos.record(docID, op.Actor, erd.Diff(next, doc), intentEdit)
+		h.undos.record(docID, op.Actor, inverseOf(doc, next, op), intentEdit)
 	}
 	// 곧바로 굳혀 둔다. 이 op는 문서를 통째로 바꾸므로, 스냅샷 없이 op 로그에만
 	// 남겨 두면 다음에 문서를 열 때 큰 payload를 다시 재생해야 한다.

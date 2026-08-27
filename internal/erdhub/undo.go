@@ -89,8 +89,11 @@ func (s *undoStore) record(docID, userID string, inverse *erd.Op, in intent) {
 	}
 }
 
-// pop은 적용할 되돌리기(또는 다시실행) op를 꺼낸다. 없으면 nil이다.
-func (s *undoStore) pop(docID, userID string, redo bool) *erd.Op {
+// pop은 적용할 되돌리기(또는 다시실행)를 꺼낸다. 없으면 빈 목록이다.
+//
+// 한 동작에서 나온 편집(Batch가 같은 것)은 함께 꺼낸다. 여러 카드를 한 번에 옮긴
+// 것은 사람에게 한 번의 편집이므로, 되돌리기도 한 번이어야 한다.
+func (s *undoStore) pop(docID, userID string, redo bool) []*erd.Op {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked()
@@ -100,14 +103,31 @@ func (s *undoStore) pop(docID, userID string, redo bool) *erd.Op {
 		return nil
 	}
 	st.touched = time.Now()
+	stack := st.undo
 	if redo {
-		op, rest := popLast(st.redo)
-		st.redo = rest
-		return op
+		stack = st.redo
 	}
-	op, rest := popLast(st.undo)
-	st.undo = rest
-	return op
+	op, rest := popLast(stack)
+	if op == nil {
+		return nil
+	}
+	out := []*erd.Op{op}
+	// 같은 묶음이 이어지는 동안 계속 꺼낸다. 쌓인 순서의 역순으로 나오므로
+	// 이 순서 그대로 적용하면 된다.
+	for op.Batch != "" {
+		peek, shorter := popLast(rest)
+		if peek == nil || peek.Batch != op.Batch {
+			break
+		}
+		out = append(out, peek)
+		rest = shorter
+	}
+	if redo {
+		st.redo = rest
+	} else {
+		st.undo = rest
+	}
+	return out
 }
 
 // state는 버튼을 켤지 끌지다.
@@ -142,10 +162,42 @@ func (s *undoStore) pruneLocked() {
 
 func push(stack []*erd.Op, op *erd.Op) []*erd.Op {
 	stack = append(stack, op)
-	if len(stack) > undoDepth {
-		stack = stack[len(stack)-undoDepth:]
+	// undoDepth는 **되돌리기 횟수**다(op 수가 아니다).
+	//
+	// 한 동작에서 나온 묶음은 한 번에 되돌아가므로, 넘칠 때도 묶음째 잘라야 한다.
+	// op 수로 자르면 묶음의 앞부분만 사라져, 되돌렸는데 절반만 돌아오는 배치가
+	// 만들어진다 — 카드 백 장을 함께 옮긴 뒤가 바로 그런 경우다.
+	for steps(stack) > undoDepth {
+		stack = dropOldestStep(stack)
 	}
 	return stack
+}
+
+// steps는 스택에 쌓인 되돌리기 횟수다. 같은 묶음이 이어지면 한 번으로 센다.
+func steps(stack []*erd.Op) int {
+	n := 0
+	for i, op := range stack {
+		if i == 0 || op.Batch == "" || op.Batch != stack[i-1].Batch {
+			n++
+		}
+	}
+	return n
+}
+
+// dropOldestStep은 가장 오래된 되돌리기 한 번치를 통째로 버린다.
+func dropOldestStep(stack []*erd.Op) []*erd.Op {
+	if len(stack) == 0 {
+		return stack
+	}
+	batch := stack[0].Batch
+	if batch == "" {
+		return stack[1:]
+	}
+	i := 0
+	for i < len(stack) && stack[i].Batch == batch {
+		i++
+	}
+	return stack[i:]
 }
 
 func popLast(stack []*erd.Op) (*erd.Op, []*erd.Op) {
@@ -173,7 +225,19 @@ func (r *room) recordUndo(prev, next *erd.Document, op *erd.Op, in intent) {
 		r.hub.undos.clear(r.id, op.Actor)
 		return
 	}
-	r.hub.undos.record(r.id, op.Actor, erd.Diff(next, prev), in)
+	r.hub.undos.record(r.id, op.Actor, inverseOf(prev, next, op), in)
+}
+
+// inverseOf는 역연산을 만들고 묶음 표시를 그대로 물려준다.
+//
+// 물려주지 않으면 되돌리기 스택에서 묶음이 풀린다 — 함께 옮긴 다섯 장이 하나씩
+// 되돌아가고, 다시실행은 그 하나를 다시 하나씩 되풀이한다.
+func inverseOf(prev, next *erd.Document, op *erd.Op) *erd.Op {
+	inv := erd.Diff(next, prev)
+	if inv != nil {
+		inv.Batch = op.Batch
+	}
+	return inv
 }
 
 // UndoState는 이 사람이 지금 되돌리기·다시실행을 할 수 있는지다.
@@ -203,35 +267,43 @@ func (c *Client) handleUndo(ctx context.Context, redo bool) error {
 		return nil
 	}
 	r := c.room
-	op := r.hub.undos.pop(r.id, c.p.UserID, redo)
-	if op == nil {
+	ops := r.hub.undos.pop(r.id, c.p.UserID, redo)
+	if len(ops) == 0 {
 		c.sendError(label + " 편집이 없습니다")
 		return nil
 	}
-	// 매번 새 ID를 붙인다. 되돌리기는 새로운 편집으로 기록되며, 같은 ID를 다시
-	// 쓰면 재전송으로 오인되어 조용히 무시된다.
-	op.ID = uuid.NewString()
-	op.Actor, op.ActorName = c.p.UserID, c.p.UserName
 
 	in := intentUndo
 	if redo {
 		in = intentRedo
 	}
-	applied, rejectErr, err := r.submit(ctx, op, in)
-	if err != nil {
-		r.hub.log.Error("ERD 되돌리기 저장 실패", "doc", r.id, "error", err)
-		c.sendError("되돌리지 못했습니다: " + err.Error())
-		return nil
+	// 묶음은 끝까지 적용한다. 중간에서 멈추면 함께 옮긴 카드의 절반만 되돌아간
+	// 상태가 남는데, 그것은 되돌리기 전에도 후에도 없던 배치다.
+	var failed *erd.Error
+	for _, op := range ops {
+		// 매번 새 ID를 붙인다. 되돌리기는 새로운 편집으로 기록되며, 같은 ID를 다시
+		// 쓰면 재전송으로 오인되어 조용히 무시된다.
+		op.ID = uuid.NewString()
+		op.Actor, op.ActorName = c.p.UserID, c.p.UserName
+
+		applied, rejectErr, err := r.submit(ctx, op, in)
+		if err != nil {
+			r.hub.log.Error("ERD 되돌리기 저장 실패", "doc", r.id, "error", err)
+			c.sendError("되돌리지 못했습니다: " + err.Error())
+			return nil
+		}
+		if rejectErr != nil {
+			// 그 사이에 다른 사람이 대상을 지웠거나 바꿔 놓았다. 스택에 되돌려 넣지
+			// 않는다 — 이미 맞지 않는 복원이고, 다시 눌러도 같은 이유로 실패한다.
+			failed = rejectErr
+			continue
+		}
+		if applied {
+			r.broadcast(r.opMessage(op))
+		}
 	}
-	if rejectErr != nil {
-		// 그 사이에 다른 사람이 대상을 지웠거나 바꿔 놓았다. 스택에 되돌려 넣지
-		// 않는다 — 이미 맞지 않는 복원이고, 다시 눌러도 같은 이유로 실패한다.
-		c.sendError(label + " 수 없습니다: " + rejectErr.Reason)
-		c.sendUndoState()
-		return nil
-	}
-	if applied {
-		r.broadcast(r.opMessage(op))
+	if failed != nil {
+		c.sendError(label + " 수 없습니다: " + failed.Reason)
 	}
 	c.sendUndoState()
 	return nil
