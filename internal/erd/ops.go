@@ -1126,6 +1126,11 @@ type fkPayload struct {
 	RefColumns   []string `json:"refColumns"`
 	OnDelete     *string  `json:"onDelete,omitempty"`
 	OnUpdate     *string  `json:"onUpdate,omitempty"`
+	// NewName은 이름 바꾸기다. Name은 대상을 찾는 열쇠이므로 새 이름은 따로 받는다.
+	//
+	// 지웠다 새로 만드는 방식과 다른 이유: 제약 이름은 대상 DB에도 그대로 나가는
+	// 이름이고, 지우고 만드는 두 op는 되돌리기에서도 따로 논다.
+	NewName *string `json:"newName,omitempty"`
 }
 
 // 허용하는 참조 동작. 임의 문자열을 그대로 DDL에 넣으면 안 된다.
@@ -1168,6 +1173,19 @@ func applyFKUpsert(doc *Document, op *Op) error {
 	isNew := fk == nil
 	if isNew {
 		fk = &schema.ForeignKey{Name: name}
+	}
+
+	if p.NewName != nil {
+		next, err := validateIdent("외래키", *p.NewName)
+		if err != nil {
+			return err
+		}
+		for _, other := range tbl.ForeignKeys {
+			if other != fk && strings.EqualFold(other.Name, next) {
+				return conflict("외래키 %s 이(가) 이미 있습니다", next)
+			}
+		}
+		fk.Name = next
 	}
 
 	if p.RefTable != "" || isNew {

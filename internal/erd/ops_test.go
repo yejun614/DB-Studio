@@ -315,6 +315,57 @@ func TestColumnRenamePropagates(t *testing.T) {
 	}
 }
 
+// 외래키도 만든 뒤에 이름과 컬럼 짝을 고칠 수 있어야 한다.
+//
+// 제약 이름은 대상 DB에도 그대로 나가는 이름이다. 고치는 길이 "지우고 새로 만들기"뿐이면
+// 관계선이 사라졌다 나타나고, 그 두 op는 되돌리기에서도 따로 논다.
+func TestFKUpdateNameAndColumns(t *testing.T) {
+	doc := twoTables(t)
+	apply(t, doc, OpColumnAdd, `{"table":"users","name":"email","type":"varchar(255)"}`)
+	apply(t, doc, OpColumnAdd, `{"table":"users","name":"nickname","type":"varchar(40)"}`)
+	apply(t, doc, OpIndexAdd, `{"table":"users","name":"ux_email","columns":["email"],"unique":true}`)
+	apply(t, doc, OpColumnAdd, `{"table":"orders","name":"user_id","type":"int"}`)
+	apply(t, doc, OpColumnAdd, `{"table":"orders","name":"user_email","type":"varchar(255)"}`)
+	apply(t, doc, OpFKAdd,
+		`{"table":"orders","name":"fk_a","columns":["user_id"],"refTable":"users","refColumns":["id"]}`)
+
+	// 이름과 컬럼 짝을 함께 바꾼다(id 참조 → email 참조).
+	apply(t, doc, OpFKUpdate, `{"table":"orders","name":"fk_a","newName":"fk_orders_user_email",`+
+		`"columns":["user_email"],"refTable":"users","refColumns":["email"],"onDelete":"SET NULL"}`)
+
+	orders := doc.findTable("orders")
+	if len(orders.ForeignKeys) != 1 {
+		t.Fatalf("외래키 수 = %d (이름을 바꾸면서 하나 더 만들었습니다)", len(orders.ForeignKeys))
+	}
+	fk := orders.ForeignKeys[0]
+	if fk.Name != "fk_orders_user_email" {
+		t.Errorf("이름 = %q", fk.Name)
+	}
+	if len(fk.Columns) != 1 || fk.Columns[0] != "user_email" {
+		t.Errorf("컬럼 = %v", fk.Columns)
+	}
+	if len(fk.RefColumns) != 1 || fk.RefColumns[0] != "email" {
+		t.Errorf("참조 컬럼 = %v", fk.RefColumns)
+	}
+	if fk.OnDelete != "SET NULL" {
+		t.Errorf("ON DELETE = %q", fk.OnDelete)
+	}
+
+	// 이미 있는 이름으로는 바꿀 수 없다.
+	apply(t, doc, OpFKAdd,
+		`{"table":"orders","name":"fk_b","columns":["user_id"],"refTable":"users","refColumns":["id"]}`)
+	applyErr(t, doc, OpFKUpdate,
+		`{"table":"orders","name":"fk_b","newName":"fk_orders_user_email"}`, "conflict", "이미 있습니다")
+	if doc.findTable("orders").ForeignKeys[1].Name != "fk_b" {
+		t.Error("거부된 이름 변경이 적용되었습니다")
+	}
+
+	// 고유하지 않은 컬럼은 여전히 참조할 수 없다(이름만 바꾸는 길로도 뚫리지 않아야 한다).
+	applyErr(t, doc, OpFKUpdate,
+		`{"table":"orders","name":"fk_b","columns":["user_email"],"refTable":"users","refColumns":["nickname"]}`,
+		"invalid", "참조할 수 없습니다")
+}
+
 // 인덱스는 만든 뒤에도 고칠 수 있어야 한다: 이름, 컬럼 순서, 정렬 방향.
 //
 // 이름을 지웠다 다시 만드는 방식으로 바꾸면 그 사이에 인덱스가 없는 순간이 생기고,
