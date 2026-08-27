@@ -90,19 +90,108 @@ type Catalog struct {
 	AutoIncrementNote string `json:"autoIncrementNote,omitempty"`
 }
 
-// commonDefaults는 어느 DB에서나 같은 값들이다.
+// 기본값 제안 목록.
 //
-// 새 슬라이스를 만들어 돌려주는 이유: 호출부가 append 로 dialect 것을 이어 붙이는데,
-// 공용 슬라이스를 그대로 주면 그 append 가 다른 dialect의 목록을 덮어쓸 수 있다.
-func commonDefaults() []DefaultSuggestion {
-	return []DefaultSuggestion{
+// 타입에 어울리는 것만 주지 않고 그 DB에서 쓸 수 있는 것을 모두 담는 이유: 기본값은
+// 타입만으로 정해지지 않는다. 문자 컬럼에 시각을 문자열로 넣기도 하고, 숫자 컬럼에
+// 시퀀스를 물리기도 한다. 화면은 어울리는 것을 먼저 보여주되 나머지도 찾을 수 있게 한다.
+//
+// 인자가 있는 함수는 **예시 인자까지** 적어 둔다. 이름만 주면 괄호 안에 무엇을 넣어야
+// 하는지가 다시 숙제가 되고, 그 답은 대개 이 앱 밖(문서)에 있다.
+var (
+	// 값 리터럴. 어느 DB에서나 같다.
+	literalDefaults = []DefaultSuggestion{
 		{Expr: "0", Label: "0", For: []string{CatNumber}},
 		{Expr: "1", Label: "1", For: []string{CatNumber}},
 		{Expr: "''", Label: "빈 문자열", For: []string{CatText}},
 		{Expr: "TRUE", Label: "참", For: []string{CatOther, CatNumber}},
 		{Expr: "FALSE", Label: "거짓", For: []string{CatOther, CatNumber}},
 	}
-}
+
+	postgresDefaults = append(append([]DefaultSuggestion{}, literalDefaults...), []DefaultSuggestion{
+		{Expr: "now()", Label: "지금 시각 (트랜잭션 시작 시각)", For: []string{CatTime}},
+		{Expr: "CURRENT_TIMESTAMP", Label: "지금 시각 (표준 문법)", For: []string{CatTime}},
+		{Expr: "CURRENT_DATE", Label: "오늘 날짜", For: []string{CatTime}},
+		{Expr: "CURRENT_TIME", Label: "지금 시각(시간만)", For: []string{CatTime}},
+		{Expr: "LOCALTIMESTAMP", Label: "지금 시각 (타임존 없이)", For: []string{CatTime}},
+		{Expr: "clock_timestamp()", Label: "실제 지금 시각 (문장마다 다시 읽음)", For: []string{CatTime}},
+		{Expr: "statement_timestamp()", Label: "이 문장이 시작된 시각", For: []string{CatTime}},
+		{Expr: "date_trunc('day', now())", Label: "오늘 0시", For: []string{CatTime}},
+		{Expr: "now() + interval '7 days'", Label: "7일 뒤", For: []string{CatTime}},
+		{Expr: "gen_random_uuid()", Label: "무작위 UUID (13+ 기본 제공)", For: []string{CatOther, CatText}},
+		{Expr: "uuid_generate_v4()", Label: "무작위 UUID (uuid-ossp 확장)", For: []string{CatOther, CatText}},
+		{Expr: "nextval('시퀀스이름')", Label: "시퀀스 다음 값", For: []string{CatNumber}},
+		{Expr: "'{}'::jsonb", Label: "빈 JSON 객체", For: []string{CatStruct}},
+		{Expr: "'[]'::jsonb", Label: "빈 JSON 배열", For: []string{CatStruct}},
+		{Expr: "'{}'::text[]", Label: "빈 배열", For: []string{CatText}},
+		{Expr: "CURRENT_USER", Label: "지금 접속한 사용자", For: []string{CatText}},
+		{Expr: "md5(random()::text)", Label: "무작위 문자열", For: []string{CatText}},
+		{Expr: "floor(random() * 100)::int", Label: "무작위 정수 (0~99)", For: []string{CatNumber}},
+	}...)
+
+	// MySQL 8.0.13 미만에서는 식을 기본값으로 쓸 수 없고, 그 이상에서도 괄호가 필요하다
+	// (CURRENT_TIMESTAMP 계열만 예외다). 그래서 식에는 괄호를 붙여 둔다.
+	mysqlDefaults = append(append([]DefaultSuggestion{}, literalDefaults...), []DefaultSuggestion{
+		{Expr: "CURRENT_TIMESTAMP", Label: "지금 시각", For: []string{CatTime}},
+		{Expr: "CURRENT_TIMESTAMP(6)", Label: "지금 시각 (마이크로초까지)", For: []string{CatTime}},
+		{Expr: "CURRENT_DATE", Label: "오늘 날짜", For: []string{CatTime}},
+		{Expr: "CURRENT_TIME", Label: "지금 시각(시간만)", For: []string{CatTime}},
+		{Expr: "(NOW())", Label: "지금 시각 (함수 형태, 괄호 필요)", For: []string{CatTime}},
+		{Expr: "(UTC_TIMESTAMP())", Label: "지금 시각 (UTC)", For: []string{CatTime}},
+		{Expr: "(CURRENT_TIMESTAMP + INTERVAL 7 DAY)", Label: "7일 뒤", For: []string{CatTime}},
+		{Expr: "(UUID())", Label: "무작위 UUID (8.0.13+)", For: []string{CatText}},
+		{Expr: "(UUID_TO_BIN(UUID()))", Label: "무작위 UUID (16바이트 이진)", For: []string{CatBinary}},
+		{Expr: "(JSON_OBJECT())", Label: "빈 JSON 객체 (8.0.13+)", For: []string{CatStruct}},
+		{Expr: "(JSON_ARRAY())", Label: "빈 JSON 배열 (8.0.13+)", For: []string{CatStruct}},
+		{Expr: "(CURRENT_USER())", Label: "지금 접속한 사용자", For: []string{CatText}},
+		{Expr: "(FLOOR(RAND() * 100))", Label: "무작위 정수 (0~99)", For: []string{CatNumber}},
+	}...)
+
+	mssqlDefaults = append(append([]DefaultSuggestion{}, literalDefaults...), []DefaultSuggestion{
+		{Expr: "SYSDATETIME()", Label: "지금 시각 (정밀)", For: []string{CatTime}},
+		{Expr: "SYSUTCDATETIME()", Label: "지금 시각 (UTC)", For: []string{CatTime}},
+		{Expr: "SYSDATETIMEOFFSET()", Label: "지금 시각 (타임존 포함)", For: []string{CatTime}},
+		{Expr: "GETDATE()", Label: "지금 시각 (예전 방식)", For: []string{CatTime}},
+		{Expr: "GETUTCDATE()", Label: "지금 시각 UTC (예전 방식)", For: []string{CatTime}},
+		{Expr: "CONVERT(date, GETDATE())", Label: "오늘 날짜", For: []string{CatTime}},
+		{Expr: "DATEADD(day, 7, SYSDATETIME())", Label: "7일 뒤", For: []string{CatTime}},
+		{Expr: "NEWID()", Label: "무작위 UUID", For: []string{CatOther}},
+		{Expr: "NEWSEQUENTIALID()", Label: "순차 UUID (인덱스 조각화가 적다)", For: []string{CatOther}},
+		{Expr: "NEXT VALUE FOR 시퀀스이름", Label: "시퀀스 다음 값", For: []string{CatNumber}},
+		{Expr: "CAST(0 AS BIT)", Label: "거짓 (BIT)", For: []string{CatNumber}},
+		{Expr: "SUSER_SNAME()", Label: "지금 접속한 로그인 이름", For: []string{CatText}},
+		{Expr: "'{}'", Label: "빈 JSON 객체 (문자열로 저장)", For: []string{CatText}},
+	}...)
+
+	oracleDefaults = append(append([]DefaultSuggestion{}, literalDefaults...), []DefaultSuggestion{
+		{Expr: "SYSTIMESTAMP", Label: "지금 시각 (타임존 포함)", For: []string{CatTime}},
+		{Expr: "SYSDATE", Label: "지금 시각", For: []string{CatTime}},
+		{Expr: "CURRENT_TIMESTAMP", Label: "지금 시각 (세션 타임존)", For: []string{CatTime}},
+		{Expr: "CURRENT_DATE", Label: "오늘 날짜 (세션 타임존)", For: []string{CatTime}},
+		{Expr: "LOCALTIMESTAMP", Label: "지금 시각 (타임존 없이)", For: []string{CatTime}},
+		{Expr: "TRUNC(SYSDATE)", Label: "오늘 0시", For: []string{CatTime}},
+		{Expr: "SYSDATE + 7", Label: "7일 뒤", For: []string{CatTime}},
+		{Expr: "SYS_GUID()", Label: "무작위 GUID (16바이트)", For: []string{CatBinary, CatText}},
+		{Expr: "시퀀스이름.NEXTVAL", Label: "시퀀스 다음 값", For: []string{CatNumber}},
+		{Expr: "USER", Label: "지금 접속한 사용자", For: []string{CatText}},
+		{Expr: "TO_CHAR(SYSDATE, 'YYYY-MM-DD')", Label: "오늘 날짜 (문자열)", For: []string{CatText}},
+	}...)
+
+	sqliteDefaults = append(append([]DefaultSuggestion{}, literalDefaults...), []DefaultSuggestion{
+		{Expr: "CURRENT_TIMESTAMP", Label: "지금 시각 (UTC, 'YYYY-MM-DD HH:MM:SS')", For: []string{CatTime, CatText}},
+		{Expr: "CURRENT_DATE", Label: "오늘 날짜 (UTC)", For: []string{CatTime, CatText}},
+		{Expr: "CURRENT_TIME", Label: "지금 시각(시간만, UTC)", For: []string{CatTime, CatText}},
+		{Expr: "(datetime('now'))", Label: "지금 시각 (UTC)", For: []string{CatTime, CatText}},
+		{Expr: "(datetime('now','localtime'))", Label: "지금 시각 (현지)", For: []string{CatTime, CatText}},
+		{Expr: "(date('now'))", Label: "오늘 날짜", For: []string{CatTime, CatText}},
+		{Expr: "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))", Label: "지금 시각 (ISO 8601, 밀리초)", For: []string{CatText}},
+		{Expr: "(unixepoch())", Label: "지금 시각 (유닉스 초, 3.38+)", For: []string{CatNumber}},
+		{Expr: "(strftime('%s','now'))", Label: "지금 시각 (유닉스 초, 예전 방식)", For: []string{CatText, CatNumber}},
+		{Expr: "(hex(randomblob(16)))", Label: "무작위 16바이트 (UUID 대용)", For: []string{CatText}},
+		{Expr: "(abs(random() % 100))", Label: "무작위 정수 (0~99)", For: []string{CatNumber}},
+		{Expr: "('{}')", Label: "빈 JSON 객체 (문자열로 저장)", For: []string{CatText, CatStruct}},
+	}...)
+)
 
 // TypeCatalog는 dialect의 카탈로그를 돌려준다. 모르는 dialect면 공통 타입만 준다.
 func TypeCatalog(dialect string) Catalog {
@@ -110,61 +199,35 @@ func TypeCatalog(dialect string) Catalog {
 	case "postgres":
 		return Catalog{
 			Dialect: "postgres", Types: postgresTypes, Arrays: true,
-			Defaults: append(commonDefaults(), []DefaultSuggestion{
-				{Expr: "now()", Label: "지금 시각", For: []string{CatTime}},
-				{Expr: "CURRENT_TIMESTAMP", Label: "지금 시각 (표준)", For: []string{CatTime}},
-				{Expr: "CURRENT_DATE", Label: "오늘 날짜", For: []string{CatTime}},
-				{Expr: "gen_random_uuid()", Label: "무작위 UUID (pgcrypto 없이 13+)", For: []string{CatOther, CatText}},
-				{Expr: "'{}'::jsonb", Label: "빈 JSON 객체", For: []string{CatStruct}},
-				{Expr: "'[]'::jsonb", Label: "빈 JSON 배열", For: []string{CatStruct}},
-			}...),
+			Defaults:          postgresDefaults,
 			AutoIncrement:     "GENERATED BY DEFAULT AS IDENTITY",
 			AutoIncrementNote: "정수 계열에만 붙일 수 있습니다. 예전 방식인 serial 타입을 골라도 같은 뜻이 됩니다.",
 		}
 	case "mysql", "mariadb":
 		return Catalog{
 			Dialect: "mysql", Types: mysqlTypes,
-			Defaults: append(commonDefaults(), []DefaultSuggestion{
-				{Expr: "CURRENT_TIMESTAMP", Label: "지금 시각", For: []string{CatTime}},
-				{Expr: "CURRENT_DATE", Label: "오늘 날짜", For: []string{CatTime}},
-				{Expr: "(UUID())", Label: "무작위 UUID (8.0.13+, 괄호 필요)", For: []string{CatText}},
-				{Expr: "(JSON_OBJECT())", Label: "빈 JSON 객체 (8.0.13+, 괄호 필요)", For: []string{CatStruct}},
-			}...),
+			Defaults:          mysqlDefaults,
 			AutoIncrement:     "AUTO_INCREMENT",
 			AutoIncrementNote: "정수 계열에만 붙일 수 있고, 그 컬럼은 키(대개 기본키)여야 합니다.",
 		}
 	case "mssql", "sqlserver":
 		return Catalog{
 			Dialect: "mssql", Types: mssqlTypes,
-			Defaults: append(commonDefaults(), []DefaultSuggestion{
-				{Expr: "SYSDATETIME()", Label: "지금 시각 (정밀)", For: []string{CatTime}},
-				{Expr: "GETDATE()", Label: "지금 시각", For: []string{CatTime}},
-				{Expr: "SYSUTCDATETIME()", Label: "지금 시각 (UTC)", For: []string{CatTime}},
-				{Expr: "NEWID()", Label: "무작위 UUID", For: []string{CatOther}},
-				{Expr: "NEWSEQUENTIALID()", Label: "순차 UUID (인덱스에 유리)", For: []string{CatOther}},
-			}...),
+			Defaults:          mssqlDefaults,
 			AutoIncrement:     "IDENTITY(1,1)",
 			AutoIncrementNote: "정수·decimal(스케일 0) 계열에만 붙일 수 있습니다.",
 		}
 	case "oracle":
 		return Catalog{
 			Dialect: "oracle", Types: oracleTypes,
-			Defaults: append(commonDefaults(), []DefaultSuggestion{
-				{Expr: "SYSTIMESTAMP", Label: "지금 시각 (타임존 포함)", For: []string{CatTime}},
-				{Expr: "SYSDATE", Label: "지금 시각", For: []string{CatTime}},
-				{Expr: "SYS_GUID()", Label: "무작위 GUID", For: []string{CatBinary, CatText}},
-			}...),
+			Defaults:          oracleDefaults,
 			AutoIncrement:     "GENERATED BY DEFAULT AS IDENTITY",
 			AutoIncrementNote: "12c 이상에서 씁니다. 그 이전 버전은 시퀀스와 트리거로 만들어야 합니다.",
 		}
 	case "sqlite":
 		return Catalog{
 			Dialect: "sqlite", Types: sqliteTypes,
-			Defaults: append(commonDefaults(), []DefaultSuggestion{
-				{Expr: "CURRENT_TIMESTAMP", Label: "지금 시각", For: []string{CatTime}},
-				{Expr: "CURRENT_DATE", Label: "오늘 날짜", For: []string{CatTime}},
-				{Expr: "CURRENT_TIME", Label: "지금 시각(시간만)", For: []string{CatTime}},
-			}...),
+			Defaults:      sqliteDefaults,
 			AutoIncrement: "AUTOINCREMENT",
 			AutoIncrementNote: "INTEGER PRIMARY KEY 컬럼에만 붙일 수 있습니다. " +
 				"그 조건이면 AUTOINCREMENT를 적지 않아도 rowid가 자동으로 채워집니다.",

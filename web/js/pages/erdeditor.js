@@ -2861,17 +2861,21 @@ function identityFits(def, arg) {
 //
 // 버튼·체크박스에 포커스가 있는 것은 입력이 아니다. 그 구분이 없으면
 // "버튼을 눌렀는데 화면이 그대로"가 된다.
-// defaultsFor는 이 타입에 어울리는 기본값 제안을 고른다.
+// defaultsFor는 기본값 제안을 고른다. 어울리는 것을 먼저, 나머지도 모두.
 //
-// 분류로 거르는 이유: 문자 컬럼에 now() 를 먼저 보여줄 이유가 없다. 대신 분류가
-// 없는 제안(어느 타입에서나 쓰는 것)은 언제나 남기고, 타입을 아직 고르지 않았거나
-// 직접 입력 중이면 전부 보여준다 — 그때는 무엇이 맞는지 우리가 모른다.
+// 걸러 내지 않고 나누기만 하는 이유: 기본값은 타입만으로 정해지지 않는다. 문자
+// 컬럼에 시각을 문자열로 넣기도 하고(SQLite가 그렇다), 숫자 컬럼에 시퀀스를 물리기도
+// 한다. 어울리는 것만 남기면 그런 자리에서 이 칸은 아무 도움이 못 된다.
 function defaultsFor(cat, def) {
   const all = cat?.defaults ?? [];
-  const list = def
-    ? all.filter((d) => !d.for?.length || d.for.includes(def.category))
-    : all;
-  return list.map((d) => ({ value: d.expr, label: d.expr, hint: d.label }));
+  const row = (d, group) => ({ value: d.expr, label: d.expr, hint: d.label, group });
+  if (!def) return all.map((d) => row(d, ''));
+
+  const fits = (d) => !d.for?.length || d.for.includes(def.category);
+  return [
+    ...all.filter(fits).map((d) => row(d, '이 타입에 어울림')),
+    ...all.filter((d) => !fits(d)).map((d) => row(d, '그 밖의 기본값')),
+  ];
 }
 
 function isTyping(root) {

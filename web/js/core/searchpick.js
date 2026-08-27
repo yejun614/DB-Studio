@@ -62,6 +62,29 @@ function createList(anchorEl) {
   return { list, place, attach, detach };
 }
 
+// exprNodes는 식을 조각으로 나눠 함수 이름과 괄호를 따로 칠한다.
+//
+// 색을 나누는 이유: 기본값 칸에 들어가는 것은 값(0, '')과 식(now(), NEXTVAL(...))
+// 두 종류인데, 목록에서 둘이 같은 색이면 어느 것이 함수인지 읽어서 판단해야 한다.
+// 인자가 있는 함수는 예시 인자까지 들어 있어 줄이 길어지므로 더 그렇다.
+function exprNodes(expr) {
+  const out = [];
+  // 함수 호출(이름 + 여는 괄호), 괄호, 문자열, 나머지로 자른다.
+  const re = /([A-Za-z_][A-Za-z0-9_.]*)\s*(?=\()|([()])|('[^']*')/g;
+  let last = 0;
+  let m = re.exec(expr);
+  while (m) {
+    if (m.index > last) out.push(h('span', {}, expr.slice(last, m.index)));
+    if (m[1]) out.push(h('span.pick-fn', {}, m[1]));
+    else if (m[2]) out.push(h('span.pick-paren', {}, m[2]));
+    else if (m[3]) out.push(h('span.pick-str', {}, m[3]));
+    last = m.index + m[0].length;
+    m = re.exec(expr);
+  }
+  if (last < expr.length) out.push(h('span', {}, expr.slice(last)));
+  return out;
+}
+
 // optionRow는 후보 한 줄이다. 이름과 곁말(hint)을 한 줄에 둔다.
 function optionRow(item, active, onPick) {
   return h('button', {
@@ -71,8 +94,26 @@ function optionRow(item, active, onPick) {
     // 버리면 그 클릭은 아무 데도 닿지 않는다.
     onmousedown: (e) => { e.preventDefault(); onPick(); },
   },
-  h('span', {}, item.label),
+  item.code ? h('code.pick-expr', {}, ...exprNodes(item.label)) : h('span', {}, item.label),
   item.hint ? h('span.muted.small', {}, item.hint) : null);
+}
+
+// renderOptions는 후보를 그리되 묶음이 바뀌는 자리에 머리말을 끼운다.
+//
+// 머리말이 필요한 이유: 이 타입에 어울리는 것과 그 밖의 것을 한 목록에 함께 두기
+// 때문이다. 구분이 없으면 "왜 문자 컬럼에 now() 가 있지"가 되고, 나누어 두면
+// 아래쪽은 "찾으면 있다"는 뜻이 된다.
+function renderOptions(list, found, cursor, onPick) {
+  const nodes = [];
+  let group = null;
+  found.forEach((it, i) => {
+    if (it.group && it.group !== group) {
+      group = it.group;
+      nodes.push(h('div.pick-group', {}, group));
+    }
+    nodes.push(optionRow(it, i === cursor, () => onPick(it.value)));
+  });
+  mount(list, nodes);
 }
 
 // matches는 검색어로 후보를 거른다. 이름·곁말·묶음 어디에 걸려도 통과시킨다 —
@@ -135,7 +176,7 @@ export function searchPicker({
     if (cursor < 0) cursor = 0;
     place();
     attach();
-    mount(list, found.map((it, i) => optionRow(it, i === cursor, () => pick(it.value))));
+    renderOptions(list, found, cursor, pick);
     // 고른 줄이 보이도록 맞춘다. 스무 개 넘는 목록에서 지금 값이 어디인지 모르면
     // 다시 찾아 내려가야 한다.
     list.querySelector('.pick-opt.is-cursor')?.scrollIntoView({ block: 'nearest' });
@@ -228,7 +269,15 @@ export function searchPicker({
  * @returns {{node: HTMLElement, input: HTMLInputElement, value: string, setItems: Function}}
  */
 export function suggestInput({ items = [], value = '', placeholder = '', onChange }) {
-  let rows = items.map((it) => ({ value: it.value, label: it.label ?? it.value, hint: it.hint ?? it.value }));
+  const toRow = (it) => ({
+    value: it.value,
+    label: it.label ?? it.value,
+    hint: it.hint ?? '',
+    group: it.group ?? '',
+    // 기본값은 식이다. 목록에서 함수와 괄호를 따로 칠한다.
+    code: true,
+  });
+  let rows = items.map(toRow);
   let open = false;
   let cursor = 0;
 
@@ -262,7 +311,7 @@ export function suggestInput({ items = [], value = '', placeholder = '', onChang
     if (cursor < 0) cursor = 0;
     place();
     attach();
-    mount(list, found.map((it, i) => optionRow(it, i === cursor, () => pick(it.value))));
+    renderOptions(list, found, cursor, pick);
   };
 
   const pick = (next) => {
@@ -307,9 +356,7 @@ export function suggestInput({ items = [], value = '', placeholder = '', onChang
     set value(v) { box.value = v ?? ''; },
     // setItems는 제안 목록을 갈아 끼운다. 타입을 바꾸면 제안도 달라진다.
     setItems(next) {
-      rows = (next ?? []).map((it) => ({
-        value: it.value, label: it.label ?? it.value, hint: it.hint ?? it.value,
-      }));
+      rows = (next ?? []).map(toRow);
       cursor = 0;
       draw();
     },
@@ -381,7 +428,7 @@ export function peoplePicker({
     if (cursor < 0) cursor = 0;
     place();
     attach();
-    mount(list, found.map((it, i) => optionRow(it, i === cursor, () => toggle(it.value, true))));
+    renderOptions(list, found, cursor, (v) => toggle(v, true));
   };
 
   const toggle = (id, on) => {
