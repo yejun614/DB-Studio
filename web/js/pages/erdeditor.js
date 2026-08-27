@@ -1231,7 +1231,13 @@ class Editor {
             type: 'button',
             disabled: !tables.length && !notes.length,
             onclick: () => this.groupMarks(),
-          }, icon('box', 13), ' 묶음으로 감싸기')),
+          }, icon('box', 13), ' 묶음으로 감싸기'),
+          h('button.btn.btn-small', {
+            type: 'button',
+            disabled: !tables.length,
+            title: '고른 테이블을 자동 이름(_copy)으로 베낍니다',
+            onclick: () => this.duplicateMarks(),
+          }, icon('copy', 13), ` 테이블 ${tables.length}개 복제`)),
 
         ro ? null : h('div.erd-panel-danger', {},
           h('button.btn.btn-small.btn-danger', {
@@ -1409,6 +1415,13 @@ class Editor {
           type: 'button', onclick: () => this.openCheckDialog(ref),
         }, icon('plus'), '체크 제약 추가'),
 
+        // 복제는 삭제 옆이 아니라 그 위에 둔다. 되돌릴 수 있는 동작과 위험한 동작을
+        // 나란히 두면 손이 미끄러지는 자리가 된다.
+        ro ? null : h('div.erd-panel-actions', {},
+          h('button.btn.btn-small', {
+            type: 'button', onclick: () => this.openDuplicateDialog(ref),
+          }, icon('copy', 13), ' 테이블 복제')),
+
         ro ? null : h('div.erd-panel-danger', {},
           h('button.btn.btn-small.btn-danger', {
             type: 'button', onclick: () => this.deleteTable(ref),
@@ -1416,6 +1429,99 @@ class Editor {
         ),
       ),
     ];
+  }
+
+  // openDuplicateDialog는 테이블을 베낀다.
+  //
+  // 창을 여는 이유: 사본에서 가장 먼저 정해야 하는 것이 이름이다. 자동 이름으로
+  // 바로 만들면 users_copy 라는 테이블이 생기고, 그것을 고치러 다시 들어가야 한다.
+  //
+  // 컬럼과 기본키는 고를 수 없다. 그것 없이 베낀 것은 사본이 아니라 빈 테이블이고,
+  // 그때 필요한 것은 복제가 아니라 "테이블 추가"다.
+  openDuplicateDialog(ref) {
+    const tbl = ref.table();
+    if (!tbl) return;
+    const nameInput = input({ value: this.freeTableName(`${tbl.name}_copy`) });
+    const idxBox = checkbox(`인덱스 ${(tbl.indexes ?? []).length}개`,
+      { checked: true, disabled: !(tbl.indexes ?? []).length });
+    const fkBox = checkbox(`외래키 ${(tbl.foreignKeys ?? []).length}개`,
+      { checked: true, disabled: !(tbl.foreignKeys ?? []).length });
+    const ckBox = checkbox(`체크 제약 ${(tbl.checks ?? []).length}개`,
+      { checked: true, disabled: !(tbl.checks ?? []).length });
+
+    openModal({
+      title: `${tableDisplay(tbl)} 복제`,
+      width: 480,
+      body: () => [
+        h('label.field', {}, h('span.field-label', {}, '새 테이블 이름'), nameInput),
+        h('div.field', {}, h('span.field-label', {}, '함께 베낄 것'),
+          h('div.erd-dup-list', {}, idxBox, fkBox, ckBox),
+          h('p.field-help', {},
+            `컬럼 ${(tbl.columns ?? []).length}개와 기본키는 언제나 함께 베낍니다. `
+            + '제약 이름은 새 이름에 맞춰 바뀝니다(ix_users_email → ix_users_copy_email).')),
+        h('p.field-help', {},
+          '이 테이블을 **가리키는** 외래키는 베끼지 않습니다 — 다른 테이블에 있는 제약이고, '
+          + '사본과 원본 중 어느 쪽을 가리켜야 하는지는 사람만 알 수 있습니다.'),
+      ],
+      footer: (close) => [
+        h('button.btn', { type: 'button', onclick: close }, '취소'),
+        h('button.btn.btn-primary', {
+          type: 'button',
+          onclick: () => {
+            const name = nameInput.value.trim();
+            if (!name) {
+              toast('새 이름을 적으세요', 'error');
+              return;
+            }
+            this.send('table.duplicate', {
+              key: ref.serverKey,
+              name,
+              withIndexes: idxBox.querySelector('input').checked,
+              withForeignKeys: fkBox.querySelector('input').checked,
+              withChecks: ckBox.querySelector('input').checked,
+            });
+            // 만들어지는 사본을 바로 고를 수 있게 해 둔다. 서버 응답으로 문서가
+            // 오면 그 키가 생기고, 없으면 아무 일도 하지 않는다(pruneSelection).
+            const ns = tbl.namespace ? `${tbl.namespace}.` : '';
+            this.sel = { kind: 'table', id: `${ns}${name}`.toLowerCase() };
+            this.marks = [this.sel];
+            close();
+          },
+        }, '복제'),
+      ],
+    });
+  }
+
+  // freeTableName은 아직 쓰이지 않은 이름을 찾는다(서버의 규칙과 같다).
+  //
+  // 화면에서 한 번 더 계산하는 이유: 창에 들어갈 기본값이 필요하다. 서버가 정하게
+  // 두면 창에는 빈 칸이 뜨고, 사람은 "비워 두면 어떻게 되는가"를 눌러 봐야 안다.
+  freeTableName(base) {
+    const taken = new Set((this.doc.schema?.tables ?? []).map((t) => t.name.toLowerCase()));
+    if (!taken.has(base.toLowerCase())) return base;
+    // users_copy 가 이미 있으면 users_copy2. 서버도 같은 규칙을 쓴다.
+    const stem = base.replace(/_copy$/, '');
+    for (let i = 2; i < 1000; i += 1) {
+      const next = `${stem}_copy${i}`;
+      if (!taken.has(next.toLowerCase())) return next;
+    }
+    return base;
+  }
+
+  // duplicateMarks는 고른 테이블들을 한 번에 베낀다.
+  //
+  // 이름을 묻지 않는다: 여러 개를 고른 상태에서 이름을 하나씩 물으면 창이 열 번
+  // 열린다. 자동 이름(_copy)으로 만들고, 이름은 만든 뒤에 고치는 편이 빠르다.
+  duplicateMarks() {
+    const keys = this.marksOf('table');
+    if (!keys.length) return;
+    const batch = newLocalID();
+    for (const key of keys) {
+      const tbl = this.findTable(key);
+      if (!tbl) continue;
+      this.send('table.duplicate', { key }, batch);
+    }
+    toast(`테이블 ${keys.length}개를 복제했습니다`, 'success');
   }
 
   columnRow(ref, col, ro, index = 0, total = 1) {

@@ -1929,6 +1929,8 @@ option { background: var(--surface); color: var(--text); }
 }
 .erd-panel-danger { margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--border-soft); }
 .erd-panel-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+/* 복제 창의 "함께 베낄 것" 목록. 세로로 두어 각 줄의 개수가 눈에 들어오게 한다. */
+.erd-dup-list { display: flex; flex-direction: column; gap: 6px; }
 
 /* 함께 고른 것들의 목록. 이름을 봐야 "무엇이 들어왔는지"를 캔버스 밖까지 확인한다. */
 .erd-mark-list {
