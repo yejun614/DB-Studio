@@ -1843,6 +1843,15 @@ option { background: var(--surface); color: var(--text); }
   stroke-width: 1;
 }
 .erd-card-g.is-selected .erd-card-bg { stroke: var(--chart-1); stroke-width: 2; }
+/* 여럿을 고른 상태에서 인스펙터가 보여주는 것(마지막에 고른 것)만 더 진하게.
+ * 표시가 없으면 오른쪽 패널이 셋 중 어느 것을 말하는지 알 수 없다. */
+.erd-card-g.is-primary .erd-card-bg { stroke-width: 3; }
+/* 범위 선택 사각형. 채우기를 옅게 두는 이유는 훑는 동안 그 아래 카드가 보여야
+ * 무엇이 들어오는지 알 수 있기 때문이다. */
+.erd-band {
+  fill: var(--chart-1); fill-opacity: 0.1;
+  stroke: var(--chart-1); stroke-width: 1; stroke-dasharray: 4 3;
+}
 .erd-card-holder { fill: none; stroke-width: 2; stroke-dasharray: 4 3; }
 .erd-card-head { fill: hsl(var(--h-muted)); }
 .erd-card-name { fill: var(--text); font: 600 12.5px var(--sans); }
@@ -1919,6 +1928,23 @@ option { background: var(--surface); color: var(--text); }
   color: var(--text-mute); margin: 18px 0 8px;
 }
 .erd-panel-danger { margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--border-soft); }
+.erd-panel-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+
+/* 함께 고른 것들의 목록. 이름을 봐야 "무엇이 들어왔는지"를 캔버스 밖까지 확인한다. */
+.erd-mark-list {
+  display: flex; flex-wrap: wrap; gap: 4px;
+  max-height: 128px; overflow-y: auto; margin-top: 8px;
+}
+.erd-mark-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 8px; font-size: 11.5px;
+  border: 1px solid var(--border-soft); border-radius: 999px;
+  background: var(--bg-alt); color: var(--text-dim); cursor: pointer;
+  max-width: 100%; min-width: 0;
+}
+.erd-mark-chip:hover { color: var(--text); border-color: var(--text-mute); }
+.erd-mark-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.erd-align-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 
 .erd-col-list { display: flex; flex-direction: column; gap: 6px; }
 .erd-col-row {

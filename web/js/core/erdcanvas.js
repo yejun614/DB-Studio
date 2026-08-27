@@ -28,7 +28,7 @@ export class ErdCanvas {
     this.wrap = wrap;
     this.opts = opts;
     this.doc = { schema: { tables: [] }, layout: {}, notes: [], groups: [] };
-    this.selection = null;
+    this.marks = [];
     this.participants = [];
     this.youClientId = null;
     this.remoteCursors = new Map();
@@ -56,17 +56,36 @@ export class ErdCanvas {
     if (!this.doc.groups) this.doc.groups = [];
   }
 
-  // setSelection은 지금 고른 것을 정한다.
+  // 선택은 **목록**이다(marks). 여러 개를 함께 고르면 함께 옮기고, 바깥 화면이
+  // 함께 지우거나 정렬할 수 있다.
+  //
+  // 마지막에 고른 것을 selection 으로 따로 보는 이유: 오른쪽 인스펙터는 언제나 하나를
+  // 보여줘야 한다. 여러 개를 고른 상태에서 "지금 무엇을 편집 중인가"가 정해지지 않으면
+  // 패널이 고를 때마다 다른 것을 보여주거나 아무것도 못 보여준다.
+  get selection() {
+    return this.marks.length ? this.marks[this.marks.length - 1] : null;
+  }
+
+  set selection(sel) {
+    this.marks = sel ? [normalizeMark(sel)] : [];
+  }
+
+  // setSelection은 지금 고른 것을 정한다(하나만).
   //
   // 테이블 키(문자열)와 `{kind, id}` 둘 다 받는다. 구조 화면은 테이블만 고르므로
   // 예전처럼 문자열을 넘기고, 편집기는 간선·메모·그룹까지 고르므로 객체를 넘긴다.
   // 두 화면이 같은 캔버스를 쓰는 이상, 덜 쓰는 쪽에 더 많은 것을 요구하지 않는다.
   setSelection(sel) {
-    if (!sel) {
-      this.selection = null;
-      return;
-    }
-    this.selection = typeof sel === 'string' ? { kind: 'table', id: sel } : sel;
+    this.selection = sel ?? null;
+  }
+
+  // setMarks는 화면 쪽이 들고 있는 선택 목록을 그대로 받는다.
+  //
+  // 선택의 주인이 화면인 이유: 다시 그릴 때마다 화면이 자기 상태를 캔버스에 밀어
+  // 넣는다(renderCanvas). 캔버스만 목록을 들고 있으면 그 한 번의 밀어 넣기에
+  // 다중 선택이 매번 사라진다.
+  setMarks(list) {
+    this.marks = (list ?? []).filter(Boolean).map(normalizeMark);
   }
 
   // selectedKey는 선택된 테이블 키다(테이블이 아니면 null).
@@ -75,7 +94,20 @@ export class ErdCanvas {
   }
 
   isSelected(kind, id) {
-    return this.selection?.kind === kind && this.selection.id === id;
+    return this.marks.some((m) => m.kind === kind && m.id === id);
+  }
+
+  // toggleMark는 하나를 목록에 더하거나 뺀다.
+  toggleMark(kind, id) {
+    // 관계선은 함께 고르지 않는다. 옮길 수도 지울 수도 없어서, 목록에 들어가면
+    // "N개 선택됨"의 N만 늘고 함께 할 수 있는 일은 오히려 줄어든다.
+    if (kind === 'link') {
+      this.selection = { kind, id };
+      return;
+    }
+    const at = this.marks.findIndex((m) => m.kind === kind && m.id === id);
+    if (at >= 0) this.marks.splice(at, 1);
+    else this.marks.push({ kind, id });
   }
 
   setParticipants(list, youClientId) {
@@ -118,12 +150,16 @@ export class ErdCanvas {
       cards: svgEl('g', { class: 'erd-layer-cards' }),
       notes: svgEl('g', { class: 'erd-layer-notes' }),
       cursors: svgEl('g', { class: 'erd-layer-cursors' }),
+      // 범위 선택 사각형은 맨 위에 그린다. 카드 밑에 깔리면 무엇을 훑고 있는지
+      // 보이지 않는다.
+      band: svgEl('g', { class: 'erd-layer-band' }),
     };
     svg.appendChild(layers.groups);
     svg.appendChild(layers.links);
     svg.appendChild(layers.notes);
     svg.appendChild(layers.cards);
     svg.appendChild(layers.cursors);
+    svg.appendChild(layers.band);
     this.layers = layers;
 
     const boxes = this.boxes();
@@ -206,7 +242,7 @@ export class ErdCanvas {
     const key = tableKey(tbl);
     const selected = this.isSelected('table', key);
     const g = svgEl('g', {
-      class: `erd-card-g${selected ? ' is-selected' : ''}`,
+      class: `erd-card-g${selected ? ' is-selected' : ''}${this.isPrimary('table', key) ? ' is-primary' : ''}`,
       transform: `translate(${geom.x},${geom.y})`,
       'data-key': key,
       // 색은 **묶음(g)**에 싣는다. 안쪽 사각형에 실으면 그 사각형 자신에게만
@@ -389,14 +425,35 @@ export class ErdCanvas {
     };
     const onPointerDown = (e) => {
       if (e.target.closest('.erd-card-g') || e.target.closest('.erd-note-g')) return;
+      // Shift·Ctrl(⌘)을 누른 채 빈 곳을 끌면 **범위 선택**이다.
+      //
+      // 빈 곳을 그냥 끄는 것은 지금까지도 앞으로도 화면 이동이다. 이 캔버스에는
+      // 스크롤바가 없어서 끌기 말고는 화면을 옮길 방법이 없다 — 그것을 선택으로
+      // 바꾸면 다중 선택을 얻는 대신 이동을 잃는다.
+      //
+      // Shift는 지금 고른 것에 **더하고**, Ctrl(⌘)은 **새로 고른다**. 둘 다 두는
+      // 이유는 하나뿐이면 "더하기"와 "다시 고르기" 중 하나를 할 수 없기 때문이다.
+      if (this.canPick && (e.shiftKey || e.ctrlKey || e.metaKey)) {
+        const at = this.toCanvas(e.clientX, e.clientY);
+        this.drag = { mode: 'band', start: at, keep: e.shiftKey ? this.marks.slice() : [] };
+        if (!e.shiftKey && this.marks.length) {
+          this.marks = [];
+          this.render();
+        }
+        this.drawBand(at, at);
+        svg.setPointerCapture?.(e.pointerId);
+        return;
+      }
       // 빈 곳을 끌면 화면 이동. 선택 해제도 함께 한다.
       this.drag = { mode: 'pan', startClient: { x: e.clientX, y: e.clientY }, view: { ...this.view } };
       // 화면을 손으로 옮기기 시작했다. 따라가기와 두 힘이 동시에 당기면
       // 어느 쪽도 원하는 곳을 볼 수 없다.
       this.opts.onManualPan?.();
-      if (this.selection) {
-        this.selection = null;
-        this.opts.onSelect?.(null);
+      if (this.marks.length) {
+        const many = this.marks.length > 1;
+        this.marks = [];
+        if (many) this.opts.onMarks?.([]);
+        else this.opts.onSelect?.(null);
         this.render();
       }
       svg.setPointerCapture?.(e.pointerId);
@@ -406,6 +463,25 @@ export class ErdCanvas {
       this.opts.onCursorMove?.({ x: round1(point.x), y: round1(point.y) });
 
       if (!this.drag) return;
+      if (this.drag.mode === 'band') {
+        this.drag.end = point;
+        this.drawBand(this.drag.start, point);
+        return;
+      }
+      if (this.drag.mode === 'multi') {
+        const dx = round1(point.x - this.drag.start.x);
+        const dy = round1(point.y - this.drag.start.y);
+        this.drag.delta = { x: dx, y: dy };
+        for (const it of this.drag.items) {
+          const el = this.svg.querySelector(it.selector);
+          el?.setAttribute('transform', `translate(${it.x + dx},${it.y + dy})`);
+          // 관계선은 카드 좌표에서 계산되므로 레이아웃도 함께 옮겨 둔다.
+          if (it.kind !== 'table') continue;
+          this.doc.layout[it.id] = { ...(this.doc.layout[it.id] ?? {}), x: it.x + dx, y: it.y + dy };
+        }
+        this.refreshLinks();
+        return;
+      }
       if (this.drag.mode === 'pan') {
         const scale = this.view.w / svg.clientWidth;
         this.view.x = this.drag.view.x - (e.clientX - this.drag.startClient.x) * scale;
@@ -463,6 +539,32 @@ export class ErdCanvas {
     const onPointerUp = () => {
       const drag = this.drag;
       this.drag = null;
+      if (drag?.mode === 'band') {
+        this.clearBand();
+        const merged = drag.keep.slice();
+        for (const m of this.bandHits(drag.start, drag.end ?? drag.start)) {
+          if (!merged.some((x) => x.kind === m.kind && x.id === m.id)) merged.push(m);
+        }
+        this.marks = merged;
+        this.render();
+        this.opts.onMarks?.(this.marks.slice());
+        return;
+      }
+      if (drag?.mode === 'multi') {
+        // 움직이지 않았으면 아무것도 보내지 않는다. 고른 것을 확인하려고 한 번
+        // 누른 것까지 편집으로 남으면 되돌리기 스택이 제자리 이동으로 채워진다.
+        if (!drag.delta || (!drag.delta.x && !drag.delta.y)) return;
+        const moves = [];
+        for (const it of drag.items) {
+          const x = round1(it.x + drag.delta.x);
+          const y = round1(it.y + drag.delta.y);
+          this.placeMark(it, x, y);
+          moves.push({ kind: it.kind, id: it.id, x, y });
+        }
+        this.opts.onMultiMove?.(moves);
+        this.render();
+        return;
+      }
       if (drag?.mode === 'note-resize' && drag.lastSize) {
         const note = (this.doc.notes ?? []).find((n) => n.id === drag.id);
         if (note) {
@@ -524,6 +626,121 @@ export class ErdCanvas {
     };
   }
 
+  // canPick은 "여럿을 고를 수 있는가"다. 고르는 것은 편집이 아니므로 읽기 전용
+  // 참여자도 할 수 있다 — 읽는 사람도 "이 넷이 한 덩어리"를 짚어 볼 수 있어야 한다.
+  get canPick() {
+    return this.opts.onMarks != null;
+  }
+
+  isPrimary(kind, id) {
+    if (this.marks.length < 2) return false;
+    const last = this.marks[this.marks.length - 1];
+    return last.kind === kind && last.id === id;
+  }
+
+  // pickToggle은 Shift·Ctrl 클릭으로 선택에 더하거나 뺀다. 처리했으면 true.
+  //
+  // 이때 드래그를 시작하지 않는 이유: 고르려고 누른 손이 몇 픽셀 흔들리면 방금
+  // 고른 것이 딸려 움직인다. 더 고르는 동작과 옮기는 동작은 나눠 둔다.
+  pickToggle(e, kind, id) {
+    if (!this.canPick) return false;
+    if (!(e.shiftKey || e.ctrlKey || e.metaKey)) return false;
+    this.toggleMark(kind, id);
+    this.render();
+    this.opts.onMarks?.(this.marks.slice());
+    return true;
+  }
+
+  // markPos는 고른 것의 현재 좌표다.
+  markPos(mark) {
+    if (mark.kind === 'table') {
+      const box = this.doc.layout?.[mark.id];
+      return box ? { x: box.x ?? 80, y: box.y ?? 80 } : null;
+    }
+    const list = mark.kind === 'note' ? this.doc.notes : this.doc.groups;
+    const found = (list ?? []).find((x) => x.id === mark.id);
+    return found ? { x: found.x ?? 0, y: found.y ?? 0 } : null;
+  }
+
+  // placeMark는 로컬 상태를 먼저 옮겨 둔다. 저장 결과가 오기 전에 다시 그려도
+  // 카드가 원래 자리로 튀지 않게 하기 위해서다.
+  placeMark(mark, x, y) {
+    if (mark.kind === 'table') {
+      this.doc.layout[mark.id] = { ...(this.doc.layout[mark.id] ?? {}), x, y };
+      return;
+    }
+    const list = mark.kind === 'note' ? this.doc.notes : this.doc.groups;
+    const found = (list ?? []).find((n) => n.id === mark.id);
+    if (found) {
+      found.x = x;
+      found.y = y;
+    }
+  }
+
+  // startMultiDrag는 고른 것들을 함께 끌기 시작한다. 시작했으면 true.
+  //
+  // 여럿을 골라 둔 채 그중 하나를 잡으면 나머지도 따라와야 한다. 그러지 않으면
+  // 다중 선택으로 할 수 있는 일이 "함께 보기"밖에 없다.
+  startMultiDrag(e) {
+    if (this.marks.length < 2) return false;
+    const items = [];
+    for (const m of this.marks) {
+      if (m.kind === 'link') continue;
+      const at = this.markPos(m);
+      if (!at) continue;
+      items.push({ kind: m.kind, id: m.id, selector: markSelector(m), x: at.x, y: at.y });
+    }
+    if (items.length < 2) return false;
+    this.drag = { mode: 'multi', items, start: this.toCanvas(e.clientX, e.clientY) };
+    return true;
+  }
+
+  // drawBand는 범위 선택 사각형을 그린다. 선택 자체는 손을 뗄 때 정해진다.
+  drawBand(a, b) {
+    if (!this.layers?.band) return;
+    if (!this.band || !this.band.isConnected) {
+      this.band = svgEl('rect', { class: 'erd-band' });
+      this.layers.band.appendChild(this.band);
+    }
+    this.band.setAttribute('x', Math.min(a.x, b.x));
+    this.band.setAttribute('y', Math.min(a.y, b.y));
+    this.band.setAttribute('width', Math.abs(b.x - a.x));
+    this.band.setAttribute('height', Math.abs(b.y - a.y));
+  }
+
+  clearBand() {
+    this.band?.remove();
+    this.band = null;
+  }
+
+  // bandHits는 사각형에 **닿은** 것들이다.
+  //
+  // 완전히 품은 것만 고르지 않는 이유: 카드가 큰 화면에서는 넷을 고르려면 화면
+  // 밖까지 끌어야 한다. 닿기만 해도 골리면 훑는 동작 하나로 줄 단위 선택이 된다.
+  bandHits(a, b) {
+    const box = {
+      x: Math.min(a.x, b.x), y: Math.min(a.y, b.y),
+      w: Math.abs(b.x - a.x), h: Math.abs(b.y - a.y),
+    };
+    const hit = (x, y, w, hh) => x < box.x + box.w && x + w > box.x
+      && y < box.y + box.h && y + hh > box.y;
+    const out = [];
+    for (const [key, geom] of this.boxes()) {
+      if (hit(geom.x, geom.y, geom.w, geom.h)) out.push({ kind: 'table', id: key });
+    }
+    for (const note of this.doc.notes ?? []) {
+      if (hit(note.x, note.y, note.w || NOTE_W, note.h || noteHeight(note))) {
+        out.push({ kind: 'note', id: note.id });
+      }
+    }
+    for (const group of this.doc.groups ?? []) {
+      if (hit(group.x, group.y, group.w || 320, group.h || 240)) {
+        out.push({ kind: 'group', id: group.id });
+      }
+    }
+    return out;
+  }
+
   // moveLinks는 끌고 있는 카드의 좌표를 반영해 관계선만 다시 그린다.
   //
   // 선 레이어만 갈아 끼우는 이유: 카드까지 다시 그리면 지금 잡고 있는 요소가 버려져
@@ -535,6 +752,12 @@ export class ErdCanvas {
     if (!this.layers?.links) return;
     const prev = this.doc.layout[key] ?? {};
     this.doc.layout[key] = { ...prev, x, y };
+    this.refreshLinks();
+  }
+
+  // refreshLinks는 지금 레이아웃으로 관계선만 다시 그린다.
+  refreshLinks() {
+    if (!this.layers?.links) return;
     if (this.linkFrame) return;
     this.linkFrame = requestAnimationFrame(() => {
       this.linkFrame = 0;
@@ -547,16 +770,22 @@ export class ErdCanvas {
 
   onCardPointerDown(e, key, geom) {
     e.stopPropagation();
-    // 선택은 언제나 {kind, id} 형태로 둔다. 여기서만 문자열을 넣으면
-    // isSelected가 어긋나 카드에 선택 표시가 그려지지 않는다 — 구조 화면이
-    // 그랬다(그쪽은 setSelection을 다시 부르지 않아 문자열이 그대로 남았다).
-    this.selection = { kind: 'table', id: key };
-    this.opts.onSelect?.(key);
+    if (this.pickToggle(e, 'table', key)) return;
+    // 이미 여럿을 고른 상태에서 그중 하나를 잡은 것이라면 선택을 그대로 둔다.
+    // 여기서 하나로 줄이면 함께 옮기려고 잡은 순간 나머지가 풀린다.
+    if (!this.isSelected('table', key)) {
+      // 선택은 언제나 {kind, id} 형태로 둔다. 여기서만 문자열을 넣으면
+      // isSelected가 어긋나 카드에 선택 표시가 그려지지 않는다 — 구조 화면이
+      // 그랬다(그쪽은 setSelection을 다시 부르지 않아 문자열이 그대로 남았다).
+      this.selection = { kind: 'table', id: key };
+      this.opts.onSelect?.(key);
+    }
     // 선택 표시를 즉시 반영한다. **다시 그린 뒤에** 드래그 대상을 찾아야 한다 —
     // 지금 손에 쥔 요소는 재렌더로 버려지고, 버려진 요소를 옮기면 화면에서
     // 아무 일도 일어나지 않는다.
     this.render();
     if (!this.canEdit) return;
+    if (this.startMultiDrag(e)) return;
     const p = this.toCanvas(e.clientX, e.clientY);
     const el = this.svg.querySelector(`.erd-card-g[data-key="${cssEscape(key)}"]`);
     if (!el) return;
@@ -569,12 +798,16 @@ export class ErdCanvas {
 
   onNotePointerDown(e, note, mode = 'move') {
     e.stopPropagation();
+    if (mode !== 'resize' && this.pickToggle(e, 'note', note.id)) return;
     // 고르는 것과 옮기는 것은 다른 권한이다. 읽기 전용 참여자도 메모를 골라
     // 내용을 인스펙터에서 읽을 수 있어야 한다.
-    this.selection = { kind: 'note', id: note.id };
-    this.opts.onSelectNote?.(note.id);
+    if (!this.isSelected('note', note.id)) {
+      this.selection = { kind: 'note', id: note.id };
+      this.opts.onSelectNote?.(note.id);
+    }
     this.render();
     if (!this.canEdit) return;
+    if (mode !== 'resize' && this.startMultiDrag(e)) return;
     const p = this.toCanvas(e.clientX, e.clientY);
     const el = this.svg.querySelector(`.erd-note-g[data-note="${cssEscape(note.id)}"]`);
     if (!el) return;
@@ -592,10 +825,14 @@ export class ErdCanvas {
 
   onGroupPointerDown(e, group, mode) {
     e.stopPropagation();
-    this.selection = { kind: 'group', id: group.id };
-    this.opts.onSelectGroup?.(group.id);
+    if (mode !== 'resize' && this.pickToggle(e, 'group', group.id)) return;
+    if (!this.isSelected('group', group.id)) {
+      this.selection = { kind: 'group', id: group.id };
+      this.opts.onSelectGroup?.(group.id);
+    }
     this.render();
     if (!this.canEdit) return;
+    if (mode !== 'resize' && this.startMultiDrag(e)) return;
     const p = this.toCanvas(e.clientX, e.clientY);
     const el = this.svg.querySelector(`.erd-group-g[data-group="${cssEscape(group.id)}"]`);
     if (!el) return;
@@ -711,6 +948,18 @@ export class ErdCanvas {
 }
 
 // ---------- 공용 헬퍼 ----------
+
+// normalizeMark는 선택 항목을 {kind, id} 로 맞춘다(문자열은 테이블 키로 본다).
+function normalizeMark(mark) {
+  return typeof mark === 'string' ? { kind: 'table', id: mark } : mark;
+}
+
+// markSelector는 고른 것의 SVG 요소를 찾는 선택자다.
+function markSelector(mark) {
+  if (mark.kind === 'table') return `.erd-card-g[data-key="${cssEscape(mark.id)}"]`;
+  if (mark.kind === 'note') return `.erd-note-g[data-note="${cssEscape(mark.id)}"]`;
+  return `.erd-group-g[data-group="${cssEscape(mark.id)}"]`;
+}
 
 // NOTE_W는 메모의 기본 폭이다. 크기를 정하지 않은 메모가 이 폭으로 그려진다.
 export const NOTE_W = 200;

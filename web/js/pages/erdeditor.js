@@ -20,7 +20,7 @@ import { searchPicker, suggestInput } from '../core/searchpick.js';
 import { COLUMN_ICONS, columnIcon, autoColumnIcon, chosenIconFor } from '../core/colicon.js';
 import { codeBlock, codeEditor } from '../core/highlight.js';
 import {
-  ErdCanvas, CARD_W, tableKey, tableDisplay, refKey, newLocalID, truncate,
+  ErdCanvas, CARD_W, tableKey, tableDisplay, refKey, newLocalID, truncate, NOTE_W, noteHeight,
 } from '../core/erdcanvas.js';
 import {
   loadTypeCatalog, buildType, parseType, categories, paramLabel, paramPlaceholder,
@@ -167,6 +167,12 @@ class Editor {
     // 예전에는 테이블 키 문자열 하나였다. 간선·메모·그룹까지 인스펙터에서 편집하게
     // 되면서, "무엇을 고른 상태인가"를 문자열 하나로는 표현할 수 없게 되었다.
     this.sel = null;
+    // marks는 **함께 고른 것들**이다([{kind, id}]). 마지막 것이 this.sel 이다.
+    //
+    // 캔버스가 아니라 여기서 들고 있는 이유: 화면은 다시 그릴 때마다 자기 상태를
+    // 캔버스에 밀어 넣는다(renderCanvas). 캔버스만 들고 있으면 그 한 번에 다중
+    // 선택이 매번 사라진다.
+    this.marks = [];
     // renamedSel은 이름 미리보기 때문에 선택 키를 옮겨 둔 기록이다({from, to}).
     // 이름이 거부되면 from으로 되돌린다(previewTableName의 주석 참고).
     this.renamedSel = null;
@@ -190,6 +196,8 @@ class Editor {
       onSelectLink: (id) => this.select({ kind: 'link', id }),
       onSelectNote: (id) => this.select({ kind: 'note', id }),
       onSelectGroup: (id) => this.select({ kind: 'group', id }),
+      onMarks: (list) => this.selectMany(list),
+      onMultiMove: (moves) => this.moveMany(moves),
       onCursorMove: (point) => this.sendCursor(point),
       onManualPan: () => this.stopFollow(),
       onTableMove: (key, x, y) => this.send('table.move', { key, x, y }),
@@ -282,7 +290,33 @@ class Editor {
 
   bindShortcuts() {
     const onKey = (e) => {
+      // 아래 단축키는 모두 "캔버스를 보고 있을 때"의 것이다. 입력 중이거나 모달이
+      // 열려 있으면 사용자의 주의는 그쪽에 있고, 거기서 가로채면 글자를 지우려던
+      // 키가 테이블을 지운다.
+      const busy = isTyping(document.body) || document.querySelector('.modal-overlay');
+
+      // Esc: 선택 해제. 모달이 열려 있으면 모달이 먼저 닫혀야 한다.
+      if (e.key === 'Escape' && !busy) {
+        if (!this.marks.length) return;
+        e.preventDefault();
+        this.select(null);
+        return;
+      }
+      // Delete/Backspace: 고른 것 지우기.
+      if ((e.key === 'Delete' || e.key === 'Backspace') && !busy
+        && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (!this.marks.length || !this.canEdit) return;
+        e.preventDefault();
+        this.deleteMarks();
+        return;
+      }
       if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      // Ctrl+A: 모두 고르기.
+      if (e.key.toLowerCase() === 'a' && !busy) {
+        e.preventDefault();
+        this.selectAll();
+        return;
+      }
       const key = e.key.toLowerCase();
       const redo = key === 'y' || (key === 'z' && e.shiftKey);
       if (key !== 'z' && key !== 'y') return;
@@ -515,12 +549,12 @@ class Editor {
 
   // ---------- op 보내기 ----------
 
-  send(kind, payload) {
+  send(kind, payload, batch = '') {
     if (!this.canEdit) {
       toast('이 문서를 편집할 권한이 없습니다', 'error');
       return null;
     }
-    return this.session.send(kind, payload);
+    return this.session.send(kind, payload, batch);
   }
 
   // ---------- 렌더 ----------
@@ -822,7 +856,7 @@ class Editor {
   // 화면이 항상 현재 문서와 같아지게 한다.
   renderCanvas() {
     this.canvas.setDoc(this.doc);
-    this.canvas.setSelection(this.sel);
+    this.canvas.setMarks(this.marks);
     this.canvas.setParticipants(this.participants, this.you?.clientId);
     this.canvas.render();
   }
@@ -872,9 +906,52 @@ class Editor {
     return this.sel?.kind === 'table' ? this.sel.id : null;
   }
 
+  // marksOf는 함께 고른 것 중 그 종류만 골라 낸다.
+  marksOf(kind) {
+    return this.marks.filter((m) => m.kind === kind).map((m) => m.id);
+  }
+
+  // selectMany는 여럿을 함께 고른다(범위 선택·Shift 클릭).
+  selectMany(list) {
+    this.marks = (list ?? []).slice();
+    this.sel = this.marks.length ? this.marks[this.marks.length - 1] : null;
+    this.session.presence({ selection: this.tableKey ?? '' });
+    this.renderCanvas();
+    this.renderPanel();
+  }
+
+  // selectAll은 캔버스 위의 것을 모두 고른다(Ctrl+A).
+  //
+  // 관계선은 넣지 않는다. 옮길 수도 지울 수도 없어서 수만 늘린다.
+  selectAll() {
+    const marks = [
+      ...(this.doc.schema?.tables ?? []).map((t) => ({ kind: 'table', id: tableKey(t) })),
+      ...(this.doc.notes ?? []).map((n) => ({ kind: 'note', id: n.id })),
+      ...(this.doc.groups ?? []).map((g) => ({ kind: 'group', id: g.id })),
+    ];
+    if (!marks.length) return;
+    this.selectMany(marks);
+  }
+
+  // moveMany는 함께 옮긴 결과를 op로 보낸다.
+  //
+  // 한 묶음(batch)으로 보내는 이유: 되돌리기가 이 이동 전체를 한 번에 되돌려야
+  // 한다. 묶지 않으면 다섯 장을 한 번 옮긴 것을 다섯 번 되돌려야 하고, 그동안
+  // 화면에는 아무도 만든 적 없는 중간 배치가 남는다.
+  moveMany(moves) {
+    if (!moves?.length) return;
+    const batch = newLocalID();
+    for (const m of moves) {
+      if (m.kind === 'table') this.send('table.move', { key: m.id, x: m.x, y: m.y }, batch);
+      else if (m.kind === 'note') this.send('note.update', { id: m.id, x: m.x, y: m.y }, batch);
+      else if (m.kind === 'group') this.send('group.update', { id: m.id, x: m.x, y: m.y }, batch);
+    }
+  }
+
   // select는 선택을 바꾸고 화면과 프레즌스를 맞춘다.
   select(sel) {
     this.sel = sel;
+    this.marks = sel ? [sel] : [];
     this.session.presence({ selection: this.tableKey ?? '' });
     this.renderCanvas();
     this.renderPanel();
@@ -885,6 +962,14 @@ class Editor {
   // 없는 것을 편집하는 패널이 남아 있으면 모든 편집이 "찾을 수 없습니다"로 거부되고,
   // 사용자는 자기 입력이 잘못된 줄 안다.
   pruneSelection() {
+    // 함께 고른 것 중 사라진 것도 치운다. 남겨 두면 "3개 선택됨"이라고 해 놓고
+    // 지우기·정렬이 조용히 하나를 빠뜨린다.
+    if (this.marks.length) {
+      this.marks = this.marks.filter((m) => this.markAlive(m));
+      if (this.marks.length && !this.marks.some((m) => m.kind === this.sel?.kind && m.id === this.sel?.id)) {
+        this.sel = this.marks[this.marks.length - 1];
+      }
+    }
     if (!this.sel) return;
     const gone = {
       table: () => !this.findTable(this.sel.id),
@@ -893,6 +978,14 @@ class Editor {
       group: () => !(this.doc.groups ?? []).some((g) => g.id === this.sel.id),
     }[this.sel.kind];
     if (gone && gone()) this.sel = null;
+  }
+
+  // markAlive는 고른 대상이 아직 문서에 있는지다.
+  markAlive(mark) {
+    if (mark.kind === 'table') return Boolean(this.findTable(mark.id));
+    if (mark.kind === 'note') return (this.doc.notes ?? []).some((n) => n.id === mark.id);
+    if (mark.kind === 'group') return (this.doc.groups ?? []).some((g) => g.id === mark.id);
+    return Boolean(this.findFK(mark.id));
   }
 
   // findFK는 "테이블키.외래키이름" 으로 외래키를 찾는다.
@@ -916,6 +1009,13 @@ class Editor {
       mount(this.ui.panel, this.chatView());
       const list = this.ui.panel.querySelector('.erd-chat-list');
       if (list) list.scrollTop = list.scrollHeight;
+      return;
+    }
+    // 여럿을 골랐으면 하나를 고치는 대신 **함께 할 수 있는 일**을 보여준다.
+    // 이때 하나짜리 편집기를 그대로 두면 "3개 선택됨"이라고 해 놓고 그중 한 개의
+    // 이름 칸이 열려, 무엇을 고치고 있는지 알 수 없다.
+    if (this.marks.length > 1) {
+      mount(this.ui.panel, this.multiView());
       return;
     }
     // 무엇을 골랐느냐에 따라 다른 편집기를 연다. 간선·메모·그룹도 같은 자리에서
@@ -1080,10 +1180,104 @@ class Editor {
     );
   }
 
+  // multiView는 여럿을 고른 상태의 인스펙터다.
+  multiView() {
+    const ro = !this.canEdit;
+    const tables = this.marksOf('table');
+    const notes = this.marksOf('note');
+    const groups = this.marksOf('group');
+    const counts = [
+      tables.length ? `테이블 ${tables.length}` : null,
+      notes.length ? `메모 ${notes.length}` : null,
+      groups.length ? `묶음 ${groups.length}` : null,
+    ].filter(Boolean);
+
+    const alignBtn = (how, label) => h('button.btn.btn-small', {
+      type: 'button', disabled: ro, title: label,
+      onclick: () => this.alignMarks(how),
+    }, label);
+
+    return [
+      this.panelHead(`${this.marks.length}개 선택됨`),
+      h('div.erd-panel-body', {},
+        h('p.muted', {}, counts.join(' · ')),
+        // 무엇을 골랐는지 이름으로 확인할 수 있어야 한다. 카드가 화면 밖에 있으면
+        // 캔버스만 봐서는 셋 중 어느 것이 들어왔는지 알 수 없다.
+        h('div.erd-mark-list', {}, this.marks.map((m) => h('button.erd-mark-chip', {
+          type: 'button',
+          title: '이것만 고르기',
+          onclick: () => this.select(m),
+        }, icon(m.kind === 'table' ? 'table' : m.kind === 'note' ? 'edit' : 'box', 12),
+        h('span', {}, this.markLabel(m))))),
+
+        h('h3.erd-sub', {}, '정렬'),
+        h('div.erd-align-grid', {},
+          alignBtn('left', '왼쪽'), alignBtn('right', '오른쪽'),
+          alignBtn('top', '위'), alignBtn('bottom', '아래'),
+          alignBtn('column', '세로로 쌓기'), alignBtn('row', '가로로 늘어놓기')),
+
+        h('div.field', {}, h('span.field-label', {}, '색'),
+          this.tintPicker(this.markColor(), (value) => this.paintMarks(value), ro),
+          h('p.field-help', {}, '고른 것 전체의 색을 한 번에 바꿉니다')),
+
+        ro ? null : h('div.erd-panel-actions', {},
+          h('button.btn.btn-small', {
+            type: 'button',
+            disabled: !tables.length && !notes.length,
+            onclick: () => this.groupMarks(),
+          }, icon('box', 13), ' 묶음으로 감싸기')),
+
+        ro ? null : h('div.erd-panel-danger', {},
+          h('button.btn.btn-small.btn-danger', {
+            type: 'button',
+            onclick: () => this.deleteMarks(),
+          }, '선택한 것 삭제'),
+          h('p.field-help', {}, 'Delete 키로도 지웁니다')),
+
+        h('p.field-help', {},
+          'Shift·Ctrl 클릭으로 더 고르거나 빼고, 빈 곳을 Shift(더하기)·Ctrl(새로 고르기)로 '
+          + '끌면 범위로 고릅니다. Ctrl+A 모두 고르기, Esc 해제.'),
+      ),
+    ];
+  }
+
+  // markColor는 고른 것들이 모두 같은 색일 때 그 색이다. 다르면 null.
+  markColor() {
+    let seen = null;
+    for (const m of this.marks) {
+      const list = m.kind === 'note' ? this.doc.notes : this.doc.groups;
+      const color = m.kind === 'table'
+        ? (this.doc.layout?.[m.id]?.color ?? '')
+        : ((list ?? []).find((x) => x.id === m.id)?.color ?? '');
+      if (seen === null) seen = color;
+      else if (seen !== color) return null;
+    }
+    return seen;
+  }
+
+  // markLabel은 고른 것을 한 줄로 부르는 이름이다.
+  markLabel(mark) {
+    if (mark.kind === 'table') {
+      const tbl = this.findTable(mark.id);
+      return tbl ? tableDisplay(tbl) : mark.id;
+    }
+    if (mark.kind === 'note') {
+      const note = (this.doc.notes ?? []).find((n) => n.id === mark.id);
+      const text = (note?.text ?? '').trim();
+      return text ? truncate(text, 18) : '(빈 메모)';
+    }
+    const group = (this.doc.groups ?? []).find((g) => g.id === mark.id);
+    return (group?.label ?? '').trim() || '(이름 없는 묶음)';
+  }
+
+  // tintPicker의 current가 null이면 아무 색도 켜지 않는다.
+  //
+  // 여럿을 골랐을 때 필요하다: 색이 서로 다른데 '기본'에 불이 들어와 있으면 화면이
+  // 사실이 아닌 말을 하게 된다("지금 모두 기본색이다").
   tintPicker(current, onPick, ro) {
     return h('div.tint-picker', {}, TABLE_COLORS.map((c) => h('button.tint-swatch', {
       type: 'button',
-      class: `${c.className}${(current || '') === c.value ? ' is-on' : ''}`,
+      class: `${c.className}${current != null && (current || '') === c.value ? ' is-on' : ''}`,
       title: c.label,
       disabled: ro,
       onclick: () => onPick(c.value),
@@ -1811,6 +2005,137 @@ class Editor {
     // 확인을 기다리는 동안 이름이 바뀌었을 수 있으므로 지금의 키로 보낸다.
     this.send('table.delete', { key: ref.serverKey, cascade: true });
     this.sel = null;
+  }
+
+  // deleteMarks는 함께 고른 것을 한 번에 지운다.
+  //
+  // 확인을 한 번만 받는 이유: 대상마다 물으면 열 개를 지울 때 열 번 눌러야 하고,
+  // 그 열 번은 아무것도 확인하지 않는 반사 동작이 된다. 대신 무엇이 몇 개
+  // 지워지는지를 그 한 번에 다 보여준다.
+  async deleteMarks() {
+    const tables = this.marksOf('table').map((k) => this.findTable(k)).filter(Boolean);
+    const notes = this.marksOf('note');
+    const groups = this.marksOf('group');
+    if (!tables.length && !notes.length && !groups.length) return;
+
+    const parts = [];
+    if (tables.length) parts.push(`테이블 ${tables.length}개`);
+    if (notes.length) parts.push(`메모 ${notes.length}개`);
+    if (groups.length) parts.push(`묶음 ${groups.length}개`);
+    const names = tables.map((t) => t.name).join(', ');
+    const ok = await confirmDialog({
+      title: '선택한 것 삭제',
+      message: `${parts.join(' · ')} 을(를) 초안에서 지웁니다.${
+        tables.length ? ` 지워지는 테이블: ${names}. 이 테이블들을 참조하는 외래키도 함께 지워집니다.` : ''}`,
+      confirmLabel: '삭제',
+      danger: true,
+    });
+    if (!ok) return;
+
+    const batch = newLocalID();
+    // 묶음·메모를 먼저 지운다. 테이블 삭제는 문서를 통째로 다시 받게 하므로,
+    // 그 뒤에 오는 id 기반 삭제가 이미 바뀐 문서를 기준으로 판정되지 않게 한다.
+    for (const id of groups) this.send('group.delete', { id }, batch);
+    for (const id of notes) this.send('note.delete', { id }, batch);
+    for (const tbl of tables) this.send('table.delete', { key: tableKey(tbl), cascade: true }, batch);
+    this.select(null);
+  }
+
+  // alignMarks는 고른 것들을 한 줄로 맞춘다.
+  //
+  // 배치를 손으로만 맞추면 몇 픽셀씩 어긋나고, 그 어긋남은 카드가 늘어날수록
+  // "이 둘이 같은 층인가"를 읽기 어렵게 만든다.
+  alignMarks(how) {
+    const items = this.markBoxes();
+    if (items.length < 2) return;
+    const xs = items.map((i) => i.x);
+    const ys = items.map((i) => i.y);
+    const rights = items.map((i) => i.x + i.w);
+    const bottoms = items.map((i) => i.y + i.h);
+    const place = {
+      left: (i) => ({ x: Math.min(...xs), y: i.y }),
+      right: (i) => ({ x: Math.max(...rights) - i.w, y: i.y }),
+      top: (i) => ({ x: i.x, y: Math.min(...ys) }),
+      bottom: (i) => ({ x: i.x, y: Math.max(...bottoms) - i.h }),
+      // 세로로 쌓기: x는 맨 왼쪽에 맞추고 y를 일정한 간격으로 다시 놓는다.
+      column: null,
+      row: null,
+    }[how];
+
+    let moves = [];
+    if (place) {
+      moves = items.map((i) => ({ kind: i.kind, id: i.id, ...place(i) }));
+    } else if (how === 'column') {
+      const x = Math.min(...xs);
+      let y = Math.min(...ys);
+      for (const i of [...items].sort((a, b) => a.y - b.y)) {
+        moves.push({ kind: i.kind, id: i.id, x, y });
+        y += i.h + 24;
+      }
+    } else if (how === 'row') {
+      const y = Math.min(...ys);
+      let x = Math.min(...xs);
+      for (const i of [...items].sort((a, b) => a.x - b.x)) {
+        moves.push({ kind: i.kind, id: i.id, x, y });
+        x += i.w + 32;
+      }
+    }
+    // 제자리인 것은 보내지 않는다. 되돌리기 스택이 "아무 일도 없었던 편집"으로
+    // 채워지면 Ctrl+Z 를 눌러도 화면이 변하지 않는다.
+    const changed = moves.filter((m) => {
+      const at = items.find((i) => i.kind === m.kind && i.id === m.id);
+      return at && (Math.round(at.x) !== Math.round(m.x) || Math.round(at.y) !== Math.round(m.y));
+    });
+    if (!changed.length) return;
+    for (const m of changed) this.canvas.placeMark(m, m.x, m.y);
+    this.moveMany(changed);
+    this.renderCanvas();
+  }
+
+  // markBoxes는 고른 것들의 사각형이다(정렬 계산용).
+  markBoxes() {
+    const boxes = this.canvas.boxes();
+    const out = [];
+    for (const m of this.marks) {
+      if (m.kind === 'table') {
+        const geom = boxes.get(m.id);
+        if (geom) out.push({ ...m, x: geom.x, y: geom.y, w: geom.w, h: geom.h });
+      } else if (m.kind === 'note') {
+        const note = (this.doc.notes ?? []).find((n) => n.id === m.id);
+        if (note) out.push({ ...m, x: note.x, y: note.y, w: note.w || NOTE_W, h: note.h || noteHeight(note) });
+      } else if (m.kind === 'group') {
+        const group = (this.doc.groups ?? []).find((g) => g.id === m.id);
+        if (group) out.push({ ...m, x: group.x, y: group.y, w: group.w || 320, h: group.h || 240 });
+      }
+    }
+    return out;
+  }
+
+  // groupMarks는 고른 것들을 감싸는 묶음을 만든다.
+  groupMarks() {
+    const items = this.markBoxes().filter((i) => i.kind !== 'group');
+    if (!items.length) return;
+    const pad = 24;
+    const x = Math.min(...items.map((i) => i.x)) - pad;
+    const y = Math.min(...items.map((i) => i.y)) - pad - 18;
+    const w = Math.max(...items.map((i) => i.x + i.w)) + pad - x;
+    const hh = Math.max(...items.map((i) => i.y + i.h)) + pad - y;
+    this.send('group.add', { id: newLocalID(), label: '새 묶음', x, y, w, h: hh });
+  }
+
+  // paintMarks는 고른 것들의 색을 한 번에 정한다.
+  paintMarks(color) {
+    const batch = newLocalID();
+    for (const m of this.marks) {
+      if (m.kind === 'table') {
+        const box = this.doc.layout?.[m.id] ?? {};
+        this.send('table.move', { key: m.id, x: box.x ?? 0, y: box.y ?? 0, color }, batch);
+      } else if (m.kind === 'note') {
+        this.send('note.update', { id: m.id, color }, batch);
+      } else if (m.kind === 'group') {
+        this.send('group.update', { id: m.id, color }, batch);
+      }
+    }
   }
 
   openIndexDialog(ref) {

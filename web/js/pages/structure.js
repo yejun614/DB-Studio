@@ -89,6 +89,8 @@ class StructureView {
     this.servers = servers ?? [];
     this.data = null;
     this.selection = null;
+    // marks는 함께 고른 것들이다([{kind, id}]). 마지막 것이 selection 이다.
+    this.marks = [];
     // 실시간 방 상태. docID가 비어 있으면 과거 시점을 보는 중이다.
     this.docID = '';
     this.canEdit = false;
@@ -190,6 +192,10 @@ class StructureView {
       onSelect: (key) => this.select(key ? { kind: 'table', id: key } : null),
       onSelectNote: (id) => this.select({ kind: 'note', id }),
       onSelectGroup: (id) => this.select({ kind: 'group', id }),
+      // 여럿 고르기. 구조 화면에서도 배치는 손으로 정리하는 일이라, 카드 열 장을
+      // 한 장씩 옮기는 것과 함께 옮기는 것의 차이가 그대로 남는다.
+      onMarks: (list) => this.selectMany(list),
+      onMultiMove: (moves) => this.moveMany(moves),
       // 배치를 바꾸는 것들. 캔버스가 로컬 상태를 이미 갱신했으므로 같은 변경을
       // op로 보내기만 한다 — 서버가 seq를 붙여 모두에게 되돌려준다.
       onTableMove: (key, x, y) => this.op('table.move', { key, x, y }),
@@ -222,6 +228,23 @@ class StructureView {
 
     // 탭이 숨으면 소켓을 잠시 놓는다. 열어 둔 탭마다 참여자로 남으면 "지금 누가
     // 보고 있는가"가 뜻을 잃는다.
+    // 캔버스 단축키. 입력 중이거나 모달이 열려 있으면 사용자의 주의는 그쪽에 있다.
+    const onKey = (e) => {
+      if (document.querySelector('.modal-overlay')) return;
+      const el = document.activeElement;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'a') {
+        e.preventDefault();
+        this.selectAll();
+        return;
+      }
+      if (e.key === 'Escape' && this.marks.length) {
+        e.preventDefault();
+        this.select(null);
+      }
+    };
+    document.addEventListener('keydown', onKey);
+
     const onHide = () => this.session?.suspend();
     const onShow = () => this.session?.resume();
     window.addEventListener('pagehide', onHide);
@@ -229,6 +252,7 @@ class StructureView {
       if (document.visibilityState === 'hidden') onHide(); else onShow();
     });
     this.unbind = () => {
+      document.removeEventListener('keydown', onKey);
       window.removeEventListener('pagehide', onHide);
       this.panel.removeEventListener('pointerdown', onDown);
       window.removeEventListener('pointerup', onUp);
@@ -281,7 +305,8 @@ class StructureView {
     this.canEdit = Boolean(res.canEdit);
 
     this.selection = null;
-    this.canvas.setSelection(null);
+    this.marks = [];
+    this.canvas.setMarks([]);
     this.canvas.setDoc(this.doc);
     this.canvas.fitView();
     this.canvas.render();
@@ -434,13 +459,170 @@ class StructureView {
 
   select(sel) {
     this.selection = sel;
-    this.canvas.setSelection(sel);
+    this.marks = sel ? [sel] : [];
+    this.canvas.setMarks(this.marks);
     this.canvas.render();
     this.renderPanel();
   }
 
+  // selectMany는 여럿을 함께 고른다(Shift·Ctrl 클릭, 범위 끌기).
+  selectMany(list) {
+    this.marks = (list ?? []).slice();
+    this.selection = this.marks.length ? this.marks[this.marks.length - 1] : null;
+    this.canvas.setMarks(this.marks);
+    this.canvas.render();
+    this.renderPanel();
+  }
+
+  // selectAll은 화면 위의 것을 모두 고른다(Ctrl+A).
+  selectAll() {
+    const marks = [
+      ...(this.doc?.schema?.tables ?? []).map((t) => ({ kind: 'table', id: keyOf(t) })),
+      ...(this.doc?.notes ?? []).map((n) => ({ kind: 'note', id: n.id })),
+      ...(this.doc?.groups ?? []).map((g) => ({ kind: 'group', id: g.id })),
+    ];
+    if (marks.length) this.selectMany(marks);
+  }
+
+  // moveMany는 함께 옮긴 결과를 한 묶음으로 보낸다. 되돌리기가 한 번에 되돌린다.
+  moveMany(moves) {
+    if (!moves?.length) return;
+    const batch = newLocalID();
+    for (const m of moves) {
+      if (m.kind === 'table') this.op('table.move', { key: m.id, x: m.x, y: m.y }, batch);
+      else if (m.kind === 'note') this.op('note.update', { id: m.id, x: m.x, y: m.y }, batch);
+      else if (m.kind === 'group') this.op('group.update', { id: m.id, x: m.x, y: m.y }, batch);
+    }
+  }
+
   note(id) {
     return (this.doc?.notes ?? []).find((n) => n.id === id) ?? null;
+  }
+
+  // multiView는 여럿을 고른 상태의 인스펙터다.
+  //
+  // 구조 화면에서 할 수 있는 일만 둔다. 테이블은 여기서 지울 수 없으므로(그것은
+  // 마이그레이션의 일이다) 지우기는 메모·묶음에만 걸린다.
+  multiView() {
+    const ro = !this.canEdit;
+    const tables = this.marks.filter((m) => m.kind === 'table').length;
+    const notes = this.marks.filter((m) => m.kind === 'note');
+    const groups = this.marks.filter((m) => m.kind === 'group');
+    const counts = [
+      tables ? `테이블 ${tables}` : null,
+      notes.length ? `메모 ${notes.length}` : null,
+      groups.length ? `묶음 ${groups.length}` : null,
+    ].filter(Boolean);
+
+    const alignBtn = (how, label) => h('button.btn.btn-small', {
+      type: 'button', disabled: ro, onclick: () => this.alignMarks(how),
+    }, label);
+
+    return h('div', {},
+      h('div.erd-panel-head', {},
+        h('h2', {}, `${this.marks.length}개 선택됨`),
+        h('button.icon-btn', {
+          type: 'button', title: '선택 해제', onclick: () => this.select(null),
+        }, icon('x'))),
+      h('div.erd-panel-body', {},
+        h('p.muted', {}, counts.join(' · ')),
+        h('div.erd-mark-list', {}, this.marks.map((m) => h('button.erd-mark-chip', {
+          type: 'button', title: '이것만 고르기', onclick: () => this.select(m),
+        }, h('span', {}, this.markLabel(m))))),
+
+        h('h3.erd-sub', {}, '정렬'),
+        h('div.erd-align-grid', {},
+          alignBtn('left', '왼쪽'), alignBtn('right', '오른쪽'),
+          alignBtn('top', '위'), alignBtn('bottom', '아래'),
+          alignBtn('column', '세로로 쌓기'), alignBtn('row', '가로로 늘어놓기')),
+
+        ro || (!notes.length && !groups.length) ? null : h('div.erd-panel-danger', {},
+          h('button.btn.btn-small.btn-danger', {
+            type: 'button',
+            onclick: () => {
+              const batch = newLocalID();
+              for (const m of groups) this.op('group.delete', { id: m.id }, batch);
+              for (const m of notes) this.op('note.delete', { id: m.id }, batch);
+              this.select(null);
+            },
+          }, `메모·묶음 ${notes.length + groups.length}개 삭제`),
+          h('p.field-help', {}, '테이블은 이 화면에서 지울 수 없습니다 — 마이그레이션으로 지웁니다')),
+
+        h('p.field-help', {},
+          'Shift·Ctrl 클릭으로 더 고르거나 빼고, 빈 곳을 Shift(더하기)·Ctrl(새로 고르기)로 '
+          + '끌면 범위로 고릅니다. Ctrl+A 모두 고르기, Esc 해제.'),
+      ),
+    );
+  }
+
+  // markLabel은 고른 것을 한 줄로 부르는 이름이다.
+  markLabel(mark) {
+    if (mark.kind === 'table') {
+      const tbl = (this.doc?.schema?.tables ?? []).find((t) => keyOf(t) === mark.id);
+      return tbl ? tableDisplay(tbl) : mark.id;
+    }
+    if (mark.kind === 'note') {
+      const text = (this.note(mark.id)?.text ?? '').trim();
+      return text.length > 18 ? `${text.slice(0, 18)}…` : (text || '(빈 메모)');
+    }
+    return (this.group(mark.id)?.label ?? '').trim() || '(이름 없는 묶음)';
+  }
+
+  // alignMarks는 고른 것들을 한 줄로 맞춘다(ERD 설계 화면과 같은 규칙).
+  alignMarks(how) {
+    const boxes = this.canvas.boxes();
+    const items = [];
+    for (const m of this.marks) {
+      if (m.kind === 'table') {
+        const geom = boxes.get(m.id);
+        if (geom) items.push({ ...m, x: geom.x, y: geom.y, w: geom.w, h: geom.h });
+      } else if (m.kind === 'note') {
+        const note = this.note(m.id);
+        if (note) items.push({ ...m, x: note.x, y: note.y, w: note.w || 200, h: note.h || 80 });
+      } else {
+        const group = this.group(m.id);
+        if (group) items.push({ ...m, x: group.x, y: group.y, w: group.w || 320, h: group.h || 240 });
+      }
+    }
+    if (items.length < 2) return;
+
+    const xs = items.map((i) => i.x);
+    const ys = items.map((i) => i.y);
+    const place = {
+      left: (i) => ({ x: Math.min(...xs), y: i.y }),
+      right: (i) => ({ x: Math.max(...items.map((v) => v.x + v.w)) - i.w, y: i.y }),
+      top: (i) => ({ x: i.x, y: Math.min(...ys) }),
+      bottom: (i) => ({ x: i.x, y: Math.max(...items.map((v) => v.y + v.h)) - i.h }),
+    }[how];
+
+    let moves = [];
+    if (place) {
+      moves = items.map((i) => ({ kind: i.kind, id: i.id, ...place(i) }));
+    } else if (how === 'column') {
+      const x = Math.min(...xs);
+      let y = Math.min(...ys);
+      for (const i of [...items].sort((a, b) => a.y - b.y)) {
+        moves.push({ kind: i.kind, id: i.id, x, y });
+        y += i.h + 24;
+      }
+    } else {
+      const y = Math.min(...ys);
+      let x = Math.min(...xs);
+      for (const i of [...items].sort((a, b) => a.x - b.x)) {
+        moves.push({ kind: i.kind, id: i.id, x, y });
+        x += i.w + 32;
+      }
+    }
+    // 제자리인 것은 보내지 않는다. 아무 일도 없었던 편집이 쌓이면 되돌리기를 눌러도
+    // 화면이 변하지 않는다.
+    const changed = moves.filter((m) => {
+      const at = items.find((i) => i.kind === m.kind && i.id === m.id);
+      return at && (Math.round(at.x) !== Math.round(m.x) || Math.round(at.y) !== Math.round(m.y));
+    });
+    if (!changed.length) return;
+    for (const m of changed) this.canvas.placeMark(m, m.x, m.y);
+    this.moveMany(changed);
+    this.canvas.render();
   }
 
   group(id) {
@@ -463,6 +645,12 @@ class StructureView {
       mount(this.panel, this.chatView());
       scrollChatToBottom(this.panel);
       this.renderToolbar();
+      return;
+    }
+    // 여럿을 골랐으면 함께 할 수 있는 일을 보여준다. 하나짜리 편집기를 그대로 두면
+    // "3개 선택됨"이라 해 놓고 그중 한 개의 내용 칸이 열려, 무엇을 고치는지 알 수 없다.
+    if (this.marks.length > 1) {
+      mount(this.panel, this.multiView());
       return;
     }
     if (this.selection?.kind === 'note') {
@@ -884,9 +1072,9 @@ class StructureView {
   // 로컬 반영은 호출부가 이미 했다. 낙관적으로 먼저 그리지 않으면 왕복 지연 때문에
   // 드래그와 타이핑이 끊기기 때문이다 — 서버는 같은 op에 seq를 붙여 되돌려주고,
   // 거부하면 문서 전체를 함께 보내 화면을 바로잡는다.
-  op(kind, payload) {
+  op(kind, payload, batch = '') {
     if (!this.session || !this.canEdit) return null;
-    return this.session.send(kind, payload);
+    return this.session.send(kind, payload, batch);
   }
 
   // connect는 이 커넥션의 구조 문서 방에 붙는다.
@@ -994,11 +1182,19 @@ class StructureView {
   // pruneSelection은 사라진 대상을 고른 상태를 풀어 준다.
   // 없는 메모를 편집하는 패널이 남아 있으면 그 뒤의 편집이 줄줄이 거부된다.
   pruneSelection() {
+    // 사라진 대상은 목록에서도 치운다. 남겨 두면 "3개 선택됨"이라 해 놓고 함께
+    // 옮기기가 조용히 하나를 빠뜨린다.
+    this.marks = this.marks.filter((m) => (m.kind === 'note' ? this.note(m.id)
+      : m.kind === 'group' ? this.group(m.id) : true));
     const sel = this.selection;
-    if (!sel) return;
-    if (sel.kind === 'note' && !this.note(sel.id)) this.selection = null;
-    if (sel.kind === 'group' && !this.group(sel.id)) this.selection = null;
-    this.canvas.setSelection(this.selection);
+    if (sel) {
+      if (sel.kind === 'note' && !this.note(sel.id)) this.selection = null;
+      if (sel.kind === 'group' && !this.group(sel.id)) this.selection = null;
+    }
+    if (!this.selection && this.marks.length) {
+      this.selection = this.marks[this.marks.length - 1];
+    }
+    this.canvas.setMarks(this.marks);
   }
 
   onPresence(list) {

@@ -24,6 +24,10 @@ function newOpID() {
   return `${rand}-${Date.now().toString(36)}-${opCounter}`;
 }
 
+// MAX_OPS_PER_MESSAGE는 한 메시지에 담는 op 수다. 서버의 같은 한도와 맞춰 둔다
+// (internal/erdhub/hub.go의 maxOpsPerMessage).
+const MAX_OPS_PER_MESSAGE = 64;
+
 export class ErdSession {
   constructor(docID, handlers = {}) {
     this.docID = docID;
@@ -165,8 +169,13 @@ export class ErdSession {
   }
 
   // send는 op를 보내고 op 객체를 반환한다(낙관적 적용용).
-  send(kind, payload) {
+  //
+  // batch는 '한 동작에서 나온 편집'의 이름이다. 여러 개를 함께 옮기면 대상마다 op가
+  // 하나씩 생기는데, 같은 batch로 묶어 보내면 서버의 되돌리기가 그 전체를 한 번에
+  // 되돌린다. 비워 두면 지금까지처럼 op 하나가 곧 한 번의 되돌리기다.
+  send(kind, payload, batch = '') {
     const op = { id: newOpID(), kind, payload };
+    if (batch) op.batch = batch;
     this.pending.push(op);
     this.#flush();
     return op;
@@ -175,7 +184,18 @@ export class ErdSession {
   #flush() {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     if (!this.pending.length) return;
-    this.#raw({ type: 'ops', ops: this.pending, baseSeq: this.seq });
+    // 한 메시지에 담을 수 있는 op 수에 서버 한도가 있다. 넘긴 메시지는 통째로
+    // 거부되므로, 카드 백 장을 함께 옮기면 **아무것도** 옮겨지지 않는다.
+    //
+    // 나눠 보내도 안전한 이유: 서버는 op ID로 재전송을 걸러 낸다. 같은 op가 두 번
+    // 담겨도 두 번 적용되지 않는다.
+    for (let i = 0; i < this.pending.length; i += MAX_OPS_PER_MESSAGE) {
+      this.#raw({
+        type: 'ops',
+        ops: this.pending.slice(i, i + MAX_OPS_PER_MESSAGE),
+        baseSeq: this.seq,
+      });
+    }
   }
 
   presence(update) {
