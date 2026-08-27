@@ -1946,6 +1946,26 @@ option { background: var(--surface); color: var(--text); }
 .erd-mark-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .erd-align-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 
+/* 인덱스 설정 창의 컬럼 목록. 고른 것이 위로 올라오고 그 안에서 순서를 바꾼다. */
+.erd-idx-cols {
+  display: flex; flex-direction: column; gap: 4px;
+  max-height: 280px; overflow-y: auto;
+  padding: 6px; border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+  background: var(--bg-alt);
+}
+.erd-idx-col {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 6px; border-radius: 6px;
+}
+.erd-idx-col .checkbox { flex: 1; min-width: 0; }
+/* 인덱스에 들어간 줄은 배경으로 구분한다. 체크 표시만으로는 스무 줄짜리 목록에서
+ * "어디까지가 이 인덱스인가"가 눈에 들어오지 않는다. */
+.erd-idx-col.is-on { background: var(--surface-2); }
+.erd-idx-ord {
+  min-width: 20px; text-align: center;
+  font: 11px var(--mono); color: var(--text-mute);
+}
+
 .erd-col-list { display: flex; flex-direction: column; gap: 6px; }
 .erd-col-row {
   padding: 7px 8px;

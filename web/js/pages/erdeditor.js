@@ -1348,7 +1348,15 @@ class Editor {
           ? h('p.muted', {}, '없음')
           : (tbl.indexes ?? []).map((idx) => h('div.erd-chip', {},
             h('span', {}, `${idx.unique ? 'UNIQUE ' : ''}${idx.name}`),
-            h('span.muted', {}, (idx.columns ?? []).map((c) => c.column || c.expression).join(', ')),
+            // 순서와 정렬 방향까지 보여준다. 복합 인덱스는 앞뒤 순서가 성능을
+            // 가르므로, 목록에서 그것이 안 보이면 창을 열어야만 알 수 있다.
+            h('span.muted', {}, (idx.columns ?? [])
+              .map((c) => `${c.column || c.expression}${c.descending ? ' ↓' : ''}`).join(', ')),
+            idx.where ? badge('부분', 'neutral') : null,
+            ro ? null : h('button.icon-btn', {
+              type: 'button', title: '인덱스 설정',
+              onclick: () => this.openIndexDialog(ref, idx),
+            }, icon('edit', 13)),
             ro ? null : h('button.icon-btn', {
               type: 'button', title: '삭제',
               onclick: () => this.send('index.delete', { table: ref.serverKey, name: idx.name }),
@@ -1454,6 +1462,34 @@ class Editor {
       }),
     });
 
+    // UNIQUE는 컬럼의 속성이 아니라 **인덱스**다.
+    //
+    // 그래도 컬럼 줄에 두는 이유: 사람이 스키마를 설계할 때 "이메일은 겹치면 안 된다"는
+    // 컬럼을 적는 그 순간에 정해진다. 인덱스 목록까지 내려가 이름을 지어 가며 만들게
+    // 하면, 정작 필요한 자리에서 한 걸음 멀어진다.
+    //
+    // 여기서 보는 것은 "이 컬럼 **하나만으로** 유일한가"다. 복합 유니크는 그 뜻이
+    // 아니므로(그것은 조합이 유일하다는 뜻이다) 켜진 것으로 세지 않는다.
+    const soleUnique = singleColumnIndex(ref.table(), col.name, true);
+    const plainIndex = singleColumnIndex(ref.table(), col.name, false);
+    // 기본키가 이 컬럼 하나면 이미 유일하다. (isPK는 아래에서 다시 계산한다 —
+    // 여기서 참조하면 선언보다 먼저 쓰는 셈이 된다.)
+    const pkCols = (ref.table()?.primaryKey?.columns ?? []).map((c) => c.toLowerCase());
+    const pkOnly = pkCols.length === 1 && pkCols[0] === col.name.toLowerCase();
+    const uniqueBox = checkbox('UNIQUE', {
+      checked: Boolean(soleUnique) || pkOnly,
+      disabled: ro || pkOnly,
+      onchange: (e) => this.toggleColumnUnique(ref, col, e.target.checked),
+    });
+    // 무슨 일이 일어나는지 미리 말해 둔다. 인덱스는 이름이 있는 물건이라, 켰다 껐다가
+    // 남의 인덱스를 지우는 일이 되면 안 된다.
+    uniqueBox.title = pkOnly ? '기본키라 이미 유일합니다'
+      : soleUnique ? (soleUnique.name.startsWith('ux_')
+        ? `인덱스 ${soleUnique.name} 을 지웁니다`
+        : `인덱스 ${soleUnique.name} 에서 UNIQUE 만 풉니다(인덱스는 남습니다)`)
+      : plainIndex ? `인덱스 ${plainIndex.name} 을 UNIQUE 로 바꿉니다`
+        : `UNIQUE 인덱스 ux_${ref.table()?.name ?? ''}_${col.name} 을 만듭니다`;
+
     const defInput = input({
       value: col.default ?? '', disabled: ro, placeholder: '기본값', class: 'input erd-col-default',
     });
@@ -1532,6 +1568,7 @@ class Editor {
       h('div.erd-col-row-main', {}, pkBtn, iconBtn, nameInput, typeInput, ro ? null : pickBtn),
       h('div.erd-col-row-sub', {},
         nullBox,
+        uniqueBox,
         autoBadge,
         defInput,
         // 도메인에서 온 타입이면 그 사실을 줄에 남긴다. 남기지 않으면 타입을 직접
@@ -2007,6 +2044,47 @@ class Editor {
     this.sel = null;
   }
 
+  // toggleColumnUnique는 컬럼 하나짜리 UNIQUE 인덱스를 켜고 끈다.
+  //
+  // 이미 그 컬럼만 걸린 인덱스가 있으면 그것을 고친다. 새로 만들면 같은 컬럼에
+  // 인덱스가 둘이 되는데, 대상 DB에서 그것은 그냥 낭비다.
+  //
+  // 끌 때는 우리가 만든 이름(ux_)만 지운다. 사람이나 DB가 지어 준 이름의 인덱스는
+  // UNIQUE만 풀고 남긴다 — "유일하지 않아도 된다"는 말이 "그 인덱스를 지워라"는
+  // 뜻은 아니기 때문이다.
+  toggleColumnUnique(ref, col, on) {
+    const table = ref.table();
+    if (!table) return;
+    const unique = singleColumnIndex(table, col.name, true);
+    if (!on) {
+      if (!unique) return;
+      if (unique.name.startsWith('ux_')) {
+        this.send('index.delete', { table: ref.serverKey, name: unique.name });
+      } else {
+        this.send('index.update', { table: ref.serverKey, name: unique.name, unique: false });
+      }
+      return;
+    }
+    if (unique) return;
+    const plain = singleColumnIndex(table, col.name, false);
+    if (plain) {
+      this.send('index.update', { table: ref.serverKey, name: plain.name, unique: true });
+      return;
+    }
+    // 이름은 규칙으로 짓되 겹치면 번호를 붙인다. 이름이 겹치면 서버가 거부하고,
+    // 사용자는 체크박스를 눌렀는데 아무 일도 안 일어난 것으로 본다.
+    const used = new Set((table.indexes ?? []).map((ix) => ix.name.toLowerCase()));
+    let name = `ux_${table.name}_${col.name}`;
+    let n = 2;
+    while (used.has(name.toLowerCase())) {
+      name = `ux_${table.name}_${col.name}_${n}`;
+      n += 1;
+    }
+    this.send('index.add', {
+      table: ref.serverKey, name, columns: [col.name], unique: true,
+    });
+  }
+
   // deleteMarks는 함께 고른 것을 한 번에 지운다.
   //
   // 확인을 한 번만 받는 이유: 대상마다 물으면 열 개를 지울 때 열 번 눌러야 하고,
@@ -2138,40 +2216,138 @@ class Editor {
     }
   }
 
-  openIndexDialog(ref) {
+  // openIndexDialog는 인덱스를 만들거나 고친다.
+  //
+  // 만들기와 고치기가 같은 창인 이유: 창이 둘이면 "이 설정은 만들 때만 되는 것"이
+  // 생기고, 그 사실은 눌러 보고서야 알게 된다. 예전에는 만든 뒤에 고칠 방법이 아예
+  // 없어서, 이름 한 글자를 고치려면 지웠다 다시 만들어야 했다.
+  openIndexDialog(ref, existing = null) {
     const tbl = ref.table();
     if (!tbl) return;
-    const nameInput = input({ value: `ix_${tbl.name}_`, autofocus: true });
-    const uniqueBox = checkbox('UNIQUE', {});
-    const boxes = (tbl.columns ?? []).map((col) => checkbox(col.name, { value: col.name }));
+    const editing = Boolean(existing);
+    const nameInput = input({ value: existing?.name ?? `ix_${tbl.name}_` });
+    const uniqueBox = checkbox('UNIQUE (값이 겹칠 수 없음)', { checked: Boolean(existing?.unique) });
+
+    // 컬럼은 **순서가 있는 목록**이다.
+    //
+    // 복합 인덱스의 앞뒤 순서는 어떤 조회가 이 인덱스를 탈 수 있는지를 정한다
+    // ((a,b) 인덱스는 a로 찾는 조회에 쓰이지만 b로 찾는 조회에는 쓰이지 않는다).
+    // 고를 수만 있고 순서를 못 바꾸면 그 절반은 손댈 수 없는 셈이다.
+    let picked = (existing?.columns ?? [])
+      .filter((c) => c.column)
+      .map((c) => ({ name: c.column, desc: Boolean(c.descending) }));
+    // 식 기반 인덱스는 이 창에서 다루지 않는다. 여기서 컬럼만 고쳐 보내면 식이
+    // 조용히 사라진다 — 그래서 아예 열지 않고 이유를 말한다.
+    const hasExpression = (existing?.columns ?? []).some((c) => !c.column && c.expression);
+    if (hasExpression) {
+      toast('식으로 만든 인덱스는 이 창에서 고칠 수 없습니다', 'error');
+      return;
+    }
+
+    const listBox = h('div.erd-idx-cols');
+    const drawList = () => {
+      const inIndex = new Set(picked.map((c) => c.name.toLowerCase()));
+      const rows = [];
+      picked.forEach((c, i) => {
+        rows.push(h('div.erd-idx-col.is-on', {},
+          h('label.checkbox', {},
+            h('input', {
+              type: 'checkbox',
+              checked: true,
+              onchange: () => { picked = picked.filter((x) => x.name !== c.name); drawList(); },
+            }),
+            h('span', {}, c.name)),
+          h('span.erd-idx-ord', {}, `${i + 1}`),
+          h('button.btn.btn-small', {
+            type: 'button',
+            title: c.desc ? '내림차순 (DESC)' : '오름차순 (ASC)',
+            onclick: () => { c.desc = !c.desc; drawList(); },
+          }, c.desc ? '내림 ↓' : '오름 ↑'),
+          h('div.erd-col-order', {},
+            h('button.icon-btn', {
+              type: 'button', title: '앞으로', disabled: i === 0,
+              onclick: () => {
+                picked.splice(i - 1, 0, picked.splice(i, 1)[0]);
+                drawList();
+              },
+            }, h('span.erd-move-arrow', {}, '▲')),
+            h('button.icon-btn', {
+              type: 'button', title: '뒤로', disabled: i === picked.length - 1,
+              onclick: () => {
+                picked.splice(i + 1, 0, picked.splice(i, 1)[0]);
+                drawList();
+              },
+            }, h('span.erd-move-arrow', {}, '▼'))),
+        ));
+      });
+      for (const col of tbl.columns ?? []) {
+        if (inIndex.has(col.name.toLowerCase())) continue;
+        rows.push(h('div.erd-idx-col', {},
+          h('label.checkbox', {},
+            h('input', {
+              type: 'checkbox',
+              onchange: () => { picked.push({ name: col.name, desc: false }); drawList(); },
+            }),
+            h('span', {}, col.name)),
+          h('span.muted.small', {}, col.rawType || col.type?.base || '')));
+      }
+      mount(listBox, rows);
+    };
+    drawList();
+
+    // 부분 인덱스는 DB가 받아 주는 곳에서만 보여준다. 적을 수는 있는데 생성되는
+    // SQL에는 들어가지 않는 칸은, 적어 둔 사람에게 조용한 거짓말이 된다.
+    const partial = ['postgres', 'mssql', 'sqlite'].includes(this.doc.dialect);
+    const whereInput = partial
+      ? input({ value: existing?.where ?? '', placeholder: '예: deleted_at IS NULL' })
+      : null;
+
     openModal({
-      title: '인덱스 추가',
-      width: 480,
+      title: editing ? `인덱스 설정 — ${existing.name}` : '인덱스 추가',
+      width: 520,
       body: () => [
         h('label.field', {}, h('span.field-label', {}, '이름'), nameInput),
         uniqueBox,
-        h('div.field', {}, h('span.field-label', {}, '컬럼 (선택 순서가 아니라 표시 순서로 만듭니다)'),
-          h('div.erd-pk-list', {}, boxes)),
+        h('div.field', {}, h('span.field-label', {}, '컬럼'), listBox,
+          h('p.field-help', {}, '고른 순서가 곧 인덱스의 컬럼 순서입니다. ▲▼로 바꾸세요.')),
+        whereInput
+          ? h('label.field', {}, h('span.field-label', {}, '부분 조건 (WHERE)'), whereInput,
+            h('p.field-help', {}, '조건에 맞는 행만 인덱스에 넣습니다. 비우면 전체입니다.'))
+          : null,
+        // 방식은 여기서 고치지 않는다. 생성되는 DDL이 USING 을 적지 않으므로,
+        // 고칠 수 있게 두면 바꿔도 대상 DB는 그대로인 상태가 남는다.
+        existing?.type
+          ? h('p.field-help', {}, `방식: ${existing.type} (DB가 보고한 값이며 여기서 바꾸지 않습니다)`)
+          : null,
       ],
-      footer: (close) => [
-        h('button.btn', { type: 'button', onclick: close }, '취소'),
+      footer: (closeModal) => [
+        h('button.btn', { type: 'button', onclick: closeModal }, '취소'),
         h('button.btn.btn-primary', {
           type: 'button',
           onclick: () => {
-            const cols = boxes
-              .filter((b) => b.querySelector('input').checked)
-              .map((b) => b.querySelector('span').textContent);
-            if (cols.length === 0) {
+            const name = nameInput.value.trim();
+            if (!name) {
+              toast('이름을 적으세요', 'error');
+              return;
+            }
+            if (!picked.length) {
               toast('컬럼을 하나 이상 선택하세요', 'error');
               return;
             }
-            this.send('index.add', {
-              table: ref.serverKey, name: nameInput.value.trim(), columns: cols,
+            const payload = {
+              table: ref.serverKey,
+              // 고칠 때 name은 **찾는 열쇠**다. 새 이름은 따로 보낸다.
+              name: editing ? existing.name : name,
+              columns: picked.map((c) => c.name),
+              descending: picked.filter((c) => c.desc).map((c) => c.name),
               unique: uniqueBox.querySelector('input').checked,
-            });
-            close();
+            };
+            if (whereInput) payload.where = whereInput.value.trim();
+            if (editing && name !== existing.name) payload.newName = name;
+            this.send(editing ? 'index.update' : 'index.add', payload);
+            closeModal();
           },
-        }, '추가'),
+        }, editing ? '저장' : '추가'),
       ],
     });
   }
@@ -3254,6 +3430,17 @@ function identityFits(def, arg) {
   if (def.param !== 'precision') return true;
   const scale = String(arg ?? '').split(',')[1];
   return !(Number(scale) > 0);
+}
+
+// singleColumnIndex는 그 컬럼 **하나만** 걸린 인덱스를 찾는다.
+//
+// 컬럼이 하나인지까지 보는 이유: (email, tenant_id) 복합 인덱스는 email 컬럼에
+// 대한 인덱스가 아니다. 유일성도 조합에 대한 것이지 컬럼에 대한 것이 아니다.
+function singleColumnIndex(table, name, unique) {
+  const want = (name ?? '').toLowerCase();
+  return (table?.indexes ?? []).find((ix) => Boolean(ix.unique) === unique
+    && (ix.columns ?? []).length === 1
+    && ((ix.columns[0].column ?? '').toLowerCase() === want)) ?? null;
 }
 
 // isTyping은 지금 이 영역 안에서 글자를 입력하고 있는지 본다.
