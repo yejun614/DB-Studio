@@ -1564,13 +1564,39 @@ class Editor {
         + ' — 타입 창에서 끕니다';
     }
 
-    return h('div.erd-col-row', {},
-      h('div.erd-col-row-main', {}, pkBtn, iconBtn, nameInput, typeInput, ro ? null : pickBtn),
+    // 설명은 **적을 수 있어야** 한다.
+    //
+    // 지금까지는 있으면 보여주기만 했다. 그런데 설명이 필요해지는 순간은 컬럼을
+    // 만드는 그 순간이고("status: 0=대기 1=완료"), 적을 곳이 화면에 없으면 그 지식은
+    // 사람 머리에만 남는다. DDL의 COMMENT 로 나가므로 DB에도 함께 실린다.
+    const commentInput = input({
+      value: col.comment ?? '', placeholder: '설명', class: 'input erd-col-comment-input',
+    });
+    commitOn(commentInput, () => this.send('column.update', {
+      table: ref.serverKey, name: serverName, comment: commentInput.value,
+    }));
+
+    // 끌어서 순서를 바꾸는 손잡이.
+    //
+    // 줄 전체를 끌게 하지 않는 이유: 줄 안에 입력 칸이 셋이라, 글자를 고르려고
+    // 드래그하면 그것이 순서 바꾸기가 된다. 그래서 손잡이를 누른 동안에만 줄이
+    // 끌리는 것으로 바뀐다(아래 draggable 토글).
+    const grip = ro ? null : h('button.erd-col-grip', {
+      type: 'button',
+      title: '끌어서 순서 바꾸기',
+      'aria-label': '순서 바꾸기',
+    }, icon('menu', 12));
+
+    const row = h('div.erd-col-row', {},
+      h('div.erd-col-row-main', {}, grip, pkBtn, iconBtn, nameInput, typeInput, ro ? null : pickBtn),
+      // 둘째 줄은 켜고 끄는 것들, 셋째 줄은 적는 것들.
+      //
+      // 한 줄에 다 넣으면 좁은 인스펙터에서 줄바꿈이 일어나 순서 단추가 혼자
+      // 아래로 떨어진다. 그 모양은 "이 단추가 무엇의 단추인지"를 흐린다.
       h('div.erd-col-row-sub', {},
         nullBox,
         uniqueBox,
         autoBadge,
-        defInput,
         // 도메인에서 온 타입이면 그 사실을 줄에 남긴다. 남기지 않으면 타입을 직접
         // 고쳐 놓고 "왜 도메인을 고쳤는데 이 컬럼만 안 바뀌나"를 묻게 된다.
         col.domain ? badge(col.domain, 'neutral') : null,
@@ -1580,8 +1606,113 @@ class Editor {
           onclick: () => this.send('column.delete', { table: ref.serverKey, name: serverName }),
         }, icon('trash', 13)),
       ),
-      col.comment ? h('p.erd-col-comment', {}, col.comment) : null,
+      ro
+        ? h('div.erd-col-row-fields', {},
+          col.default ? h('p.erd-col-note', {}, `기본값 ${col.default}`) : null,
+          col.comment ? h('p.erd-col-comment', {}, col.comment) : null)
+        : h('div.erd-col-row-fields', {}, defInput, commentInput),
     );
+    if (!ro) this.bindColumnDrag(row, grip, ref, col, index);
+    return row;
+  }
+
+  // bindColumnDrag는 컬럼 줄을 끌어 옮길 수 있게 한다.
+  //
+  // ▲▼ 단추를 남겨 두는 이유: 한 칸씩 정확히 옮기는 일과 열 칸 위로 던지는 일은
+  // 다른 동작이고, 키보드만 쓰는 사람에게는 단추가 유일한 길이다.
+  bindColumnDrag(row, grip, ref, col, index) {
+    row.dataset.colIndex = String(index);
+    row.dataset.colName = col.name;
+
+    // 손잡이를 누른 동안에만 끌 수 있게 한다. 늘 draggable로 두면 입력 칸 안에서
+    // 글자를 고르는 드래그가 줄 옮기기로 바뀐다.
+    grip.addEventListener('pointerdown', () => {
+      row.draggable = true;
+      // 손을 떼면 다시 끌 수 없는 줄로 돌아간다. 손잡이의 pointerup 만 듣던 때는
+      // 손잡이를 누른 채 밖으로 나가 떼면 그 줄이 계속 끌 수 있는 상태로 남아,
+      // 입력 칸에서 글자를 고르는 드래그가 줄 옮기기로 바뀌었다.
+      const off = () => {
+        row.draggable = false;
+        window.removeEventListener('pointerup', off);
+      };
+      // pointercancel 은 듣지 않는다. 네이티브 드래그가 시작될 때 그것이 오는데,
+      // 그때 draggable 을 끄면 시작하려는 드래그를 우리가 취소하는 셈이 된다.
+      // 드래그로 끝난 경우는 dragend 가 정리한다.
+      window.addEventListener('pointerup', off);
+    });
+
+    row.addEventListener('dragstart', (e) => {
+      this.colDrag = { table: ref.serverKey, name: col.name, index };
+      row.classList.add('is-dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      // 데이터를 넣지 않으면 파이어폭스에서 드래그가 시작되지 않는다.
+      e.dataTransfer.setData('text/plain', col.name);
+    });
+
+    row.addEventListener('dragend', () => {
+      row.draggable = false;
+      row.classList.remove('is-dragging');
+      this.colDrag = null;
+      this.clearColumnDropMark();
+      // 네이티브 드래그는 pointerup 대신 pointercancel 로 끝난다. 잠금을 여기서도
+      // 풀어 두지 않으면(브라우저마다 다르다) 그 뒤로 패널이 영영 갱신되지 않는다.
+      this.panelPressed = false;
+      if (this.panelDirty) setTimeout(() => this.renderPanelIfIdle(), 0);
+    });
+
+    row.addEventListener('dragover', (e) => {
+      const drag = this.colDrag;
+      if (!drag || drag.table !== ref.serverKey || drag.name === col.name) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      const rect = row.getBoundingClientRect();
+      const after = e.clientY > rect.top + rect.height / 2;
+      this.clearColumnDropMark();
+      row.classList.add(after ? 'is-drop-after' : 'is-drop-before');
+    });
+
+    row.addEventListener('dragleave', (e) => {
+      // 줄 안의 자식으로 들어간 것은 떠난 것이 아니다.
+      if (row.contains(e.relatedTarget)) return;
+      row.classList.remove('is-drop-before', 'is-drop-after');
+    });
+
+    row.addEventListener('drop', (e) => {
+      const drag = this.colDrag;
+      this.clearColumnDropMark();
+      if (!drag || drag.table !== ref.serverKey || drag.name === col.name) return;
+      e.preventDefault();
+      const rect = row.getBoundingClientRect();
+      const after = e.clientY > rect.top + rect.height / 2;
+      this.moveColumnTo(ref, drag.name, col.name, after);
+    });
+  }
+
+  clearColumnDropMark() {
+    for (const el of this.ui.panel.querySelectorAll('.is-drop-before, .is-drop-after')) {
+      el.classList.remove('is-drop-before', 'is-drop-after');
+    }
+  }
+
+  // moveColumnTo는 끌어다 놓은 자리를 위치 번호로 바꿔 보낸다.
+  //
+  // 지금 목록을 다시 읽는 이유: 끄는 동안 다른 사람이 컬럼을 더하거나 지웠을 수 있고,
+  // 그리면서 계산해 둔 번호를 그대로 보내면 엉뚱한 자리로 간다.
+  moveColumnTo(ref, name, targetName, after) {
+    const table = ref.table();
+    if (!table) return;
+    const names = (table.columns ?? []).map((c) => c.name);
+    const from = names.findIndex((n) => n.toLowerCase() === name.toLowerCase());
+    const at = names.findIndex((n) => n.toLowerCase() === targetName.toLowerCase());
+    if (from < 0 || at < 0) return;
+
+    // 끌고 있는 것을 뺀 목록에서 몇 번째에 끼울지 센다. 서버의 column.move는
+    // "옮긴 뒤의 위치(1부터)"를 받으므로 그 값이 곧 답이다.
+    const rest = names.filter((_, i) => i !== from);
+    let slot = rest.findIndex((n) => n.toLowerCase() === targetName.toLowerCase());
+    if (after) slot += 1;
+    if (slot === from) return;
+    this.send('column.move', { table: ref.serverKey, name, to: slot + 1 });
   }
 
   // openColumnIconDialog는 컬럼 아이콘을 고른다.

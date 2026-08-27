@@ -1976,10 +1976,32 @@ option { background: var(--surface); color: var(--text); }
 /* 컬럼 한 줄: [기본키] [이름] [타입] [타입 고르기].
  * 고르개 버튼은 타입 칸 바로 옆이어야 "이 칸을 고르는 버튼"으로 읽힌다. */
 .erd-col-row-main {
-  display: grid; grid-template-columns: auto auto 1fr 1fr auto;
-  gap: 6px; align-items: center;
+  display: flex; gap: 6px; align-items: center;
 }
-.erd-col-row-main .input { min-width: 0; }
+/* 이름과 타입이 남은 폭을 나눠 갖는다. flex를 쓰는 이유는 손잡이·타입 고르개가
+ * 읽기 전용에서 사라지기 때문이다 — 격자로 두면 빠진 칸만큼 뒤가 밀린다. */
+.erd-col-row-main .input { flex: 1; min-width: 0; }
+
+/* 순서 손잡이. 손잡이를 눌러야만 줄이 끌리므로, 잡을 곳이 보여야 한다. */
+.erd-col-grip {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 24px; padding: 0; flex: none;
+  border: none; background: none; color: var(--text-mute); cursor: grab;
+}
+.erd-col-grip:hover { color: var(--text); }
+.erd-col-grip:active { cursor: grabbing; }
+.erd-col-row.is-dragging { opacity: 0.45; }
+/* 놓을 자리를 선으로 보여준다. 선이 없으면 위에 놓았는지 아래에 놓았는지를
+ * 손을 뗀 뒤에야 알게 된다. */
+.erd-col-row.is-drop-before { box-shadow: inset 0 2px 0 0 var(--primary); }
+.erd-col-row.is-drop-after { box-shadow: inset 0 -2px 0 0 var(--primary); }
+
+/* 적는 칸들(기본값·설명)은 셋째 줄에 나란히 둔다. 둘째 줄에 함께 두면 좁은
+ * 인스펙터에서 줄바꿈이 일어나 순서 단추가 혼자 떨어진다. */
+.erd-col-row-fields { display: flex; gap: 6px; margin-top: 6px; align-items: center; }
+.erd-col-row-fields .input { flex: 1; min-width: 0; }
+.erd-col-row-fields p { margin: 0; min-width: 0; }
+.erd-col-note { font-size: 11px; color: var(--text-mute); }
 
 /* 기본키 토글. 컬럼 줄 안에 있어야 "이 컬럼이 키인가"를 한자리에서 본다. */
 .erd-pk-toggle {
@@ -2009,12 +2031,20 @@ option { background: var(--surface); color: var(--text); }
 .erd-col-order { display: inline-flex; gap: 2px; margin-left: auto; }
 .erd-move-arrow { font-size: 9px; line-height: 1; }
 .erd-col-row-sub {
-  display: flex; align-items: center; gap: 8px; margin-top: 6px; flex-wrap: wrap;
+  display: flex; align-items: center; gap: 6px; margin-top: 6px; flex-wrap: wrap;
 }
+/* 이 줄의 것들은 인스펙터 폭(=300px 남짓) 안에 **한 줄로** 들어가야 한다.
+ * 넘쳐서 접히면 순서 단추나 삭제가 혼자 아래로 떨어져, 무엇에 딸린 단추인지
+ * 흐려진다. 그래서 여기서만 체크박스와 단추를 한 치수 작게 쓴다. */
+.erd-col-row .checkbox { font-size: 12px; gap: 5px; }
+.erd-col-row .checkbox input { width: 14px; height: 14px; }
+.erd-col-row-sub .icon-btn { width: 26px; height: 26px; }
+.erd-col-order .icon-btn { width: 22px; }
 .erd-col-row .input { padding: 4px 7px; font-size: 12px; }
 .erd-col-name { font-family: var(--mono); }
 .erd-col-type-input { font-family: var(--mono); color: var(--text-dim); }
-.erd-col-default { font-family: var(--mono); flex: 1; min-width: 80px; }
+.erd-col-default { font-family: var(--mono); }
+.erd-col-comment-input { color: var(--text-dim); }
 .erd-col-comment { margin: 6px 0 0; font-size: 11.5px; color: var(--text-mute); }
 .erd-col-add { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 
