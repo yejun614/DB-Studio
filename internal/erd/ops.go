@@ -990,6 +990,16 @@ type indexPayload struct {
 	Unique  *bool    `json:"unique,omitempty"`
 	Type    *string  `json:"type,omitempty"`
 	Where   *string  `json:"where,omitempty"`
+	// NewName은 이름 바꾸기다. Name이 찾는 열쇠이므로 새 이름은 따로 받는다.
+	//
+	// 지웠다 다시 만들지 않는 이유: 그 사이에 인덱스가 없는 순간이 생기고, 그
+	// 두 op는 되돌리기에서도 따로 논다.
+	NewName *string `json:"newName,omitempty"`
+	// Descending은 내림차순으로 둘 컬럼 이름이다.
+	//
+	// 컬럼 목록과 나란한 배열이 아니라 이름의 집합인 이유: 나란한 배열은 두 목록의
+	// 길이가 어긋나는 순간 어느 컬럼이 내림차순인지 알 수 없게 된다.
+	Descending []string `json:"descending,omitempty"`
 }
 
 func applyIndexUpsert(doc *Document, op *Op) error {
@@ -1024,14 +1034,31 @@ func applyIndexUpsert(doc *Document, op *Op) error {
 		tbl.Indexes = append(tbl.Indexes, idx)
 	}
 
+	if p.NewName != nil {
+		next, err := validateIdent("인덱스", *p.NewName)
+		if err != nil {
+			return err
+		}
+		for _, other := range tbl.Indexes {
+			if other != idx && strings.EqualFold(other.Name, next) {
+				return conflict("인덱스 %s 이(가) 이미 있습니다", next)
+			}
+		}
+		idx.Name = next
+	}
+
 	if len(p.Columns) > 0 {
 		cols, err := resolveColumns(tbl, p.Columns, "인덱스")
 		if err != nil {
 			return err
 		}
+		desc := map[string]bool{}
+		for _, name := range p.Descending {
+			desc[strings.ToLower(strings.TrimSpace(name))] = true
+		}
 		parts := make([]schema.IndexPart, 0, len(cols))
 		for _, c := range cols {
-			parts = append(parts, schema.IndexPart{Column: c})
+			parts = append(parts, schema.IndexPart{Column: c, Descending: desc[strings.ToLower(c)]})
 		}
 		idx.Columns = parts
 	} else if op.Kind == OpIndexAdd {

@@ -315,6 +315,49 @@ func TestColumnRenamePropagates(t *testing.T) {
 	}
 }
 
+// 인덱스는 만든 뒤에도 고칠 수 있어야 한다: 이름, 컬럼 순서, 정렬 방향.
+//
+// 이름을 지웠다 다시 만드는 방식으로 바꾸면 그 사이에 인덱스가 없는 순간이 생기고,
+// 두 op는 되돌리기에서도 따로 논다. 컬럼 순서와 정렬 방향은 어떤 조회가 이 인덱스를
+// 탈 수 있는지를 정하므로, 고칠 수 없으면 만들 때 한 번에 맞히는 수밖에 없다.
+func TestIndexUpdateDetails(t *testing.T) {
+	doc := twoTables(t)
+	apply(t, doc, OpColumnAdd, `{"table":"users","name":"email","type":"varchar(255)"}`)
+	apply(t, doc, OpColumnAdd, `{"table":"users","name":"created_at","type":"timestamp"}`)
+	apply(t, doc, OpIndexAdd, `{"table":"users","name":"ix_email","columns":["email"]}`)
+
+	apply(t, doc, OpIndexUpdate, `{"table":"users","name":"ix_email","newName":"ix_users_email",`+
+		`"columns":["created_at","email"],"descending":["created_at"],"unique":true}`)
+
+	users := doc.findTable("users")
+	if len(users.Indexes) != 1 {
+		t.Fatalf("인덱스 수 = %d (이름을 바꾸면서 하나 더 만들었습니다)", len(users.Indexes))
+	}
+	idx := users.Indexes[0]
+	if idx.Name != "ix_users_email" {
+		t.Errorf("이름 = %q", idx.Name)
+	}
+	if !idx.Unique {
+		t.Error("UNIQUE가 켜지지 않았습니다")
+	}
+	if len(idx.Columns) != 2 || idx.Columns[0].Column != "created_at" || idx.Columns[1].Column != "email" {
+		t.Errorf("컬럼 = %+v (보낸 순서 그대로여야 합니다)", idx.Columns)
+	}
+	if !idx.Columns[0].Descending || idx.Columns[1].Descending {
+		t.Errorf("정렬 방향 = %v, %v (created_at만 내림차순)",
+			idx.Columns[0].Descending, idx.Columns[1].Descending)
+	}
+
+	// 이미 있는 이름으로는 바꿀 수 없다. 허용하면 이름이 열쇠인 다른 op들이
+	// 어느 인덱스를 가리키는지 알 수 없게 된다.
+	apply(t, doc, OpIndexAdd, `{"table":"users","name":"ix_other","columns":["email"]}`)
+	applyErr(t, doc, OpIndexUpdate,
+		`{"table":"users","name":"ix_other","newName":"ix_users_email"}`, "conflict", "이미 있습니다")
+	if doc.findTable("users").Indexes[1].Name != "ix_other" {
+		t.Error("거부된 이름 변경이 적용되었습니다")
+	}
+}
+
 // 컬럼을 지우면 그 컬럼을 쓰는 제약도 정리되어야 한다.
 // 남겨두면 ERD는 정상으로 보이는데 생성한 DDL이 없는 컬럼을 가리킨다.
 func TestColumnDeleteCleansConstraints(t *testing.T) {
