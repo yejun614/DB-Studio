@@ -409,6 +409,139 @@ func TestIndexUpdateDetails(t *testing.T) {
 	}
 }
 
+// 테이블 복제는 컬럼·기본키·인덱스·체크·나가는 외래키를 함께 베낀다.
+//
+// 제약 이름은 사본의 이름에 맞춰 바꿔야 한다. 그대로 베끼면 PostgreSQL·MS-SQL에서
+// 실행 시점에 "이미 있는 제약 이름"으로 실패하고, 그 실패는 마이그레이션을 만들어
+// 실행할 때까지 드러나지 않는다.
+func TestTableDuplicate(t *testing.T) {
+	doc := twoTables(t)
+	apply(t, doc, OpPKSet, `{"table":"users","name":"users_pkey","columns":["id"]}`)
+	apply(t, doc, OpColumnAdd, `{"table":"users","name":"email","type":"varchar(255)","nullable":false}`)
+	apply(t, doc, OpColumnUpdate, `{"table":"users","name":"email","comment":"로그인 아이디"}`)
+	apply(t, doc, OpIndexAdd, `{"table":"users","name":"ux_users_email","columns":["email"],"unique":true}`)
+	apply(t, doc, OpCheckAdd, `{"table":"users","name":"ck_users_email","expression":"email <> ''"}`)
+	apply(t, doc, OpColumnAdd, `{"table":"users","name":"team_id","type":"int"}`)
+	apply(t, doc, OpFKAdd, `{"table":"users","name":"fk_users_team","columns":["team_id"],`+
+		`"refTable":"orders","refColumns":["id"],"onDelete":"CASCADE"}`)
+	// orders → users 로 들어오는 외래키. 이것은 베끼지 않아야 한다.
+	apply(t, doc, OpColumnAdd, `{"table":"orders","name":"owner_id","type":"bigint"}`)
+	apply(t, doc, OpFKAdd, `{"table":"orders","name":"fk_orders_owner","columns":["owner_id"],`+
+		`"refTable":"users","refColumns":["id"]}`)
+	apply(t, doc, OpTableMove, `{"key":"users","x":100,"y":200,"color":"#eab308","icon":"users",`+
+		`"columnIcons":{"email":"mail"}}`)
+
+	apply(t, doc, OpTableDuplicate, `{"key":"users"}`)
+
+	dup := doc.findTable("users_copy")
+	if dup == nil {
+		t.Fatalf("사본이 없습니다: %v", tableNamesOf(doc))
+	}
+	src := doc.findTable("users")
+
+	// 컬럼은 값까지 그대로. 원본과 같은 포인터를 공유하면 한쪽을 고칠 때 다른 쪽이
+	// 함께 바뀐다 — 화면에서는 이유를 알 수 없는 동작이 된다.
+	if len(dup.Columns) != len(src.Columns) {
+		t.Fatalf("컬럼 수 = %d, 원본 %d", len(dup.Columns), len(src.Columns))
+	}
+	for i := range dup.Columns {
+		if dup.Columns[i] == src.Columns[i] {
+			t.Fatalf("%s 컬럼이 원본과 같은 객체입니다", dup.Columns[i].Name)
+		}
+		if dup.Columns[i].Name != src.Columns[i].Name {
+			t.Errorf("컬럼 순서/이름이 다릅니다: %q vs %q", dup.Columns[i].Name, src.Columns[i].Name)
+		}
+	}
+	if c := dup.Column("email"); c == nil || c.Comment != "로그인 아이디" || c.Nullable {
+		t.Errorf("컬럼 속성이 베껴지지 않았습니다: %+v", c)
+	}
+
+	// 제약 이름은 사본 이름으로 바뀐다.
+	if dup.PrimaryKey == nil || len(dup.PrimaryKey.Columns) != 1 {
+		t.Errorf("기본키 = %+v", dup.PrimaryKey)
+	}
+	if dup.PrimaryKey.Name != "users_copy_pkey" {
+		t.Errorf("기본키 이름 = %q (사본 이름으로 바뀌어야 합니다)", dup.PrimaryKey.Name)
+	}
+	if len(dup.Indexes) != 1 || dup.Indexes[0].Name != "ux_users_copy_email" {
+		t.Errorf("인덱스 = %+v", dup.Indexes)
+	}
+	if len(dup.Checks) != 1 || dup.Checks[0].Name != "ck_users_copy_email" {
+		t.Errorf("체크 = %+v", dup.Checks)
+	}
+	if len(dup.ForeignKeys) != 1 || dup.ForeignKeys[0].Name != "fk_users_copy_team" {
+		t.Fatalf("외래키 = %+v", dup.ForeignKeys)
+	}
+	if dup.ForeignKeys[0].OnDelete != "CASCADE" {
+		t.Errorf("ON DELETE 가 베껴지지 않았습니다: %+v", dup.ForeignKeys[0])
+	}
+	// 들어오는 외래키는 그대로 원본만 가리킨다.
+	orders := doc.findTable("orders")
+	for _, fk := range orders.ForeignKeys {
+		if strings.EqualFold(fk.RefTable, "users_copy") {
+			t.Error("이 테이블을 가리키던 외래키가 사본까지 가리킵니다")
+		}
+	}
+
+	// 표시 정보는 함께, 자리는 비껴서.
+	box := doc.Layout["users_copy"]
+	if box == nil || box.X != 140 || box.Y != 240 {
+		t.Errorf("자리 = %+v (원본 옆으로 비껴 놓아야 합니다)", box)
+	}
+	if box.Color != "#eab308" || box.Icon != "users" || box.ColumnIcons["email"] != "mail" {
+		t.Errorf("표시 정보가 베껴지지 않았습니다: %+v", box)
+	}
+	// 컬럼 아이콘 지도를 공유하면 사본에서 아이콘을 바꿀 때 원본도 바뀐다.
+	if same := doc.Layout["users"].ColumnIcons; same != nil {
+		box.ColumnIcons["email"] = "lock"
+		if same["email"] != "mail" {
+			t.Error("컬럼 아이콘 지도를 원본과 공유합니다")
+		}
+		box.ColumnIcons["email"] = "mail"
+	}
+
+	// MySQL의 암묵 이름은 그대로 둔다. 바꿀 수 없는 이름이라, 바꿔 적으면 사본의
+	// DDL에 아무도 쓰지 않는 제약 이름이 남는다.
+	apply(t, doc, OpPKSet, `{"table":"orders","name":"PRIMARY","columns":["id"]}`)
+	apply(t, doc, OpTableDuplicate, `{"key":"orders","name":"orders_copy"}`)
+	if got := doc.findTable("orders_copy").PrimaryKey.Name; got != "PRIMARY" {
+		t.Errorf("사본의 기본키 이름 = %q (PRIMARY 그대로여야 합니다)", got)
+	}
+
+	// 이름을 직접 줄 수 있고, 겹치면 거부한다.
+	apply(t, doc, OpTableDuplicate, `{"key":"users","name":"users_archive"}`)
+	if doc.findTable("users_archive") == nil {
+		t.Error("이름을 지정한 복제가 되지 않았습니다")
+	}
+	applyErr(t, doc, OpTableDuplicate, `{"key":"users","name":"orders"}`, "conflict", "이미 있습니다")
+	applyErr(t, doc, OpTableDuplicate, `{"key":"nope"}`, "not_found", "")
+
+	// 이름을 비우면 번호가 붙는다(users_copy 는 이미 있다).
+	apply(t, doc, OpTableDuplicate, `{"key":"users"}`)
+	if doc.findTable("users_copy2") == nil {
+		t.Errorf("두 번째 사본 이름이 users_copy2 가 아닙니다: %v", tableNamesOf(doc))
+	}
+
+	// 함께 베낄 것을 고를 수 있다.
+	apply(t, doc, OpTableDuplicate,
+		`{"key":"users","name":"users_bare","withIndexes":false,"withForeignKeys":false,"withChecks":false}`)
+	bare := doc.findTable("users_bare")
+	if len(bare.Indexes) != 0 || len(bare.ForeignKeys) != 0 || len(bare.Checks) != 0 {
+		t.Errorf("빼기로 지정한 것이 베껴졌습니다: %+v", bare)
+	}
+	if len(bare.Columns) != len(src.Columns) || bare.PrimaryKey == nil {
+		t.Error("컬럼과 기본키는 빼기 대상이 아닙니다")
+	}
+}
+
+func tableNamesOf(doc *Document) []string {
+	out := []string{}
+	for _, t := range doc.Schema.Tables {
+		out = append(out, t.Name)
+	}
+	return out
+}
+
 // 컬럼을 지우면 그 컬럼을 쓰는 제약도 정리되어야 한다.
 // 남겨두면 ERD는 정상으로 보이는데 생성한 DDL이 없는 컬럼을 가리킨다.
 func TestColumnDeleteCleansConstraints(t *testing.T) {
@@ -770,7 +903,7 @@ func TestMalformedPayloadNoPanic(t *testing.T) {
 		`{"table":"users","name":"x","type":[]}`,
 	}
 	kinds := []Kind{
-		OpTableAdd, OpTableUpdate, OpTableMove, OpTableDelete,
+		OpTableAdd, OpTableUpdate, OpTableMove, OpTableDelete, OpTableDuplicate,
 		OpColumnAdd, OpColumnUpdate, OpColumnDelete, OpPKSet,
 		OpIndexAdd, OpIndexUpdate, OpIndexDelete,
 		OpFKAdd, OpFKUpdate, OpFKDelete,

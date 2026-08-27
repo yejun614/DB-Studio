@@ -718,7 +718,7 @@ func TestStructureAllowsOnlyAnnotations(t *testing.T) {
 		}
 	}
 	blocked := []erd.Kind{
-		erd.OpTableAdd, erd.OpTableUpdate, erd.OpTableDelete,
+		erd.OpTableAdd, erd.OpTableUpdate, erd.OpTableDelete, erd.OpTableDuplicate,
 		erd.OpColumnAdd, erd.OpColumnUpdate, erd.OpColumnDelete,
 		erd.OpIndexAdd, erd.OpFKAdd, erd.OpPKSet, erd.OpEnumAdd,
 		erd.OpDomainAdd, erd.OpSchemaImport,

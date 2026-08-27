@@ -18,6 +18,14 @@ const (
 	OpTableUpdate Kind = "table.update" // 이름·주석·네임스페이스 패치
 	OpTableMove   Kind = "table.move"   // 레이아웃 전용 (구조 변경 아님)
 	OpTableDelete Kind = "table.delete"
+	// OpTableDuplicate는 테이블을 통째로 베낀다.
+	//
+	// 컬럼을 하나씩 다시 만들게 하지 않고 op 하나로 두는 이유가 셋 있다.
+	// 첫째, 스무 컬럼짜리 테이블을 베끼는 일이 스무 번의 편집으로 남으면 편집
+	// 이력과 되돌리기가 그 하나의 동작을 스무 조각으로 보여준다. 둘째, 중간에
+	// 하나가 거부되면 반쪽만 만들어진 테이블이 남는다. 셋째, 제약 이름을 새 이름에
+	// 맞춰 바꾸는 규칙이 클라이언트마다 따로 구현되면 언젠가 어긋난다.
+	OpTableDuplicate Kind = "table.duplicate"
 
 	OpColumnAdd    Kind = "column.add"
 	OpColumnUpdate Kind = "column.update"
@@ -143,6 +151,8 @@ func Apply(doc *Document, op *Op) error {
 		return applyTableMove(doc, op)
 	case OpTableDelete:
 		return applyTableDelete(doc, op)
+	case OpTableDuplicate:
+		return applyTableDuplicate(doc, op)
 	case OpColumnAdd:
 		return applyColumnAdd(doc, op)
 	case OpColumnUpdate:
@@ -296,6 +306,220 @@ func applyTableAdd(doc *Document, op *Op) error {
 	}
 	doc.Layout[tbl.Key()] = &Box{X: x, Y: y}
 	return nil
+}
+
+type tableDuplicatePayload struct {
+	// Key는 베낄 원본이다.
+	Key string `json:"key"`
+	// Name이 비어 있으면 "원본이름_copy" 로 정한다(겹치면 뒤에 번호).
+	Name      string   `json:"name"`
+	Namespace *string  `json:"namespace,omitempty"`
+	X         *float64 `json:"x,omitempty"`
+	Y         *float64 `json:"y,omitempty"`
+	// 함께 베낄 것들. 지정하지 않으면 모두 베낀다 — "복제"라는 말에 가장 가깝다.
+	WithIndexes *bool `json:"withIndexes,omitempty"`
+	WithFKs     *bool `json:"withForeignKeys,omitempty"`
+	WithChecks  *bool `json:"withChecks,omitempty"`
+}
+
+// applyTableDuplicate는 테이블을 베껴 새 테이블을 만든다.
+//
+// 베끼지 않는 것: 이 테이블을 **가리키는** 외래키(다른 테이블에 있다). 그것을 함께
+// 베끼면 남의 테이블을 고치는 일이 되고, 사본과 원본 중 어느 쪽을 가리켜야 하는지도
+// 사람만 안다. 통계값(행 수·크기)도 베끼지 않는다 — 사본에는 아직 행이 없다.
+func applyTableDuplicate(doc *Document, op *Op) error {
+	var p tableDuplicatePayload
+	if err := decode(op, &p); err != nil {
+		return err
+	}
+	src := doc.findTable(p.Key)
+	if src == nil {
+		return notFound("테이블 %s 을(를) 찾을 수 없습니다", p.Key)
+	}
+
+	ns := src.Namespace
+	if p.Namespace != nil {
+		ns = strings.TrimSpace(*p.Namespace)
+		if ns != "" {
+			var err error
+			if ns, err = validateIdent("네임스페이스", ns); err != nil {
+				return err
+			}
+		}
+	}
+
+	name := strings.TrimSpace(p.Name)
+	if name == "" {
+		name = freeTableName(doc, src.Name, ns)
+	}
+	name, err := validateIdent("테이블", name)
+	if err != nil {
+		return err
+	}
+
+	dst := &schema.Table{
+		Namespace: ns, Name: name, Comment: src.Comment,
+		Columns: make([]*schema.Column, 0, len(src.Columns)),
+		// 아래에서 채운다. nil 로 두면 화면과 DDL 쪽에서 매번 nil 검사를 해야 한다.
+		Indexes: []*schema.Index{}, ForeignKeys: []*schema.ForeignKey{}, Checks: []*schema.Check{},
+	}
+	if doc.findTable(dst.Key()) != nil {
+		return conflict("테이블 %s 이(가) 이미 있습니다", dst.Display())
+	}
+	if len(src.Options) > 0 {
+		dst.Options = make(map[string]string, len(src.Options))
+		for k, v := range src.Options {
+			dst.Options[k] = v
+		}
+	}
+
+	for _, c := range src.Columns {
+		copied := *c
+		dst.Columns = append(dst.Columns, &copied)
+	}
+	renumber(dst)
+
+	if src.PrimaryKey != nil {
+		pk := &schema.PrimaryKey{
+			// 이름은 새 테이블에 맞춰 바꾼다. PostgreSQL·MS-SQL에서 제약 이름은
+			// 스키마 안에서 유일해야 하므로, 그대로 베끼면 실행 시점에 실패한다.
+			Name:    copyConstraintName(doc, src.PrimaryKey.Name, src.Name, name),
+			Columns: append([]string(nil), src.PrimaryKey.Columns...),
+		}
+		dst.PrimaryKey = pk
+	}
+	if p.WithIndexes == nil || *p.WithIndexes {
+		for _, idx := range src.Indexes {
+			copied := &schema.Index{
+				Name:    copyConstraintName(doc, idx.Name, src.Name, name),
+				Unique:  idx.Unique,
+				Type:    idx.Type,
+				Where:   idx.Where,
+				Columns: append([]schema.IndexPart(nil), idx.Columns...),
+			}
+			dst.Indexes = append(dst.Indexes, copied)
+		}
+	}
+	if p.WithChecks == nil || *p.WithChecks {
+		for _, ck := range src.Checks {
+			dst.Checks = append(dst.Checks, &schema.Check{
+				Name:       copyConstraintName(doc, ck.Name, src.Name, name),
+				Expression: ck.Expression,
+			})
+		}
+	}
+	if p.WithFKs == nil || *p.WithFKs {
+		for _, fk := range src.ForeignKeys {
+			dst.ForeignKeys = append(dst.ForeignKeys, &schema.ForeignKey{
+				Name:         copyConstraintName(doc, fk.Name, src.Name, name),
+				Columns:      append([]string(nil), fk.Columns...),
+				RefNamespace: fk.RefNamespace,
+				RefTable:     fk.RefTable,
+				RefColumns:   append([]string(nil), fk.RefColumns...),
+				OnDelete:     fk.OnDelete,
+				OnUpdate:     fk.OnUpdate,
+			})
+		}
+	}
+
+	doc.Schema.Tables = append(doc.Schema.Tables, dst)
+
+	// 자리: 원본 옆에 조금 비껴 놓는다. 정확히 겹치면 사본이 만들어졌는지 화면만
+	// 보고 알 수 없고, 끌어서 옮기려 해도 어느 쪽을 잡았는지 알 수 없다.
+	box := doc.Layout[src.Key()]
+	x, y := doc.nextFreeSlot()
+	if box != nil {
+		x, y = box.X+40, box.Y+40
+	}
+	if p.X != nil {
+		x = *p.X
+	}
+	if p.Y != nil {
+		y = *p.Y
+	}
+	next := &Box{X: x, Y: y}
+	if box != nil {
+		// 표시 정보(색·아이콘)는 함께 베낀다. 사본이 원본과 나란히 있을 때
+		// 같은 묶음으로 보이는 편이 맞다.
+		next.Collapsed, next.Color, next.Icon = box.Collapsed, box.Color, box.Icon
+		if len(box.ColumnIcons) > 0 {
+			next.ColumnIcons = make(map[string]string, len(box.ColumnIcons))
+			for k, v := range box.ColumnIcons {
+				next.ColumnIcons[k] = v
+			}
+		}
+	}
+	doc.Layout[dst.Key()] = next
+	return nil
+}
+
+// freeTableName은 "이름_copy" 꼴로 비어 있는 이름을 찾는다.
+func freeTableName(doc *Document, base, ns string) string {
+	key := func(name string) string {
+		if ns == "" {
+			return strings.ToLower(name)
+		}
+		return strings.ToLower(ns + "." + name)
+	}
+	name := base + "_copy"
+	for i := 2; doc.findTable(key(name)) != nil; i++ {
+		name = fmt.Sprintf("%s_copy%d", base, i)
+	}
+	return name
+}
+
+// copyConstraintName은 제약·인덱스 이름을 사본의 이름에 맞춘다.
+//
+// 이름에 원본 테이블 이름이 들어 있으면 그 자리만 바꾼다(ix_users_email →
+// ix_users_copy_email). 없으면 앞에 새 테이블 이름을 붙인다. 어느 쪽이든 문서
+// 안에서 이미 쓰이는 이름이면 뒤에 번호를 붙인다 — 인덱스 이름은 MySQL에서는
+// 테이블마다, PostgreSQL에서는 스키마 안에서 유일해야 하므로 넓은 쪽을 기준으로 본다.
+func copyConstraintName(doc *Document, old, srcTable, dstTable string) string {
+	if strings.TrimSpace(old) == "" {
+		return ""
+	}
+	// PRIMARY 는 MySQL이 기본키에 붙이는 암묵 이름이다. 테이블마다 하나뿐이라
+	// 겹칠 수 없고, MySQL은 이 이름을 바꿀 수도 없다. 그대로 두지 않으면 사본의
+	// DDL에 ic_users_copy_PRIMARY 같은 아무도 쓰지 않는 이름이 남는다.
+	if strings.EqualFold(old, "PRIMARY") {
+		return old
+	}
+	lower := strings.ToLower(old)
+	at := strings.Index(lower, strings.ToLower(srcTable))
+	candidate := dstTable + "_" + old
+	if at >= 0 {
+		candidate = old[:at] + dstTable + old[at+len(srcTable):]
+	}
+	name := candidate
+	for i := 2; constraintNameTaken(doc, name); i++ {
+		name = fmt.Sprintf("%s_%d", candidate, i)
+	}
+	return name
+}
+
+// constraintNameTaken은 문서 전체에서 그 이름이 이미 쓰이는지 본다.
+func constraintNameTaken(doc *Document, name string) bool {
+	for _, t := range doc.Schema.Tables {
+		if t.PrimaryKey != nil && strings.EqualFold(t.PrimaryKey.Name, name) {
+			return true
+		}
+		for _, idx := range t.Indexes {
+			if strings.EqualFold(idx.Name, name) {
+				return true
+			}
+		}
+		for _, fk := range t.ForeignKeys {
+			if strings.EqualFold(fk.Name, name) {
+				return true
+			}
+		}
+		for _, ck := range t.Checks {
+			if strings.EqualFold(ck.Name, name) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 type tableUpdatePayload struct {
