@@ -34,6 +34,9 @@ export class ErdCanvas {
     this.remoteCursors = new Map();
     this.view = { x: 0, y: 0, w: 1200, h: 800 };
     this.drag = null;
+    // tool은 **빈 곳을 끌 때** 무엇을 할지다: 'pan'이면 화면 이동, 'select'면 범위 선택.
+    // 기본은 pan이다 — 이 값을 바꾸지 않는 화면(구조)은 지금까지와 똑같이 움직인다.
+    this.tool = 'pan';
 
     this.svg = document.createElementNS(SVG_NS, 'svg');
     this.svg.classList.add('erd-canvas');
@@ -77,6 +80,16 @@ export class ErdCanvas {
   // 두 화면이 같은 캔버스를 쓰는 이상, 덜 쓰는 쪽에 더 많은 것을 요구하지 않는다.
   setSelection(sel) {
     this.selection = sel ?? null;
+  }
+
+  // setTool은 빈 곳 드래그의 뜻을 정한다.
+  //
+  // 도구를 캔버스가 기억하지 않고 화면이 정해 주는 이유: 어느 도구가 켜져 있는지를
+  // 도구 막대가 보여줘야 하고, 그 선택은 사람마다 저장된다(localStorage).
+  setTool(tool) {
+    this.tool = tool === 'select' ? 'select' : 'pan';
+    // 커서가 도구를 말해 주지 않으면, 끌어 보고서야 무엇이 일어나는지 알게 된다.
+    this.svg.classList.toggle('is-select', this.tool === 'select');
   }
 
   // setMarks는 화면 쪽이 들고 있는 선택 목록을 그대로 받는다.
@@ -424,16 +437,24 @@ export class ErdCanvas {
       this.zoomAt(e.deltaY > 0 ? 1.12 : 0.89, p);
     };
     const onPointerDown = (e) => {
+      // 오른쪽 버튼은 우리 것이 아니다(브라우저 메뉴). 잡으면 메뉴가 뜬 채로
+      // 드래그가 시작된 상태가 남는다.
+      if (e.button === 2) return;
       if (e.target.closest('.erd-card-g') || e.target.closest('.erd-note-g')) return;
-      // Shift·Ctrl(⌘)을 누른 채 빈 곳을 끌면 **범위 선택**이다.
+      // 빈 곳을 끌면 무엇이 되는가 — 지금 켜진 도구가 정한다.
       //
-      // 빈 곳을 그냥 끄는 것은 지금까지도 앞으로도 화면 이동이다. 이 캔버스에는
-      // 스크롤바가 없어서 끌기 말고는 화면을 옮길 방법이 없다 — 그것을 선택으로
-      // 바꾸면 다중 선택을 얻는 대신 이동을 잃는다.
+      //            plain      Shift        Ctrl(⌘)     가운데 버튼
+      //   pan      화면 이동   범위(더하기)  범위(새로)   화면 이동
+      //   select   범위(새로)  범위(더하기)  화면 이동    화면 이동
       //
-      // Shift는 지금 고른 것에 **더하고**, Ctrl(⌘)은 **새로 고른다**. 둘 다 두는
-      // 이유는 하나뿐이면 "더하기"와 "다시 고르기" 중 하나를 할 수 없기 때문이다.
-      if (this.canPick && (e.shiftKey || e.ctrlKey || e.metaKey)) {
+      // 가운데 버튼이 언제나 화면 이동인 이유: 도구를 바꾸지 않고 잠깐 옮겨 보는
+      // 일이 가장 잦다. 이 캔버스에는 스크롤바가 없어서 끌기 말고는 화면을 옮길
+      // 방법이 없으므로, 어떤 도구에서도 이동으로 가는 길이 하나는 열려 있어야 한다.
+      const middle = e.button === 1;
+      const wantBand = this.canPick && !middle && (this.tool === 'select'
+        ? !(e.ctrlKey || e.metaKey)
+        : (e.shiftKey || e.ctrlKey || e.metaKey));
+      if (wantBand) {
         const at = this.toCanvas(e.clientX, e.clientY);
         this.drag = { mode: 'band', start: at, keep: e.shiftKey ? this.marks.slice() : [] };
         if (!e.shiftKey && this.marks.length) {

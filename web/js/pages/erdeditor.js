@@ -173,6 +173,9 @@ class Editor {
     // 캔버스에 밀어 넣는다(renderCanvas). 캔버스만 들고 있으면 그 한 번에 다중
     // 선택이 매번 사라진다.
     this.marks = [];
+    // tool은 마우스 도구다: 'select'면 빈 곳을 끌어 범위로 고르고, 'pan'이면 화면을
+    // 옮긴다. 고른 도구는 사람마다 기억한다 — 한 번 정하면 다음에도 그 손버릇이다.
+    this.tool = readTool();
     // renamedSel은 이름 미리보기 때문에 선택 키를 옮겨 둔 기록이다({from, to}).
     // 이름이 거부되면 from으로 되돌린다(previewTableName의 주석 참고).
     this.renamedSel = null;
@@ -245,6 +248,7 @@ class Editor {
 
   start() {
     this.canvas.setDoc(this.doc);
+    this.canvas.setTool(this.tool);
     this.canvas.fitView();
     // 타입 목록은 미리 받아 둔다. 고르개를 열 때 받으면 빈 창이 떴다가 채워지고,
     // 컬럼 줄의 "자동 증가" 설명(DB마다 이름이 다르다)도 그때까지 비어 있다.
@@ -309,6 +313,15 @@ class Editor {
         e.preventDefault();
         this.deleteMarks();
         return;
+      }
+      // V / H: 마우스 도구. 그림 도구들이 쓰는 자리와 같게 둔다.
+      if (!busy && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const key = e.key.toLowerCase();
+        if (key === 'v' || key === 'h') {
+          e.preventDefault();
+          this.setTool(key === 'v' ? 'select' : 'pan');
+          return;
+        }
       }
       if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
       // Ctrl+A: 모두 고르기.
@@ -572,7 +585,13 @@ class Editor {
     // 대신 SQL 내보내기가 그 자리를 대신한다.
     const hasTarget = Boolean(this.connection);
     mount(this.ui.toolbar,
-      // 되돌리기는 맨 앞에 둔다. 실수를 되돌리는 손은 도구를 고르는 손보다 급하다.
+      // 마우스 도구를 맨 앞에 둔다. "지금 끌면 무엇이 되는가"는 다른 어떤 단추보다
+      // 자주 바뀌는 상태이고, 그것을 모르면 캔버스에서 하는 모든 동작이 불안해진다.
+      h('div.erd-tool-group', {},
+        this.mouseToolBtn('cursor', 'select', '선택 도구 (V) — 빈 곳을 끌어 여러 개 고르기'),
+        this.mouseToolBtn('move', 'pan', '화면 이동 도구 (H) — 빈 곳을 끌어 화면 옮기기'),
+      ),
+      // 되돌리기는 그 다음이다. 실수를 되돌리는 손은 급하다.
       h('div.erd-tool-group', {},
         this.toolBtn('undo', '되돌리기 (Ctrl+Z)', () => this.session.undo(),
           { needsEdit: true, disabled: !this.canUndo }),
@@ -644,6 +663,27 @@ class Editor {
   // 이름을 글자로 늘어놓으면 도구 막대가 두 줄이 되고, 캔버스가 그만큼 낮아진다.
   // 대신 이름은 popover로 뜬다(CSS ::after) — 브라우저 기본 툴팁은 1초 가까이
   // 기다려야 하고, 도구 막대에서는 그 사이에 이미 다른 버튼을 찾고 있다.
+  // mouseToolBtn은 지금 켜진 마우스 도구를 보여주는 토글 단추다.
+  mouseToolBtn(iconName, tool, label) {
+    return h('button.icon-btn.btn-tip', {
+      type: 'button',
+      class: this.tool === tool ? 'is-on' : '',
+      'data-tip': label,
+      'aria-label': label,
+      'aria-pressed': String(this.tool === tool),
+      onclick: () => this.setTool(tool),
+    }, icon(iconName, 15));
+  }
+
+  // setTool은 마우스 도구를 바꾼다.
+  setTool(tool) {
+    if (this.tool === tool) return;
+    this.tool = tool;
+    writeTool(tool);
+    this.canvas.setTool(tool);
+    this.renderToolbar();
+  }
+
   toolBtn(iconName, label, onclick, { needsEdit = false, disabled = false } = {}) {
     return h('button.icon-btn.btn-tip', {
       type: 'button',
@@ -1246,9 +1286,11 @@ class Editor {
           }, '선택한 것 삭제'),
           h('p.field-help', {}, 'Delete 키로도 지웁니다')),
 
-        h('p.field-help', {},
-          'Shift·Ctrl 클릭으로 더 고르거나 빼고, 빈 곳을 Shift(더하기)·Ctrl(새로 고르기)로 '
-          + '끌면 범위로 고릅니다. Ctrl+A 모두 고르기, Esc 해제.'),
+        h('p.field-help', {}, this.tool === 'select'
+          ? 'Shift·Ctrl 클릭으로 더 고르거나 빼고, 빈 곳을 끌면 범위로 고릅니다'
+            + '(Shift를 누르면 더하기). Ctrl 끌기는 화면 이동. Ctrl+A 모두 고르기, Esc 해제.'
+          : 'Shift·Ctrl 클릭으로 더 고르거나 빼고, 빈 곳을 Shift(더하기)·Ctrl(새로 고르기)로 '
+            + '끌면 범위로 고릅니다. Ctrl+A 모두 고르기, Esc 해제.'),
       ),
     ];
   }
@@ -3858,6 +3900,27 @@ function singleColumnIndex(table, name, unique) {
   return (table?.indexes ?? []).find((ix) => Boolean(ix.unique) === unique
     && (ix.columns ?? []).length === 1
     && ((ix.columns[0].column ?? '').toLowerCase() === want)) ?? null;
+}
+
+// 마우스 도구는 브라우저에 기억한다. 서버에 둘 값이 아니다 — 문서의 성질이 아니라
+// 그 사람의 손버릇이고, 같은 문서를 보는 두 사람이 다른 도구를 쓸 수 있어야 한다.
+const TOOL_KEY = 'dbstudio.erd.tool';
+
+function readTool() {
+  try {
+    return localStorage.getItem(TOOL_KEY) === 'pan' ? 'pan' : 'select';
+  } catch {
+    // 저장소를 못 쓰는 브라우저(사생활 보호 모드 등)에서도 편집은 되어야 한다.
+    return 'select';
+  }
+}
+
+function writeTool(tool) {
+  try {
+    localStorage.setItem(TOOL_KEY, tool);
+  } catch {
+    // 기억하지 못할 뿐이다.
+  }
 }
 
 // isTyping은 지금 이 영역 안에서 글자를 입력하고 있는지 본다.

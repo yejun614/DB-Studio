@@ -1745,6 +1745,12 @@ option { background: var(--surface); color: var(--text); }
   border-radius: var(--radius);
 }
 .erd-tool-group { display: flex; align-items: center; gap: 6px; }
+/* 지금 켜진 마우스 도구. 도구 막대에서 눌린 상태가 보여야 "왜 끌었는데 화면이
+ * 안 움직이나"를 묻지 않는다. */
+.erd-tool-group .icon-btn.is-on {
+  color: var(--primary); background: var(--surface-2);
+  border-color: hsl(var(--h-primary) / 0.45);
+}
 .erd-tool-spacer { flex: 1; }
 .btn-active { background: var(--surface-2); border-color: var(--text-mute); }
 
@@ -1822,6 +1828,10 @@ option { background: var(--surface); color: var(--text); }
   user-select: none;
 }
 .erd-canvas:active { cursor: grabbing; }
+/* 선택 도구에서는 커서로 도구를 말해 준다. 그러지 않으면 빈 곳을 끌어 보고서야
+ * 화면이 움직이는지 범위가 그려지는지 알게 된다. */
+.erd-canvas.is-select { cursor: crosshair; }
+.erd-canvas.is-select:active { cursor: crosshair; }
 .erd-hint { fill: var(--text-mute); font-size: 15px; font-family: var(--sans); }
 
 /* 관계선 */
