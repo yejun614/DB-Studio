@@ -181,6 +181,20 @@ func erdTools() map[string]*erdTool {
 			}, "table", "name", "columns"),
 			Run: erdAddIndex,
 		},
+		{
+			Name: "duplicate_table",
+			Description: "테이블을 통째로 베껴 새 테이블을 만든다. 컬럼·기본키·인덱스·체크 제약과 " +
+				"이 테이블에서 나가는 외래키를 함께 베낀다(이 테이블을 가리키는 외래키는 베끼지 않는다). " +
+				"\"같은 구조로 하나 더\" 같은 요청에 add_table로 컬럼을 하나씩 다시 만들지 말고 이것을 쓴다.",
+			Schema: objectSchema(map[string]any{
+				"table":           str("베낄 테이블 이름"),
+				"name":            str("새 테이블 이름 (생략하면 원본이름_copy)"),
+				"withIndexes":     boolp("인덱스도 베낀다 (기본 true)"),
+				"withForeignKeys": boolp("외래키도 베낀다 (기본 true)"),
+				"withChecks":      boolp("체크 제약도 베낀다 (기본 true)"),
+			}, "table"),
+			Run: erdDuplicateTable,
+		},
 	}
 
 	out := make(map[string]*erdTool, len(list))
@@ -378,6 +392,56 @@ func erdUpdateTable(ec *erdToolContext, args json.RawMessage) (string, error) {
 		return "", err
 	}
 	return asJSON(map[string]any{"updated": tbl.Name})
+}
+
+func erdDuplicateTable(ec *erdToolContext, args json.RawMessage) (string, error) {
+	var in struct {
+		Table           string `json:"table"`
+		Name            string `json:"name"`
+		WithIndexes     *bool  `json:"withIndexes"`
+		WithForeignKeys *bool  `json:"withForeignKeys"`
+		WithChecks      *bool  `json:"withChecks"`
+	}
+	if err := parseArgs(args, &in); err != nil {
+		return "", err
+	}
+	doc, err := ec.document()
+	if err != nil {
+		return "", err
+	}
+	tbl := findERDTable(doc, in.Table)
+	if tbl == nil {
+		return "", fmt.Errorf("테이블 %q 을(를) 찾을 수 없습니다. read_schema로 목록을 확인하세요", in.Table)
+	}
+	payload := map[string]any{"key": tbl.Key()}
+	if strings.TrimSpace(in.Name) != "" {
+		payload["name"] = in.Name
+	}
+	if in.WithIndexes != nil {
+		payload["withIndexes"] = *in.WithIndexes
+	}
+	if in.WithForeignKeys != nil {
+		payload["withForeignKeys"] = *in.WithForeignKeys
+	}
+	if in.WithChecks != nil {
+		payload["withChecks"] = *in.WithChecks
+	}
+	next, err := ec.submit(erd.OpTableDuplicate, payload)
+	if err != nil {
+		return "", err
+	}
+	// 만들어진 이름을 돌려준다. 이름을 생략했으면 서버가 정하므로, 그것을 알려주지
+	// 않으면 모델이 다음 호출에서 없는 이름을 쓴다.
+	made := in.Name
+	if made == "" {
+		for _, t := range next.Schema.Tables {
+			if findERDTable(doc, t.Key()) == nil {
+				made = t.Name
+				break
+			}
+		}
+	}
+	return asJSON(map[string]any{"duplicated": tbl.Name, "created": made})
 }
 
 func erdAddColumn(ec *erdToolContext, args json.RawMessage) (string, error) {
