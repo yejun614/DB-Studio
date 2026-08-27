@@ -2777,6 +2777,19 @@ class Editor {
 
     const preview = h('code.erd-type-preview');
     const paramWrap = h('div.erd-type-params');
+    // 파라미터 칸(길이·자릿수·값 목록)은 **한 번만** 만든다.
+    //
+    // 예전에는 refresh()가 이 칸을 매번 새로 그렸다. 그런데 이 칸의 입력이 곧
+    // refresh()를 부르므로, 글자를 하나 치면 지금 타이핑 중인 그 요소가 버려지고
+    // 포커스가 사라졌다 — 한 글자마다 다시 클릭해야 적을 수 있었다.
+    //
+    // 다시 그려야 하는 것은 라벨과 안내 문구뿐이고, 그것은 자리에서 고칠 수 있다.
+    const paramInput = input({ value: state0.arg });
+    const paramLabelEl = h('span.field-label');
+    mount(paramWrap, h('label.field', {}, paramLabelEl, paramInput));
+    // 어떤 타입의 칸을 보여주고 있는지 기억한다. 타입이 바뀔 때만 값을 그 타입의
+    // 기본값으로 되돌린다 — 매번 되돌리면 사람이 지운 값이 되살아난다.
+    let paramFor = state0.def?.name ?? '';
     const manualInput = input({ value: state0.raw, placeholder: '예: varchar(255)' });
     const manualWrap = h('label.field', {},
       h('span.field-label', {}, '직접 입력'), manualInput,
@@ -2836,7 +2849,7 @@ class Editor {
     const compose = () => {
       if (state0.manual) return manualInput.value.trim();
       return buildType(state0.def, {
-        arg: paramWrap.querySelector('input')?.value ?? state0.arg,
+        arg: paramInput.value,
         unsigned: unsignedBox.querySelector('input').checked,
         array: arrayBox.querySelector('input').checked,
       });
@@ -2858,12 +2871,19 @@ class Editor {
       autoWrap.style.display = usingDomain ? 'none'
         : (state0.manual || identityFits(def, state0.arg) ? '' : 'none');
 
-      mount(paramWrap, usingDomain || state0.manual || !def?.param ? null
-        : field(paramLabel(def), input({
-          value: state0.arg || def.default || '',
-          placeholder: paramPlaceholder(def),
-          oninput: () => { state0.arg = paramWrap.querySelector('input').value; refresh(); },
-        })));
+      const showParam = !usingDomain && !state0.manual && Boolean(def?.param);
+      paramWrap.style.display = showParam ? '' : 'none';
+      if (showParam) {
+        paramLabelEl.textContent = paramLabel(def);
+        paramInput.placeholder = paramPlaceholder(def);
+        if (paramFor !== def.name) {
+          paramFor = def.name;
+          state0.arg = state0.arg || def.default || '';
+          paramInput.value = state0.arg;
+        }
+      } else {
+        paramFor = '';
+      }
 
       // 도메인을 고르면 기본값도 도메인이 정한다. 두 곳에서 정하면 어느 쪽이
       // 이겼는지 화면만 보고 알 수 없다.
@@ -2878,6 +2898,10 @@ class Editor {
     };
 
     domainSelect.addEventListener('change', refresh);
+    paramInput.addEventListener('input', () => {
+      state0.arg = paramInput.value;
+      refresh();
+    });
     manualInput.addEventListener('input', refresh);
     unsignedBox.addEventListener('change', refresh);
     arrayBox.addEventListener('change', refresh);
