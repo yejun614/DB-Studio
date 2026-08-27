@@ -174,6 +174,9 @@ class Editor {
     this.participants = [];
     this.you = null;
     this.panelDirty = false;
+    // panelPressed는 "지금 패널에서 무언가를 누르고 있다"는 표시다.
+    // 누르고 있는 동안 패널을 다시 그리면 그 클릭이 사라진다.
+    this.panelPressed = false;
 
     // 캔버스는 구조 화면과 공유한다(core/erdcanvas.js). 여기서는 "옮긴 결과를
     // op로 보낸다"만 정하고, 그리는 방법은 캔버스가 안다.
@@ -404,7 +407,10 @@ class Editor {
     this.restoreRenamedSelection();
     this.pruneSelection();
     this.renderCanvas();
-    this.renderPanel();
+    // 거절도 다른 갱신과 같은 규칙을 따른다. 여기서 곧바로 다시 그리면, 이름이
+    // 겹쳐 거절된 순간 누르고 있던 버튼이 사라져 그 클릭이 사라진다 —
+    // "컬럼 이름을 고치다 컬럼 추가를 누르면 추가가 안 되던" 경로가 이것이었다.
+    this.renderPanelIfIdle();
   }
 
   // restoreRenamedSelection은 이름 미리보기 때문에 옮겨 둔 선택을 되돌린다.
@@ -842,7 +848,16 @@ class Editor {
   // 있으므로), 그러면 방금 한 일이 화면에 나타나지 않는다. 다시 노드를 눌러야
   // 보이던 증상이 이것이었다.
   renderPanelIfIdle() {
-    if (isTyping(this.ui.panel)) {
+    // 버튼을 누르고 있는 동안에도 다시 그리지 않는다.
+    //
+    // 이름 칸을 고치다가 패널의 버튼을 누르면 이 순서로 일이 벌어진다:
+    // mousedown → 칸이 blur → 이름 op 전송 → (서버 왕복 몇 ms) → 문서가 도착해
+    // 패널을 다시 그림 → 누르고 있던 버튼이 사라짐 → mouseup 이 다른 요소에서
+    // 일어나 **click 이 끝내 발생하지 않는다.** "타이핑하다 컬럼 추가를 누르면
+    // 스크롤만 움직이고 추가가 안 되던" 증상이 이것이다.
+    //
+    // 그래서 포인터가 눌려 있는 동안은 미뤘다가, 떼는 순간 반영한다.
+    if (this.panelPressed || isTyping(this.ui.panel)) {
       this.panelDirty = true;
       return;
     }
@@ -936,7 +951,14 @@ class Editor {
       ));
       return;
     }
+    // 스크롤 위치를 지킨다. 컬럼이 스무 줄인 표에서 한 줄을 고칠 때마다 목록이
+    // 맨 위로 튀면, 고치던 줄을 매번 다시 찾아야 한다.
+    const keepTop = this.ui.panel.querySelector('.erd-panel-body')?.scrollTop ?? 0;
     mount(this.ui.panel, this.tableView(tbl));
+    if (keepTop) {
+      const body = this.ui.panel.querySelector('.erd-panel-body');
+      if (body) body.scrollTop = keepTop;
+    }
 
     // 방금 만든 컬럼이 있으면 그 이름 칸으로 커서를 옮긴다.
     // 추가 버튼만 누르고 이름을 못 고치면 col_1 이 그대로 남는다.
@@ -1580,9 +1602,25 @@ class Editor {
     const onFocusOut = () => {
       if (this.panelDirty) setTimeout(() => this.renderPanelIfIdle(), 0);
     };
+    // 누르고 있는 동안은 패널을 그대로 둔다(renderPanelIfIdle의 이유 참고).
+    // 창 전체에서 떼는 것을 듣는 이유: 패널 밖으로 끌고 나가 떼는 경우에도
+    // 잠금이 풀려야 한다. 그러지 않으면 그 뒤로 패널이 영영 갱신되지 않는다.
+    const onDown = () => { this.panelPressed = true; };
+    const onUp = () => {
+      if (!this.panelPressed) return;
+      this.panelPressed = false;
+      // click 은 pointerup 다음에 온다. 그 click 이 끝난 뒤에 그리도록 한 틱 미룬다.
+      if (this.panelDirty) setTimeout(() => this.renderPanelIfIdle(), 0);
+    };
     this.ui.panel.addEventListener('focusout', onFocusOut);
+    this.ui.panel.addEventListener('pointerdown', onDown);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
     this.unbind = () => {
       this.ui.panel.removeEventListener('focusout', onFocusOut);
+      this.ui.panel.removeEventListener('pointerdown', onDown);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
     };
   }
 

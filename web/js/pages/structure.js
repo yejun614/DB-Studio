@@ -100,6 +100,12 @@ class StructureView {
     this.chat = [];
     this.unread = 0;
     this.panelHidden = false;
+    // panelPressed는 "지금 패널에서 무언가를 누르고 있다"는 표시다. 누르고 있는
+    // 동안 패널을 다시 그리면 그 클릭이 사라진다(ERD 편집기와 같은 경합이다):
+    // mousedown → 메모 칸 blur → op → 서버 응답이 몇 ms 뒤 패널을 다시 그림 →
+    // 누르고 있던 버튼이 사라져 mouseup 이 다른 요소에서 일어난다.
+    this.panelPressed = false;
+    this.panelDirty = false;
   }
 
   async start() {
@@ -200,6 +206,19 @@ class StructureView {
       onEditGroup: (group) => this.select({ kind: 'group', id: group.id }),
     });
 
+    // 누르고 있는 동안은 패널을 그대로 둔다(renderPanelSoon 참고). 창 전체에서
+    // 떼는 것을 듣는 이유: 패널 밖으로 끌고 나가 떼도 잠금이 풀려야 한다.
+    const onDown = () => { this.panelPressed = true; };
+    const onUp = () => {
+      if (!this.panelPressed) return;
+      this.panelPressed = false;
+      // click 은 pointerup 다음에 온다. 그 click 이 끝난 뒤에 그리도록 한 틱 미룬다.
+      if (this.panelDirty) setTimeout(() => this.renderPanelSoon(), 0);
+    };
+    this.panel.addEventListener('pointerdown', onDown);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+
     // 탭이 숨으면 소켓을 잠시 놓는다. 열어 둔 탭마다 참여자로 남으면 "지금 누가
     // 보고 있는가"가 뜻을 잃는다.
     const onHide = () => this.session?.suspend();
@@ -208,7 +227,12 @@ class StructureView {
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') onHide(); else onShow();
     });
-    this.unbind = () => window.removeEventListener('pagehide', onHide);
+    this.unbind = () => {
+      window.removeEventListener('pagehide', onHide);
+      this.panel.removeEventListener('pointerdown', onDown);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+    };
   }
 
   async loadVersions() {
@@ -422,7 +446,17 @@ class StructureView {
     return (this.doc?.groups ?? []).find((g) => g.id === id) ?? null;
   }
 
+  // renderPanelSoon은 누르고 있는 동안에는 미뤘다가 떼면 그린다.
+  renderPanelSoon() {
+    if (this.panelPressed) {
+      this.panelDirty = true;
+      return;
+    }
+    this.renderPanel();
+  }
+
   renderPanel() {
+    this.panelDirty = false;
     if (this.tab === 'chat') {
       this.unread = 0;
       mount(this.panel, this.chatView());
@@ -919,7 +953,7 @@ class StructureView {
     this.pruneSelection();
     this.canvas.setDoc(this.doc);
     this.canvas.render();
-    this.renderPanel();
+    this.renderPanelSoon();
   }
 
   onOp(op, mine, hasDoc) {
@@ -929,7 +963,7 @@ class StructureView {
     this.canvas.setDoc(this.doc);
     this.canvas.render();
     // 지금 인스펙터에 떠 있는 대상이 바뀌었으면 패널도 다시 그린다.
-    if (this.touchesSelection(op)) this.renderPanel();
+    if (this.touchesSelection(op)) this.renderPanelSoon();
   }
 
   onReject(msg) {
