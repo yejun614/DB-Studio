@@ -411,6 +411,8 @@ type tableMovePayload struct {
 	// Icon은 카드 제목 옆 표식이다. 좌표와 함께 오는 이유는 이것들이 모두
 	// "구조가 아닌 표시 정보"이고 같은 Box에 담기기 때문이다.
 	Icon *string `json:"icon,omitempty"`
+	// ColumnIcons는 컬럼 이름 → 아이콘의 **부분** 지도다. 보낸 것만 바뀐다.
+	ColumnIcons map[string]string `json:"columnIcons,omitempty"`
 }
 
 func applyTableMove(doc *Document, op *Op) error {
@@ -436,6 +438,24 @@ func applyTableMove(doc *Document, op *Op) error {
 	}
 	if p.Icon != nil {
 		box.Icon = strings.TrimSpace(*p.Icon)
+	}
+	// 컬럼 아이콘은 **부분 갱신**이다. 통째로 받으면 같은 표를 함께 보는 두 사람이
+	// 서로의 아이콘을 지우게 된다 — 내가 보낸 지도에 없는 컬럼은 사라지기 때문이다.
+	// 빈 값은 "자동으로 되돌리기"라 지운다.
+	for name, ic := range p.ColumnIcons {
+		key := strings.ToLower(strings.TrimSpace(name))
+		if key == "" {
+			continue
+		}
+		ic = strings.TrimSpace(ic)
+		if ic == "" {
+			delete(box.ColumnIcons, key)
+			continue
+		}
+		if box.ColumnIcons == nil {
+			box.ColumnIcons = map[string]string{}
+		}
+		box.ColumnIcons[key] = ic
 	}
 	return nil
 }
@@ -681,9 +701,28 @@ func applyColumnUpdate(doc *Document, op *Op) error {
 	}
 	if col.Name != oldName {
 		renameColumnReferences(doc.Schema, tbl, oldName, col.Name)
+		renameColumnIcon(doc.Layout[tbl.Key()], oldName, col.Name)
 	}
 	renumber(tbl)
 	return nil
+}
+
+// renameColumnIcon은 컬럼 아이콘을 새 이름으로 옮긴다.
+//
+// 레이아웃은 이름을 열쇠로 쓰므로 이름이 바뀌면 연결이 끊긴다. 아이콘이 사라지는
+// 것은 조용한 손실이라 — 아무도 지우지 않았는데 없어진다 — 여기서 따라가게 한다.
+func renameColumnIcon(box *Box, oldName, newName string) {
+	if box == nil || len(box.ColumnIcons) == 0 {
+		return
+	}
+	from, to := strings.ToLower(oldName), strings.ToLower(newName)
+	if from == to {
+		return
+	}
+	if ic, ok := box.ColumnIcons[from]; ok {
+		delete(box.ColumnIcons, from)
+		box.ColumnIcons[to] = ic
+	}
 }
 
 // renameColumnReferences는 컬럼 이름 변경을 PK·인덱스·외래키·참조하는 외래키에 전파한다.
@@ -751,6 +790,11 @@ func applyColumnDelete(doc *Document, op *Op) error {
 	}
 	tbl.Columns = kept
 	renumber(tbl)
+	// 아이콘은 컬럼 이름으로 매달려 있다. 두고 가면 나중에 같은 이름의 컬럼을
+	// 만들었을 때 예전 아이콘이 되살아난다 — 고른 적 없는 표식이 붙는다.
+	if box := doc.Layout[tbl.Key()]; box != nil {
+		delete(box.ColumnIcons, strings.ToLower(name))
+	}
 
 	if tbl.PrimaryKey != nil {
 		tbl.PrimaryKey.Columns = withoutString(tbl.PrimaryKey.Columns, name)

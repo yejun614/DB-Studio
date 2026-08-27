@@ -516,6 +516,57 @@ func TestMoveDoesNotChangeFingerprint(t *testing.T) {
 	}
 }
 
+// 컬럼 아이콘은 부분 갱신이고, 컬럼을 따라다녀야 한다.
+//
+// 통째로 덮어쓰면 같은 표를 함께 보는 두 사람이 서로의 아이콘을 지운다. 이름이
+// 바뀌거나 컬럼이 사라졌을 때 뒤처리를 안 하면 아무도 고른 적 없는 아이콘이
+// 나중에 되살아난다 — 둘 다 화면에서만 보이는 조용한 어긋남이라 여기서 잡는다.
+func TestColumnIcons(t *testing.T) {
+	doc := twoTables(t)
+	before := doc.Schema.Fingerprint()
+
+	apply(t, doc, OpColumnAdd, `{"table":"users","name":"email","type":"varchar(200)"}`)
+	apply(t, doc, OpTableMove,
+		`{"key":"users","x":10,"y":20,"columnIcons":{"id":"key","email":"mail"}}`)
+	// 다른 컬럼만 담은 두 번째 패치는 앞의 것을 지우지 않아야 한다.
+	apply(t, doc, OpTableMove, `{"key":"users","x":10,"y":20,"columnIcons":{"email":"lock"}}`)
+
+	box := doc.Layout["users"]
+	if got := box.ColumnIcons["id"]; got != "key" {
+		t.Errorf("id 아이콘 = %q (부분 갱신이 앞의 값을 지웠습니다)", got)
+	}
+	if got := box.ColumnIcons["email"]; got != "lock" {
+		t.Errorf("email 아이콘 = %q", got)
+	}
+
+	// 빈 값은 "자동으로 되돌리기"다.
+	apply(t, doc, OpTableMove, `{"key":"users","x":10,"y":20,"columnIcons":{"id":""}}`)
+	if _, ok := box.ColumnIcons["id"]; ok {
+		t.Error("빈 값을 보냈는데 아이콘이 남아 있습니다")
+	}
+
+	// 이름을 고치면 따라간다.
+	apply(t, doc, OpColumnUpdate, `{"table":"users","name":"email","newName":"mail_addr"}`)
+	if got := box.ColumnIcons["mail_addr"]; got != "lock" {
+		t.Errorf("이름 변경 후 아이콘 = %q (연결이 끊겼습니다)", got)
+	}
+	if _, ok := box.ColumnIcons["email"]; ok {
+		t.Error("옛 이름의 아이콘이 남아 있습니다")
+	}
+
+	// 지우면 함께 지워진다.
+	apply(t, doc, OpColumnDelete, `{"table":"users","name":"mail_addr"}`)
+	if _, ok := box.ColumnIcons["mail_addr"]; ok {
+		t.Error("컬럼을 지웠는데 아이콘이 남아 있습니다")
+	}
+
+	// 아이콘은 표시 정보다. 지문에 들어가면 아이콘만 바꿔도 드리프트로 잡힌다.
+	apply(t, doc, OpTableMove, `{"key":"orders","x":0,"y":0,"columnIcons":{"id":"cart"}}`)
+	if after := doc.Schema.Fingerprint(); after != before {
+		t.Errorf("아이콘이 지문을 바꿨습니다: %s → %s", before, after)
+	}
+}
+
 // 실패한 op는 문서를 건드리지 않아야 한다. 호출자가 사본에 적용하는 규약을 검증한다.
 func TestFailedOpLeavesCloneUnused(t *testing.T) {
 	doc := twoTables(t)

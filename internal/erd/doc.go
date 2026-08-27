@@ -79,6 +79,13 @@ type Box struct {
 	// 사람의 메모이지 DB에 만들어질 무엇이 아니다. 구조 지문에 들어가면 아이콘만
 	// 바꿔도 드리프트로 잡힌다.
 	Icon string `json:"icon,omitempty"`
+	// ColumnIcons는 컬럼 이름(소문자) → 아이콘이다. 비어 있는 컬럼은 화면이 타입과
+	// 키 여부를 보고 알아서 고른다.
+	//
+	// 여기(레이아웃)에 두는 이유는 Icon과 같다: 이것은 "이 컬럼이 무엇인가"에 대한
+	// 사람의 메모이지 DB에 만들어질 무엇이 아니다. 구조 지문에 들어가면 아이콘만
+	// 바꿔도 드리프트로 잡힌다.
+	ColumnIcons map[string]string `json:"columnIcons,omitempty"`
 }
 
 // Group은 캔버스에 놓는 반투명 사각형이다. 테이블 몇 개를 묶어 보이게 한다.
