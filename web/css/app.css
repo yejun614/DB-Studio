@@ -1961,6 +1961,13 @@ option { background: var(--surface); color: var(--text); }
 /* 인덱스에 들어간 줄은 배경으로 구분한다. 체크 표시만으로는 스무 줄짜리 목록에서
  * "어디까지가 이 인덱스인가"가 눈에 들어오지 않는다. */
 .erd-idx-col.is-on { background: var(--surface-2); }
+/* 외래키 컬럼 짝. 왼쪽이 이 테이블의 컬럼, 오른쪽이 참조 컬럼이다. */
+.erd-fk-pairs { display: flex; flex-direction: column; gap: 6px; }
+.erd-fk-pair { display: flex; align-items: center; gap: 8px; }
+.erd-fk-pair select { flex: 1; min-width: 0; }
+.erd-fk-arrow { color: var(--text-mute); flex: none; }
+.erd-fk-ref { font: 12px var(--mono); color: var(--text-dim); flex: none; }
+
 .erd-idx-ord {
   min-width: 20px; text-align: center;
   font: 11px var(--mono); color: var(--text-mute);

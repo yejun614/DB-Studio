@@ -1076,9 +1076,10 @@ class Editor {
 
   // linkView는 관계선(외래키)을 인스펙터에서 고친다.
   //
-  // 이름은 바꿀 수 없다. 서버의 fk.update가 이름으로 대상을 찾기 때문이고,
-  // 이름을 바꾸는 것은 사실상 지우고 새로 만드는 일이다 — 그 둘을 한 버튼에
-  // 숨기면 되돌릴 수 없는 동작이 이름 수정처럼 보인다.
+  // 여기에는 자주 만지는 것(ON DELETE·ON UPDATE)만 둔다. 이름·컬럼 짝·참조 대상을
+  // 바꾸는 것은 창에서 한다 — 그것들은 서로 맞물려 있어서(참조 키가 몇 컬럼인지에
+  // 따라 짝의 수가 정해진다) 한 칸씩 바꿀 수 있게 두면 중간에 성립하지 않는 상태를
+  // 지나간다.
   linkView(tbl, fk) {
     const key = tableKey(tbl);
     const ro = !this.canEdit;
@@ -1108,6 +1109,11 @@ class Editor {
         h('p.field-help', {},
           '참조하는 행이 지워지거나 키가 바뀔 때 이 테이블의 행을 어떻게 할지 정합니다. ' +
           '비워 두면 DB 기본값(대개 NO ACTION)을 씁니다.'),
+        ro ? null : h('div.erd-panel-actions', {},
+          h('button.btn.btn-small', {
+            type: 'button',
+            onclick: () => this.openFKDialog(this.tableRef(tbl), fk),
+          }, icon('edit', 13), ' 이름·컬럼 바꾸기')),
         ro ? null : h('div.erd-panel-danger', {},
           h('button.btn.btn-small.btn-danger', {
             type: 'button',
@@ -1372,7 +1378,13 @@ class Editor {
           : (tbl.foreignKeys ?? []).map((fk) => h('div.erd-chip', {},
             h('span', {}, fk.name),
             h('span.muted', {}, `${(fk.columns ?? []).join(', ')} → ${fk.refTable}(${(fk.refColumns ?? []).join(', ')})`),
-            fk.onDelete ? badge(`ON DELETE ${fk.onDelete}`, 'neutral') : null,
+            // NO ACTION 은 배지로 달지 않는다. DB 기본값이고 생성되는 DDL에도 적히지
+            // 않으므로, 배지로 두면 아무것도 정하지 않은 외래키가 가장 시끄러워진다.
+            ...fkActionBadges(fk),
+            ro ? null : h('button.icon-btn', {
+              type: 'button', title: '외래키 설정',
+              onclick: () => this.openFKDialog(ref, fk),
+            }, icon('edit', 13)),
             ro ? null : h('button.icon-btn', {
               type: 'button', title: '삭제',
               onclick: () => this.send('fk.delete', { table: ref.serverKey, name: fk.name }),
@@ -2483,68 +2495,196 @@ class Editor {
     });
   }
 
-  openFKDialog(ref) {
+  // openFKDialog는 외래키를 만들거나 고친다.
+  //
+  // 만들기와 고치기가 같은 창인 이유: 예전에는 만든 뒤에 이름과 컬럼을 고칠 방법이
+  // 아예 없었다(인스펙터에는 ON DELETE·ON UPDATE만 있었다). 컬럼 하나를 잘못 고른
+  // 외래키를 지우고 다시 만드는 것은, 관계선이 사라졌다 나타나는 일이기도 하다.
+  //
+  // 짝을 맞추는 방식이 요점이다. 참조할 **키**를 먼저 고르게 한다(기본키나 고유
+  // 인덱스). 그러면 짝의 수가 그 키의 컬럼 수로 정해지므로, 컬럼 수가 서로 다른
+  // 외래키(서버가 거부한다)를 만들 수 없다.
+  openFKDialog(ref, existing = null) {
     const tbl = ref.table();
     if (!tbl) return;
+    const editing = Boolean(existing);
     const others = (this.doc.schema?.tables ?? []);
-    const nameInput = input({ value: `fk_${tbl.name}_`, autofocus: true });
-    const colSelect = select((tbl.columns ?? []).map((c) => ({ value: c.name, label: c.name })));
-    const refSelect = select(others.map((t) => ({ value: tableKey(t), label: tableDisplay(t) })));
-    const refColWrap = h('div');
-    const onDeleteSelect = select([
-      { value: '', label: '(지정 없음)' },
-      { value: 'CASCADE', label: 'CASCADE' },
-      { value: 'SET NULL', label: 'SET NULL' },
-      { value: 'RESTRICT', label: 'RESTRICT' },
-      { value: 'NO ACTION', label: 'NO ACTION' },
-    ], { value: '' });
+    const myCols = tbl.columns ?? [];
 
-    // 참조 컬럼 목록은 대상 테이블에 따라 달라진다. 고유 제약이 없는 컬럼은
-    // 서버가 거부하므로, 여기서도 기본키/고유 인덱스 컬럼만 제시한다.
-    const refreshRefCols = () => {
-      const target = others.find((t) => tableKey(t) === refSelect.value);
-      const candidates = target ? uniqueColumnSets(target) : [];
-      mount(refColWrap, candidates.length === 0
-        ? h('p.notice.notice-warn', {}, icon('alert'),
-          '이 테이블에는 기본키나 고유 인덱스가 없어 참조할 수 없습니다.')
-        : select(candidates.map((set) => ({ value: set.join(','), label: set.join(', ') }))));
+    const nameInput = input({ value: existing?.name ?? `fk_${tbl.name}_` });
+    const refKeyOf = (fk) => `${fk.refNamespace ? `${fk.refNamespace}.` : ''}${fk.refTable}`.toLowerCase();
+    // 처음 고를 대상은 **자기 자신이 아닌** 첫 테이블이다.
+    //
+    // 목록의 첫 항목을 그대로 두면 이 테이블 자신이 골라진다. 자기 참조도 있는
+    // 구조지만 드물어서, 그렇게 두면 거의 매번 한 번 더 바꿔야 한다.
+    const firstOther = others.find((t) => tableKey(t) !== ref.serverKey) ?? others[0];
+    const refSelect = select(others.map((t) => ({ value: tableKey(t), label: tableDisplay(t) })),
+      { value: existing ? refKeyOf(existing) : (firstOther ? tableKey(firstOther) : '') });
+
+    const keyWrap = h('div');
+    const pairWrap = h('div.erd-fk-pairs');
+    const actions = ['', 'NO ACTION', 'RESTRICT', 'CASCADE', 'SET NULL', 'SET DEFAULT']
+      .map((a) => ({ value: a, label: a || '(지정 없음)' }));
+    const onDeleteSelect = select(actions, { value: existing?.onDelete ?? '' });
+    const onUpdateSelect = select(actions, { value: existing?.onUpdate ?? '' });
+
+    // 짝 상태: 참조 키의 컬럼 순서대로, 이 테이블의 어느 컬럼을 붙일지.
+    let refCols = [...(existing?.refColumns ?? [])];
+    let localCols = [...(existing?.columns ?? [])];
+
+    const target = () => others.find((t) => tableKey(t) === refSelect.value) ?? null;
+
+    // 짝을 처음 채울 때의 짐작. user_id → users(id) 처럼 이름에 단서가 있다.
+    const guessLocal = (refCol, used) => {
+      const t = target();
+      const cands = [
+        `${t?.name ?? ''}_${refCol}`,
+        `${(t?.name ?? '').replace(/s$/, '')}_${refCol}`,
+        refCol,
+      ].map((x) => x.toLowerCase());
+      for (const want of cands) {
+        const hit = myCols.find((c) => c.name.toLowerCase() === want && !used.has(c.name));
+        if (hit) return hit.name;
+      }
+      const free = myCols.find((c) => !used.has(c.name));
+      return free?.name ?? '';
     };
-    refSelect.addEventListener('change', refreshRefCols);
-    refreshRefCols();
+
+    const drawPairs = () => {
+      const t = target();
+      const used = new Set();
+      const rows = refCols.map((refCol, i) => {
+        if (!localCols[i] || !myCols.some((c) => c.name === localCols[i])) {
+          localCols[i] = guessLocal(refCol, used);
+        }
+        used.add(localCols[i]);
+        const pick = select(myCols.map((c) => ({
+          value: c.name,
+          label: `${c.name} — ${c.rawType || c.type?.base || ''}`,
+        })), { value: localCols[i] });
+        pick.addEventListener('change', () => {
+          localCols[i] = pick.value;
+          drawPairs();
+        });
+        // 타입이 다르면 대상 DB가 외래키를 거부한다. 막지는 않되(우리가 읽지 못하는
+        // 타입도 있다) 실행 전에 알 수 있게 적어 둔다.
+        const mine = myCols.find((c) => c.name === localCols[i]);
+        const theirs = (t?.columns ?? []).find((c) => c.name.toLowerCase() === refCol.toLowerCase());
+        const mismatch = mine && theirs
+          && (mine.type?.base ?? '') !== (theirs.type?.base ?? '');
+        return h('div.erd-fk-pair', {},
+          pick,
+          h('span.erd-fk-arrow', {}, '→'),
+          h('span.erd-fk-ref', {}, `${t?.name ?? ''}.${refCol}`),
+          mismatch ? badge('타입 다름', 'warn') : null);
+      });
+      mount(pairWrap, rows.length ? rows : h('p.muted.small', {}, '참조할 키를 고르세요'));
+    };
+
+    // 참조할 키(기본키·고유 인덱스)를 고른다. 짝의 수가 여기서 정해진다.
+    const drawKeys = () => {
+      const t = target();
+      const sets = t ? uniqueColumnSets(t) : [];
+      if (!t || sets.length === 0) {
+        refCols = [];
+        mount(keyWrap, h('p.notice.notice-warn', {},
+          icon('alert'),
+          h('span', {}, '이 테이블에는 기본키나 고유 인덱스가 없어 참조할 수 없습니다.')));
+        drawPairs();
+        return;
+      }
+      // 지금 참조하고 있는 키가 목록에 있으면 그것을 고른 상태로 둔다.
+      const want = refCols.join(',').toLowerCase();
+      const match = sets.find((set) => set.join(',').toLowerCase() === want);
+      const chosen = match ?? sets[0];
+      if (!match) {
+        refCols = [...chosen];
+        localCols = editing && refCols.length === (existing.columns ?? []).length
+          ? [...existing.columns] : [];
+      }
+      const keySelect = select(sets.map((set) => ({
+        value: set.join(','),
+        label: set.length > 1 ? `${set.join(', ')} (복합)` : set[0],
+      })), { value: chosen.join(',') });
+      keySelect.addEventListener('change', () => {
+        refCols = keySelect.value.split(',');
+        localCols = [];
+        drawPairs();
+      });
+      mount(keyWrap, keySelect);
+      drawPairs();
+    };
+
+    refSelect.addEventListener('change', () => {
+      refCols = [];
+      localCols = [];
+      drawKeys();
+    });
+    drawKeys();
 
     openModal({
-      title: '외래키 추가',
-      width: 520,
+      title: editing ? `외래키 설정 — ${existing.name}` : '외래키 추가',
+      width: 560,
       body: () => [
         h('label.field', {}, h('span.field-label', {}, '이름'), nameInput),
-        h('label.field', {}, h('span.field-label', {}, '이 테이블의 컬럼'), colSelect),
         h('label.field', {}, h('span.field-label', {}, '참조할 테이블'), refSelect),
-        h('label.field', {}, h('span.field-label', {}, '참조할 컬럼'), refColWrap),
+        h('div.field', {}, h('span.field-label', {}, '참조할 키'), keyWrap,
+          h('p.field-help', {}, '기본키나 고유 인덱스만 참조할 수 있습니다. 고른 키의 컬럼 수만큼 짝이 생깁니다.')),
+        h('div.field', {}, h('span.field-label', {}, '컬럼 짝'), pairWrap),
         h('label.field', {}, h('span.field-label', {}, 'ON DELETE'), onDeleteSelect),
+        h('label.field', {}, h('span.field-label', {}, 'ON UPDATE'), onUpdateSelect),
+        h('p.field-help', {},
+          '참조하는 행이 지워지거나 키가 바뀔 때 이 테이블의 행을 어떻게 할지 정합니다.'),
       ],
       footer: (close) => [
         h('button.btn', { type: 'button', onclick: close }, '취소'),
         h('button.btn.btn-primary', {
           type: 'button',
           onclick: () => {
-            const refColSelect = refColWrap.querySelector('select');
-            if (!refColSelect) {
-              toast('참조할 수 있는 컬럼이 없습니다', 'error');
+            const t = target();
+            const name = nameInput.value.trim();
+            if (!name) {
+              toast('이름을 적으세요', 'error');
               return;
             }
-            const target = others.find((t) => tableKey(t) === refSelect.value);
-            this.send('fk.add', {
+            if (!t || !refCols.length) {
+              toast('참조할 테이블과 키를 고르세요', 'error');
+              return;
+            }
+            if (localCols.length !== refCols.length || localCols.some((c) => !c)) {
+              toast('컬럼 짝을 모두 고르세요', 'error');
+              return;
+            }
+            // 같은 컬럼을 두 번 쓰면 복합 외래키가 성립하지 않는다.
+            if (new Set(localCols.map((c) => c.toLowerCase())).size !== localCols.length) {
+              toast('같은 컬럼을 두 번 쓸 수 없습니다', 'error');
+              return;
+            }
+            const payload = {
               table: ref.serverKey,
-              name: nameInput.value.trim(),
-              columns: [colSelect.value],
-              refTable: target.name,
-              refNamespace: target.namespace ?? '',
-              refColumns: refColSelect.value.split(','),
+              // 고칠 때 name은 **찾는 열쇠**다. 새 이름은 따로 보낸다.
+              name: editing ? existing.name : name,
+              columns: localCols,
+              refTable: t.name,
+              refNamespace: t.namespace ?? '',
+              refColumns: refCols,
               onDelete: onDeleteSelect.value,
-            });
+              onUpdate: onUpdateSelect.value,
+            };
+            if (editing && name !== existing.name) {
+              payload.newName = name;
+              // 고른 것이 이 관계선이면 선택도 새 이름으로 옮긴다. 그러지 않으면
+              // 이름을 바꾼 순간 인스펙터가 없는 대상을 가리켜 비어 버린다.
+              const oldID = `${ref.serverKey}.${existing.name}`;
+              if (this.sel?.kind === 'link' && this.sel.id === oldID) {
+                this.sel = { kind: 'link', id: `${ref.serverKey}.${name}` };
+                this.marks = [this.sel];
+              }
+            }
+            this.send(editing ? 'fk.update' : 'fk.add', payload);
             close();
           },
-        }, '추가'),
+        }, editing ? '저장' : '추가'),
       ],
     });
   }
@@ -3551,6 +3691,22 @@ function safeFileName(name) {
 function opSummary(op) {
   const p = op.payload ?? {};
   return [p.key, p.table, p.name, p.newName].filter(Boolean).join(' → ');
+}
+
+// fkActionBadges는 기본값이 아닌 참조 동작만 배지로 만든다.
+//
+// 기준은 생성되는 DDL과 같다(schema/ddl.go): NO ACTION 이면 SQL에 적지 않는다.
+// 화면과 SQL이 다른 것을 말하면 어느 쪽을 믿어야 하는지 알 수 없다.
+function fkActionBadges(fk) {
+  const out = [];
+  const add = (label, value) => {
+    const v = (value ?? '').trim().toUpperCase();
+    if (!v || v === 'NO ACTION') return;
+    out.push(badge(`${label} ${v}`, 'neutral'));
+  };
+  add('ON DELETE', fk.onDelete);
+  add('ON UPDATE', fk.onUpdate);
+  return out;
 }
 
 function uniqueColumnSets(tbl) {
