@@ -263,68 +263,14 @@ func (d *Document) Clone() *Document {
 	return &out
 }
 
-func cloneSchema(sc *schema.Schema) *schema.Schema {
-	if sc == nil {
-		return nil
-	}
-	out := *sc
-	out.Tables = make([]*schema.Table, 0, len(sc.Tables))
-	for _, t := range sc.Tables {
-		out.Tables = append(out.Tables, cloneTable(t))
-	}
-	out.Views = append([]*schema.View(nil), sc.Views...)
-	out.Enums = make([]*schema.Enum, 0, len(sc.Enums))
-	for _, e := range sc.Enums {
-		c := *e
-		c.Values = append([]string(nil), e.Values...)
-		out.Enums = append(out.Enums, &c)
-	}
-	out.Sequences = append([]*schema.Sequence(nil), sc.Sequences...)
-	out.Notes = append([]string(nil), sc.Notes...)
-	return &out
-}
+// cloneSchema·cloneTable은 schema 패키지의 깊은 복사를 부른다.
+//
+// 여기 두었던 구현을 옮긴 이유: 복사 규칙은 그 구조체를 아는 쪽에 있어야 한다.
+// 필드가 하나 늘 때 이쪽을 함께 고치는 것을 잊으면, 사본을 고쳤는데 원본이 함께
+// 바뀌는 조용한 버그가 된다.
+func cloneSchema(sc *schema.Schema) *schema.Schema { return sc.Clone() }
 
-func cloneTable(t *schema.Table) *schema.Table {
-	out := *t
-	out.Columns = make([]*schema.Column, 0, len(t.Columns))
-	for _, c := range t.Columns {
-		cc := *c
-		if c.Type.Values != nil {
-			cc.Type.Values = append([]string(nil), c.Type.Values...)
-		}
-		out.Columns = append(out.Columns, &cc)
-	}
-	if t.PrimaryKey != nil {
-		pk := *t.PrimaryKey
-		pk.Columns = append([]string(nil), t.PrimaryKey.Columns...)
-		out.PrimaryKey = &pk
-	}
-	out.Indexes = make([]*schema.Index, 0, len(t.Indexes))
-	for _, i := range t.Indexes {
-		ic := *i
-		ic.Columns = append([]schema.IndexPart(nil), i.Columns...)
-		out.Indexes = append(out.Indexes, &ic)
-	}
-	out.ForeignKeys = make([]*schema.ForeignKey, 0, len(t.ForeignKeys))
-	for _, f := range t.ForeignKeys {
-		fc := *f
-		fc.Columns = append([]string(nil), f.Columns...)
-		fc.RefColumns = append([]string(nil), f.RefColumns...)
-		out.ForeignKeys = append(out.ForeignKeys, &fc)
-	}
-	out.Checks = make([]*schema.Check, 0, len(t.Checks))
-	for _, ck := range t.Checks {
-		cc := *ck
-		out.Checks = append(out.Checks, &cc)
-	}
-	if t.Options != nil {
-		out.Options = make(map[string]string, len(t.Options))
-		for k, v := range t.Options {
-			out.Options[k] = v
-		}
-	}
-	return &out
-}
+func cloneTable(t *schema.Table) *schema.Table { return t.Clone() }
 
 // findTable은 키(namespace.name, 소문자)로 테이블을 찾는다.
 func (d *Document) findTable(key string) *schema.Table {

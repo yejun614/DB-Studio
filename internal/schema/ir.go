@@ -285,6 +285,78 @@ func (s *Schema) AddNote(format string, args ...any) {
 	s.Notes = append(s.Notes, msg)
 }
 
+// Clone은 스키마를 깊게 복사한다.
+//
+// 얕게 두면 사본을 고칠 때 원본까지 바뀐다. 이 구조체를 다루는 코드는 대부분
+// "사본에 먼저 적용하고, 잘못되면 버린다"는 규칙으로 쓰여 있어서(편집 op, 설명 수정),
+// 얕은 복사는 그 규칙을 조용히 무너뜨린다 — diff가 "바뀐 것이 없다"고 말하게 된다.
+func (s *Schema) Clone() *Schema {
+	if s == nil {
+		return nil
+	}
+	out := *s
+	out.Tables = make([]*Table, 0, len(s.Tables))
+	for _, t := range s.Tables {
+		out.Tables = append(out.Tables, t.Clone())
+	}
+	out.Views = append([]*View(nil), s.Views...)
+	out.Enums = make([]*Enum, 0, len(s.Enums))
+	for _, e := range s.Enums {
+		c := *e
+		c.Values = append([]string(nil), e.Values...)
+		out.Enums = append(out.Enums, &c)
+	}
+	out.Sequences = append([]*Sequence(nil), s.Sequences...)
+	out.Notes = append([]string(nil), s.Notes...)
+	return &out
+}
+
+// Clone은 테이블을 깊게 복사한다.
+func (t *Table) Clone() *Table {
+	if t == nil {
+		return nil
+	}
+	out := *t
+	out.Columns = make([]*Column, 0, len(t.Columns))
+	for _, c := range t.Columns {
+		cc := *c
+		if c.Type.Values != nil {
+			cc.Type.Values = append([]string(nil), c.Type.Values...)
+		}
+		out.Columns = append(out.Columns, &cc)
+	}
+	if t.PrimaryKey != nil {
+		pk := *t.PrimaryKey
+		pk.Columns = append([]string(nil), t.PrimaryKey.Columns...)
+		out.PrimaryKey = &pk
+	}
+	out.Indexes = make([]*Index, 0, len(t.Indexes))
+	for _, i := range t.Indexes {
+		ic := *i
+		ic.Columns = append([]IndexPart(nil), i.Columns...)
+		out.Indexes = append(out.Indexes, &ic)
+	}
+	out.ForeignKeys = make([]*ForeignKey, 0, len(t.ForeignKeys))
+	for _, f := range t.ForeignKeys {
+		fc := *f
+		fc.Columns = append([]string(nil), f.Columns...)
+		fc.RefColumns = append([]string(nil), f.RefColumns...)
+		out.ForeignKeys = append(out.ForeignKeys, &fc)
+	}
+	out.Checks = make([]*Check, 0, len(t.Checks))
+	for _, ck := range t.Checks {
+		cc := *ck
+		out.Checks = append(out.Checks, &cc)
+	}
+	if t.Options != nil {
+		out.Options = make(map[string]string, len(t.Options))
+		for k, v := range t.Options {
+			out.Options[k] = v
+		}
+	}
+	return &out
+}
+
 // Fingerprint는 스키마 구조의 해시 문자열을 만든다.
 // 외부 편집 감지(드리프트)에서 "구조가 바뀌었는지"를 싸게 판별하기 위해 사용한다.
 // 통계값(행 수, 크기)은 구조가 아니므로 제외한다.
