@@ -272,6 +272,7 @@ function openAssignDialog(m, reload) {
     );
     // 리뷰어는 검색해서 고른다. 체크박스를 늘어놓으면 사람이 늘어날수록 눈으로
     // 훑어 찾게 되고, 대화상자 높이도 사람 수만큼 늘어난다.
+    const selfNote = h('span.field-help');
     const reviewers = peoplePicker({
       items: people.map((p) => ({
         id: p.id,
@@ -281,6 +282,21 @@ function openAssignDialog(m, reload) {
       selected: (m.reviewers ?? []).map((r) => r.userId),
       placeholder: '이름 또는 아이디로 검색',
     });
+
+    // 담당자는 리뷰어가 될 수 없다.
+    //
+    // 자기가 끌고 가는 계획을 자기가 검토하는 것은 검토가 아니다. 저장할 때 막을
+    // 수도 있지만, 그러면 사람이 고르고 나서야 안 된다는 말을 듣는다. 담당자를
+    // 고르는 순간 후보에서 빼고, 이미 골라 두었다면 그 자리에서 빠진다.
+    const syncExclusion = () => {
+      const dropped = reviewers.setExcluded(assignee.value ? [assignee.value] : []);
+      const who = people.find((p) => p.id === assignee.value);
+      selfNote.textContent = assignee.value
+        ? `담당자(${who ? label(who) : assignee.value})는 리뷰어로 고를 수 없습니다.`
+        : '';
+      if (dropped) toast('담당자는 리뷰어에서 뺐습니다', 'info');
+    };
+    assignee.addEventListener('change', syncExclusion);
 
     mount(body,
       h('p.modal-message', {},
@@ -297,8 +313,10 @@ function openAssignDialog(m, reload) {
       h('label.field', {}, h('span.field-label', {}, '담당자'), assignee),
       h('div.field', {},
         h('span.field-label', {}, '리뷰어'),
-        reviewers.node),
+        reviewers.node,
+        selfNote),
     );
+    syncExclusion();
 
     mount(footer,
       h('button.btn', { type: 'button', onclick: close }, '취소'),
@@ -574,8 +592,14 @@ function executionPanel(m) {
 function openReviewDialog(m, res, reload) {
   // 승인·반려는 지정된 리뷰어의 것이다. 서버가 막지만, 화면에서도 눌리지 않아야
   // 한다 — 누를 수 있는 버튼이 403으로 돌아오는 것은 설명이 아니라 사고다.
+  //
+  // 슈퍼 어드민은 지정과 무관하게 결정할 수 있다(서버도 같은 예외를 둔다). 지정한
+  // 리뷰어가 자리를 비운 사이 계획이 멈춰 있으면 사람들은 이 흐름을 우회하는 다른
+  // 길을 찾는다 — 막다른 길을 만들지 않는 것이 규칙을 지키게 하는 방법이다.
   const me = state.user?.id;
-  const isReviewer = (m.reviewers ?? []).some((r) => r.userId === me);
+  const designated = (m.reviewers ?? []).some((r) => r.userId === me);
+  const superadmin = state.user?.role === 'superadmin';
+  const isReviewer = designated || superadmin;
   const commentInput = textarea({
     placeholder: isReviewer
       ? '검토 의견 (반려 시 필수는 아니지만 남겨주세요)'
@@ -615,6 +639,13 @@ function openReviewDialog(m, res, reload) {
           h('span', {},
             '리뷰어로 지정되지 않아 ', h('b', {}, '의견만'), ' 남길 수 있습니다. ',
             '승인·반려가 필요하면 담당자에게 리뷰어 지정을 요청하세요.')),
+      // 대신 결정하는 것임을 스스로도 알고 있어야 한다. 리뷰 기록에는 이름이 남는다.
+      !designated && superadmin
+        ? h('p.notice.notice-warn', {}, icon('alert'),
+          h('span', {},
+            '리뷰어로 지정되지는 않았지만 ', h('b', {}, '슈퍼 어드민'),
+            ' 이라 승인·반려할 수 있습니다. 누가 결정했는지는 기록에 남습니다.'))
+        : null,
       commentInput,
     ],
     footer: (close) => [

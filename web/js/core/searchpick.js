@@ -380,6 +380,11 @@ export function peoplePicker({
   const chosen = new Set(selected);
   const byID = new Map(items.map((p) => [p.id, p]));
   const rows = items.map((p) => ({ value: p.id, label: p.label, hint: p.sub }));
+  // 뺄 사람. 고를 수도 없고, 이미 골라 두었다면 빠진다.
+  //
+  // 고르개 바깥의 사정(예: 담당자로 정한 사람은 리뷰어가 될 수 없다)을 여기서 알
+  // 필요는 없다. 그것을 아는 쪽이 목록만 넘겨 준다.
+  let excluded = new Set();
 
   const chips = h('div.pick-chips');
   const search = h('input.input.pick-input', {
@@ -394,7 +399,8 @@ export function peoplePicker({
   let open = false;
   let cursor = 0;
 
-  const visible = () => matches(rows, search.value, (it) => chosen.has(it.value));
+  const visible = () => matches(rows, search.value,
+    (it) => chosen.has(it.value) || excluded.has(it.value));
 
   const drawChips = () => {
     const picked = [...chosen].map((id) => byID.get(id)).filter(Boolean);
@@ -479,5 +485,21 @@ export function peoplePicker({
   return {
     node: box,
     get value() { return [...chosen]; },
+    // setExcluded는 고를 수 없는 사람을 정한다. 이미 골라 둔 사람이 그 목록에 들면
+    // 조용히 빠진다 — 고를 수 없게 만들면서 이미 고른 것을 남겨 두면, 저장할 때에야
+    // 거절당한다.
+    setExcluded(ids) {
+      excluded = new Set(ids ?? []);
+      let dropped = false;
+      for (const id of [...chosen]) {
+        if (!excluded.has(id)) continue;
+        chosen.delete(id);
+        dropped = true;
+      }
+      drawChips();
+      drawList();
+      if (dropped) onChange?.([...chosen]);
+      return dropped;
+    },
   };
 }
