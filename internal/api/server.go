@@ -418,6 +418,10 @@ func (s *Server) routes() {
 	migs.Get("/:migId", s.handleGetMigration)
 	migs.Post("/:migId/status", s.handleMigrationStatus)
 	migs.Post("/:migId/review", s.handleReviewMigration)
+	// 리뷰 한 건 고치기·지우기. 오타를 고치거나 빈 의견을 치우는 길이 없으면
+	// 리뷰 칸에는 지울 수 없는 부스러기가 쌓이고, 결국 읽히지 않는 칸이 된다.
+	migs.Patch("/:migId/review/:reviewId", s.handleUpdateMigrationReview)
+	migs.Delete("/:migId/review/:reviewId", s.handleDeleteMigrationReview)
 	// 담당자·리뷰어 지정. 후보 목록은 대상 커넥션을 만질 수 있는 사람만 담는다.
 	migs.Get("/:migId/people", s.handleListMigrationPeople)
 	migs.Put("/:migId/assignment", s.handleSetMigrationAssignment)

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"strconv"
 	"testing"
 
 	"dbstudio/internal/crypto"
@@ -473,6 +474,215 @@ func TestReviewerChangesDecision(t *testing.T) {
 	if code, _ := danaC.do("POST", "/api/v1/migrations/"+mig.ID+"/review",
 		map[string]any{"decision": "rejected"}); code != 409 {
 		t.Errorf("적용된 계획의 반려 = %d, 409여야 합니다", code)
+	}
+}
+
+// 리뷰에 적어 둔 말은 본인이 고칠 수 있고, 남의 말은 고칠 수 없다.
+//
+// 고치기와 지우기의 권한을 다르게 두는 까닭: 지우는 것은 "이 기록은 없던 것으로
+// 한다"이고, 고치는 것은 "그 사람이 이렇게 말했다"를 바꾸는 일이다. 뒤쪽은
+// 관리자에게도 줄 수 없다.
+func TestReviewCommentEdit(t *testing.T) {
+	e, conn, mig := assignEnv(t)
+	ctx := context.Background()
+	dana := member(t, e, "dana", conn.ID, model.LevelMigrate)
+
+	danaC := loginAs(t, e, "dana")
+	if code, body := danaC.do("POST", "/api/v1/migrations/"+mig.ID+"/review",
+		map[string]any{"decision": "comment", "comment": "인덱스 이름이 규칙과 다릅니다"}); code != 200 {
+		t.Fatalf("의견 = %d: %v", code, body)
+	}
+	reviews, err := e.st.ListMigrationReviews(ctx, mig.ID)
+	if err != nil || len(reviews) != 1 {
+		t.Fatalf("리뷰 목록 = %v, %v", reviews, err)
+	}
+	rid := strconv.FormatInt(reviews[0].ID, 10)
+
+	// 본인은 고칠 수 있다.
+	if code, body := danaC.do("PATCH", "/api/v1/migrations/"+mig.ID+"/review/"+rid,
+		map[string]any{"comment": "인덱스 이름을 idx_ 로 맞춰 주세요"}); code != 200 {
+		t.Fatalf("의견 수정 = %d: %v", code, body)
+	}
+	got, err := e.st.GetMigrationReview(ctx, mig.ID, reviews[0].ID)
+	if err != nil {
+		t.Fatalf("get review: %v", err)
+	}
+	if got.Comment != "인덱스 이름을 idx_ 로 맞춰 주세요" {
+		t.Errorf("고친 내용 = %q", got.Comment)
+	}
+	// 결정은 그대로다. 말을 고치는 일이 승인 수를 움직여서는 안 된다.
+	if got.Decision != store.ReviewComment {
+		t.Errorf("결정 = %q, comment 여야 합니다", got.Decision)
+	}
+
+	// 빈 의견은 "아무 말 없이 남긴 의견"이 되므로 받지 않는다. 그럴 때 하려던 일은 삭제다.
+	if code, _ := danaC.do("PATCH", "/api/v1/migrations/"+mig.ID+"/review/"+rid,
+		map[string]any{"comment": "   "}); code != 400 {
+		t.Errorf("빈 의견 = %d, 400이어야 합니다", code)
+	}
+
+	// 슈퍼 어드민도 남의 말은 고칠 수 없다.
+	alice := loginAs(t, e, "alice")
+	if code, _ := alice.do("PATCH", "/api/v1/migrations/"+mig.ID+"/review/"+rid,
+		map[string]any{"comment": "제가 대신 고쳤습니다"}); code != 403 {
+		t.Errorf("슈퍼 어드민의 남의 의견 수정 = %d, 403이어야 합니다", code)
+	}
+	_ = dana
+}
+
+// 리뷰는 지울 수 있고, 결정을 거두면 상태가 다시 계산된다.
+//
+// 승인을 거둘 길이 없으면 "승인됨"은 한 번 붙으면 떨어지지 않는 딱지가 된다.
+// 상태는 남아 있는 결정의 함수여야 한다.
+func TestReviewDelete(t *testing.T) {
+	e, conn, mig := assignEnv(t)
+	ctx := context.Background()
+	dana := member(t, e, "dana", conn.ID, model.LevelMigrate)
+	erin := member(t, e, "erin", conn.ID, model.LevelMigrate)
+
+	alice := loginAs(t, e, "alice")
+	if code, body := alice.do("PUT", "/api/v1/migrations/"+mig.ID+"/assignment",
+		map[string]any{"assigneeId": "", "reviewerIds": []string{dana.ID}}); code != 200 {
+		t.Fatalf("지정 = %d: %v", code, body)
+	}
+	danaC := loginAs(t, e, "dana")
+	if code, body := danaC.do("POST", "/api/v1/migrations/"+mig.ID+"/review",
+		map[string]any{"decision": "approved", "comment": "확인했습니다"}); code != 200 {
+		t.Fatalf("승인 = %d: %v", code, body)
+	}
+	statusOf := func(what string) string {
+		t.Helper()
+		got, err := e.st.GetMigration(ctx, mig.ID, false)
+		if err != nil {
+			t.Fatalf("get(%s): %v", what, err)
+		}
+		return got.Status
+	}
+	if got := statusOf("승인"); got != store.MigrationApproved {
+		t.Fatalf("승인 뒤 상태 = %q", got)
+	}
+
+	reviews, err := e.st.ListMigrationReviews(ctx, mig.ID)
+	if err != nil || len(reviews) != 1 {
+		t.Fatalf("리뷰 목록 = %v, %v", reviews, err)
+	}
+	rid := strconv.FormatInt(reviews[0].ID, 10)
+
+	// 남의 승인은 아무나 지울 수 없다.
+	erinC := loginAs(t, e, "erin")
+	if code, _ := erinC.do("DELETE", "/api/v1/migrations/"+mig.ID+"/review/"+rid, nil); code != 403 {
+		t.Errorf("남의 리뷰 삭제 = %d, 403이어야 합니다", code)
+	}
+	_ = erin
+
+	// 본인이 승인을 거두면 승인 수가 줄고 상태가 리뷰 중으로 돌아간다.
+	if code, body := danaC.do("DELETE", "/api/v1/migrations/"+mig.ID+"/review/"+rid, nil); code != 200 {
+		t.Fatalf("내 승인 거두기 = %d: %v", code, body)
+	}
+	if got := statusOf("거둔 뒤"); got != store.MigrationInReview {
+		t.Errorf("승인을 거둔 뒤 상태 = %q, 기대 in_review", got)
+	}
+	if left, _ := e.st.ListMigrationReviews(ctx, mig.ID); len(left) != 0 {
+		t.Errorf("남은 리뷰 = %d건, 0이어야 합니다", len(left))
+	}
+
+	// 실행된 계획의 결정은 실행을 허락한 근거이므로 지울 수 없다.
+	if code, body := danaC.do("POST", "/api/v1/migrations/"+mig.ID+"/review",
+		map[string]any{"decision": "approved"}); code != 200 {
+		t.Fatalf("다시 승인 = %d: %v", code, body)
+	}
+	again, err := e.st.ListMigrationReviews(ctx, mig.ID)
+	if err != nil || len(again) != 1 {
+		t.Fatalf("리뷰 목록 = %v, %v", again, err)
+	}
+	rid2 := strconv.FormatInt(again[0].ID, 10)
+	if err := e.st.SetMigrationStatus(ctx, mig.ID, store.MigrationApplied); err != nil {
+		t.Fatalf("applied: %v", err)
+	}
+	if code, _ := danaC.do("DELETE", "/api/v1/migrations/"+mig.ID+"/review/"+rid2, nil); code != 409 {
+		t.Errorf("적용된 계획의 승인 삭제 = %d, 409여야 합니다", code)
+	}
+	// 반면 의견은 근거가 아니므로 적용된 뒤에도 치울 수 있다.
+	if code, body := erinC.do("POST", "/api/v1/migrations/"+mig.ID+"/review",
+		map[string]any{"decision": "comment", "comment": "적용 뒤 락이 좀 길었습니다"}); code != 200 {
+		t.Fatalf("적용 뒤 의견 = %d: %v", code, body)
+	}
+	all, err := e.st.ListMigrationReviews(ctx, mig.ID)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	last := strconv.FormatInt(all[len(all)-1].ID, 10)
+	if code, body := erinC.do("DELETE", "/api/v1/migrations/"+mig.ID+"/review/"+last, nil); code != 200 {
+		t.Errorf("적용 뒤 의견 삭제 = %d: %v", code, body)
+	}
+	// 지운 것이 상태를 건드리지도 않는다.
+	if got := statusOf("의견 삭제 뒤"); got != store.MigrationApplied {
+		t.Errorf("의견을 지운 뒤 상태 = %q, applied 그대로여야 합니다", got)
+	}
+}
+
+// 슈퍼 어드민은 남이 남긴 의견을 치울 수 있다.
+//
+// 계정이 사라진 사람의 빈 의견처럼 아무도 못 치우는 것이 계획 옆에 남으면
+// 리뷰 칸은 읽히지 않게 된다. 누가 지웠는지는 감사 로그에 남는다.
+func TestSuperadminDeletesOthersComment(t *testing.T) {
+	e, conn, mig := assignEnv(t)
+	ctx := context.Background()
+	member(t, e, "dana", conn.ID, model.LevelMigrate)
+
+	danaC := loginAs(t, e, "dana")
+	if code, body := danaC.do("POST", "/api/v1/migrations/"+mig.ID+"/review",
+		map[string]any{"decision": "comment", "comment": "잘못 붙인 말"}); code != 200 {
+		t.Fatalf("의견 = %d: %v", code, body)
+	}
+	reviews, err := e.st.ListMigrationReviews(ctx, mig.ID)
+	if err != nil || len(reviews) != 1 {
+		t.Fatalf("리뷰 목록 = %v, %v", reviews, err)
+	}
+	rid := strconv.FormatInt(reviews[0].ID, 10)
+
+	alice := loginAs(t, e, "alice")
+	if code, body := alice.do("DELETE", "/api/v1/migrations/"+mig.ID+"/review/"+rid, nil); code != 200 {
+		t.Fatalf("슈퍼 어드민의 의견 삭제 = %d: %v", code, body)
+	}
+	if left, _ := e.st.ListMigrationReviews(ctx, mig.ID); len(left) != 0 {
+		t.Errorf("남은 리뷰 = %d건, 0이어야 합니다", len(left))
+	}
+}
+
+// 다른 마이그레이션의 리뷰 번호로는 손댈 수 없다.
+//
+// 리뷰 번호는 표 전체에서 하나뿐이라, 소속을 보지 않으면 권한 검사를 통과한
+// 계획의 이름으로 남의 계획 기록을 지우게 된다.
+func TestReviewFromAnotherMigrationRejected(t *testing.T) {
+	e, conn, mig := assignEnv(t)
+	ctx := context.Background()
+	member(t, e, "dana", conn.ID, model.LevelMigrate)
+
+	danaC := loginAs(t, e, "dana")
+	if code, body := danaC.do("POST", "/api/v1/migrations/"+mig.ID+"/review",
+		map[string]any{"decision": "comment", "comment": "여기 남긴 말"}); code != 200 {
+		t.Fatalf("의견 = %d: %v", code, body)
+	}
+	reviews, err := e.st.ListMigrationReviews(ctx, mig.ID)
+	if err != nil || len(reviews) != 1 {
+		t.Fatalf("리뷰 목록 = %v, %v", reviews, err)
+	}
+	rid := strconv.FormatInt(reviews[0].ID, 10)
+
+	other, err := e.st.CreateMigration(ctx, store.CreateMigrationParams{
+		ConnectionID: conn.ID, Title: "다른 계획",
+		TargetSchema: &schema.Schema{Dialect: "postgres", Shape: schema.ShapeRelational},
+		Plan:         &schema.Plan{}, Diff: &schema.DiffResult{},
+	})
+	if err != nil {
+		t.Fatalf("create migration: %v", err)
+	}
+	if code, _ := danaC.do("DELETE", "/api/v1/migrations/"+other.ID+"/review/"+rid, nil); code != 404 {
+		t.Errorf("다른 계획의 리뷰 삭제 = %d, 404여야 합니다", code)
+	}
+	if left, _ := e.st.ListMigrationReviews(ctx, mig.ID); len(left) != 1 {
+		t.Errorf("원래 계획의 리뷰가 지워졌습니다 (%d건 남음)", len(left))
 	}
 }
 

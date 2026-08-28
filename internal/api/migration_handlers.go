@@ -616,35 +616,9 @@ func (s *Server) handleReviewMigration(c *fiber.Ctx) error {
 
 	// 결정에 따라 상태를 자동 전이한다. 사용자가 "승인"과 "상태 변경"을 따로
 	// 눌러야 하면 승인만 하고 잊는 경우가 생긴다.
-	reviews, err := s.st.ListMigrationReviews(c.Context(), mig.ID)
+	nextStatus, approvals, required, err := s.recountMigrationStatus(c, mig, conn)
 	if err != nil {
 		return err
-	}
-	required := migrate.RequiredApprovals(conn, mig.DestructiveCount)
-	approvals := store.ApprovalCount(reviews)
-	// 상태는 지금 남아 있는 결정에서 다시 계산한다.
-	//
-	// 결정마다 한 방향으로만 밀면(반려면 반려로) 마음을 바꿔도 상태가 따라오지
-	// 않는다. 상태를 결정의 함수로 두면 어느 방향이든 저절로 맞는다 — 반려를
-	// 승인으로 바꾸면 리뷰 중으로, 승인 수가 차면 승인됨으로.
-	nextStatus := mig.Status
-	if reviewableStatus(mig.Status) {
-		switch {
-		case store.HasRejection(reviews):
-			nextStatus = store.MigrationRejected
-		case approvals >= required:
-			nextStatus = store.MigrationApproved
-		default:
-			nextStatus = store.MigrationInReview
-		}
-	}
-	if nextStatus != mig.Status {
-		if err := s.st.SetMigrationStatus(c.Context(), mig.ID, nextStatus); err != nil {
-			var ite *store.InvalidTransitionError
-			if !errors.As(err, &ite) {
-				return err
-			}
-		}
 	}
 
 	s.audit(c, store.AuditParams{
@@ -658,6 +632,163 @@ func (s *Server) handleReviewMigration(c *fiber.Ctx) error {
 		"review": review, "approvals": approvals,
 		"requiredApprovals": required, "status": nextStatus,
 	})
+}
+
+// handleUpdateMigrationReview는 리뷰에 적어 둔 내용을 고친다.
+//
+// 결정(승인·반려)은 이 경로로 바뀌지 않는다. 그것은 승인 수와 상태를 움직이는
+// 일이라 review 엔드포인트를 지나야 하고, 그래야 "언제 무엇으로 바뀌었는가"가
+// 기록으로 남는다. 여기서 고치는 것은 적어 둔 말뿐이다.
+func (s *Server) handleUpdateMigrationReview(c *fiber.Ctx) error {
+	mig, conn, err := s.resolveMigration(c, c.Params("migId"), model.LevelMigrate)
+	if err != nil {
+		return err
+	}
+	review, err := s.resolveReview(c, mig)
+	if err != nil {
+		return err
+	}
+	u := currentUser(c)
+	// 남이 남긴 말은 슈퍼 어드민도 고칠 수 없다.
+	//
+	// 고치기와 지우기의 권한이 다른 이유: 지우는 것은 "이 기록은 없던 것으로 한다"
+	// 이고, 고치는 것은 "그 사람이 이렇게 말했다"를 바꾸는 일이다. 뒤쪽은 남의
+	// 입에 말을 넣는 것이라서, 관리자에게도 줄 수 없는 힘이다.
+	if review.ReviewerID == "" || review.ReviewerID != u.ID {
+		return fail(c, fiber.StatusForbidden, "not_author",
+			"자기가 남긴 리뷰만 고칠 수 있습니다. 남의 기록은 지울 수만 있습니다")
+	}
+	var body struct {
+		Comment string `json:"comment"`
+	}
+	if err := c.BodyParser(&body); err != nil {
+		return fail(c, fiber.StatusBadRequest, "bad_request", "요청 본문을 해석할 수 없습니다")
+	}
+	comment := strings.TrimSpace(body.Comment)
+	// 의견은 내용이 전부다. 비우면 "누가 언제 아무 말도 없이 의견을 남겼다"만
+	// 남으므로, 그럴 때 하려던 일은 삭제다.
+	if comment == "" && review.Decision == store.ReviewComment {
+		return fail(c, fiber.StatusBadRequest, "empty_comment",
+			"의견은 비워 둘 수 없습니다. 지우려면 삭제하세요")
+	}
+	if err := s.st.UpdateMigrationReviewComment(c.Context(), mig.ID, review.ID, comment); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return fiber.NewError(fiber.StatusNotFound, "리뷰를 찾을 수 없습니다")
+		}
+		return err
+	}
+	review.Comment = comment
+	s.audit(c, store.AuditParams{
+		Action: "migration.review.update", TargetType: "migration", TargetID: mig.ID,
+		Detail: map[string]any{
+			"connection": conn.Name, "reviewId": review.ID, "decision": review.Decision,
+		},
+	})
+	return c.JSON(fiber.Map{"review": review})
+}
+
+// handleDeleteMigrationReview는 리뷰 한 건을 지운다.
+func (s *Server) handleDeleteMigrationReview(c *fiber.Ctx) error {
+	mig, conn, err := s.resolveMigration(c, c.Params("migId"), model.LevelMigrate)
+	if err != nil {
+		return err
+	}
+	review, err := s.resolveReview(c, mig)
+	if err != nil {
+		return err
+	}
+	u := currentUser(c)
+	mine := review.ReviewerID != "" && review.ReviewerID == u.ID
+	// 슈퍼 어드민이 남의 기록도 지울 수 있는 이유: 계정이 사라진 사람의 빈 의견,
+	// 잘못 붙은 말처럼 아무도 치울 수 없는 것이 계획 옆에 남으면 리뷰 칸은
+	// 읽히지 않게 된다. 누가 지웠는지는 감사 로그에 남는다.
+	if !mine && u.Role != model.RoleSuperadmin {
+		return fail(c, fiber.StatusForbidden, "not_author",
+			"자기가 남긴 리뷰만 지울 수 있습니다")
+	}
+	// 실행된 계획의 승인·반려는 지울 수 없다.
+	//
+	// 그 기록이 실행을 허락한 근거다. 지우면 "누구의 승인으로 운영 DB를 고쳤는가"에
+	// 답할 수 없게 된다. 의견은 근거가 아니므로 언제든 치울 수 있다.
+	if review.Decision != store.ReviewComment && !reviewableStatus(mig.Status) {
+		return fail(c, fiber.StatusConflict, "invalid_state",
+			"실행 전(리뷰 중·승인됨·반려됨)인 계획의 승인·반려만 거둘 수 있습니다")
+	}
+	if err := s.st.DeleteMigrationReview(c.Context(), mig.ID, review.ID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return fiber.NewError(fiber.StatusNotFound, "리뷰를 찾을 수 없습니다")
+		}
+		return err
+	}
+
+	// 결정을 거뒀으면 상태를 다시 계산한다. 반려를 지웠는데 반려됨으로 남아 있거나,
+	// 승인을 거뒀는데 승인됨으로 남아 있으면 상태가 근거 없이 서 있는 셈이 된다.
+	status, approvals, required, err := s.recountMigrationStatus(c, mig, conn)
+	if err != nil {
+		return err
+	}
+	s.audit(c, store.AuditParams{
+		Action: "migration.review.delete", TargetType: "migration", TargetID: mig.ID,
+		Detail: map[string]any{
+			"connection": conn.Name, "reviewId": review.ID, "decision": review.Decision,
+			"author": review.ReviewerName, "mine": mine,
+			"approvals": approvals, "status": status,
+		},
+	})
+	return c.JSON(fiber.Map{
+		"deleted": review.ID, "approvals": approvals,
+		"requiredApprovals": required, "status": status,
+	})
+}
+
+// resolveReview는 경로의 리뷰 번호를 이 마이그레이션의 리뷰로 바꾼다.
+func (s *Server) resolveReview(c *fiber.Ctx, mig *store.Migration) (*store.MigrationReview, error) {
+	id, perr := strconv.ParseInt(strings.TrimSpace(c.Params("reviewId")), 10, 64)
+	if perr != nil {
+		return nil, fail(c, fiber.StatusBadRequest, "bad_request", "리뷰 ID가 올바르지 않습니다")
+	}
+	review, err := s.st.GetMigrationReview(c.Context(), mig.ID, id)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, fiber.NewError(fiber.StatusNotFound, "리뷰를 찾을 수 없습니다")
+	}
+	if err != nil {
+		return nil, err
+	}
+	return review, nil
+}
+
+// recountMigrationStatus는 지금 남아 있는 결정에서 상태를 다시 계산해 적용한다.
+//
+// 상태를 결정의 함수로 두면 어느 방향이든 저절로 맞는다 — 반려를 승인으로 바꾸면
+// 리뷰 중으로, 승인 수가 차면 승인됨으로, 마지막 승인을 거두면 다시 리뷰 중으로.
+// 결정마다 한 방향으로만 밀면(반려면 반려로) 되돌리는 길이 없어진다.
+func (s *Server) recountMigrationStatus(c *fiber.Ctx, mig *store.Migration, conn *model.Connection) (string, int, int, error) {
+	reviews, err := s.st.ListMigrationReviews(c.Context(), mig.ID)
+	if err != nil {
+		return mig.Status, 0, 0, err
+	}
+	required := migrate.RequiredApprovals(conn, mig.DestructiveCount)
+	approvals := store.ApprovalCount(reviews)
+	next := mig.Status
+	if reviewableStatus(mig.Status) {
+		switch {
+		case store.HasRejection(reviews):
+			next = store.MigrationRejected
+		case approvals >= required:
+			next = store.MigrationApproved
+		default:
+			next = store.MigrationInReview
+		}
+	}
+	if next != mig.Status {
+		if err := s.st.SetMigrationStatus(c.Context(), mig.ID, next); err != nil {
+			var ite *store.InvalidTransitionError
+			if !errors.As(err, &ite) {
+				return mig.Status, approvals, required, err
+			}
+		}
+	}
+	return next, approvals, required, nil
 }
 
 // reviewableStatus는 아직 결정을 남기거나 바꿀 수 있는 상태인지다.
