@@ -865,7 +865,17 @@ func TestStatusTransitions(t *testing.T) {
 		{store.MigrationApplied, store.MigrationDraft, false},
 		{store.MigrationRolledBack, store.MigrationApplied, false},
 		{store.MigrationRejected, store.MigrationDraft, true},
-		{store.MigrationRejected, store.MigrationApproved, false},
+		// 반려를 되돌릴 수 있어야 한다. 리뷰어가 마음을 바꾸면 상태는 남아 있는
+		// 결정에서 다시 계산되므로(핸들러), 승인 수가 이미 찼다면 곧바로 승인됨이다.
+		{store.MigrationRejected, store.MigrationApproved, true},
+		{store.MigrationRejected, store.MigrationInReview, true},
+		// 실행 전이라면 승인도 거둘 수 있다. "이미 승인됐으니 이제 못 막는다"가
+		// 되어서는 안 된다.
+		{store.MigrationApproved, store.MigrationInReview, true},
+		{store.MigrationApproved, store.MigrationRejected, true},
+		// 실행된 뒤에는 결정을 바꿀 자리가 아니다.
+		{store.MigrationApplied, store.MigrationRejected, false},
+		{store.MigrationRolledBack, store.MigrationInReview, false},
 		{store.MigrationFailed, store.MigrationDraft, true},
 		{store.MigrationFailed, store.MigrationApplied, false},
 	}

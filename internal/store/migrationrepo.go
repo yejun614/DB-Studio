@@ -44,8 +44,18 @@ var allowedTransitions = map[string][]string{
 	MigrationInReview: {MigrationApproved, MigrationRejected, MigrationDraft, MigrationClosed},
 	// 승인 후에도 계획을 고칠 수 있어야 한다 — 다만 그때는 승인이 무효가 되므로
 	// draft로 돌아간다(핸들러가 리뷰 기록을 함께 지운다).
-	MigrationApproved: {MigrationApplied, MigrationFailed, MigrationDraft, MigrationClosed},
-	MigrationRejected: {MigrationDraft, MigrationClosed},
+	//
+	// in_review·rejected 로도 돌아갈 수 있다: 실행 전이라면 리뷰어가 마음을 바꿀 수
+	// 있어야 한다. 승인을 거두면 다시 리뷰 중이고, 뒤늦게 문제를 찾으면 반려다.
+	// "이미 승인됐으니 이제 못 막는다"가 되어서는 안 된다.
+	MigrationApproved: {
+		MigrationApplied, MigrationFailed, MigrationInReview, MigrationRejected,
+		MigrationDraft, MigrationClosed,
+	},
+	// 반려도 되돌릴 수 있다. 잘못 눌렀거나, 지적한 것이 그 자리에서 설명된 경우가
+	// 있다. 되돌리는 길이 "계획을 초안으로 되돌려 리뷰 기록을 지우기"뿐이면
+	// 사람들은 반려를 누르기를 망설이게 되고, 그러면 반려는 쓰이지 않는 버튼이 된다.
+	MigrationRejected: {MigrationInReview, MigrationApproved, MigrationDraft, MigrationClosed},
 	// 실패한 마이그레이션은 부분 적용 상태일 수 있다. 사람이 상태를 확인한 뒤
 	// 다시 계획을 세우도록 draft로만 돌린다. 닫을 수는 있다 — 부분 적용을 손으로
 	// 정리하고 이 계획은 더 쓰지 않기로 하는 경우가 있다.

@@ -390,6 +390,92 @@ func TestAssigneeCannotApprove(t *testing.T) {
 	}
 }
 
+// 리뷰어는 마음을 바꿀 수 있다: 반려 → 승인 → 다시 반려.
+//
+// 되돌리는 길이 "계획을 초안으로 되돌려 리뷰 기록을 통째로 지우기"뿐이면 다른 사람의
+// 승인까지 사라진다. 그러면 사람들은 반려를 누르기를 망설이고, 반려는 쓰이지 않는
+// 버튼이 된다. 상태는 남아 있는 결정에서 다시 계산되므로 어느 방향이든 따라온다.
+func TestReviewerChangesDecision(t *testing.T) {
+	e, conn, mig := assignEnv(t)
+	ctx := context.Background()
+	dana := member(t, e, "dana", conn.ID, model.LevelMigrate)
+
+	alice := loginAs(t, e, "alice")
+	if status, body := alice.do("PUT", "/api/v1/migrations/"+mig.ID+"/assignment",
+		map[string]any{"assigneeId": "", "reviewerIds": []string{dana.ID}}); status != 200 {
+		t.Fatalf("지정 = %d: %v", status, body)
+	}
+
+	danaC := loginAs(t, e, "dana")
+	statusOf := func(what string) string {
+		t.Helper()
+		got, err := e.st.GetMigration(ctx, mig.ID, false)
+		if err != nil {
+			t.Fatalf("get(%s): %v", what, err)
+		}
+		return got.Status
+	}
+
+	// 반려한다.
+	if code, body := danaC.do("POST", "/api/v1/migrations/"+mig.ID+"/review",
+		map[string]any{"decision": "rejected", "comment": "인덱스가 빠졌습니다"}); code != 200 {
+		t.Fatalf("반려 = %d: %v", code, body)
+	}
+	if got := statusOf("반려"); got != store.MigrationRejected {
+		t.Fatalf("반려 뒤 상태 = %q", got)
+	}
+
+	// 마음을 바꾼다. 반려된 상태에서도 결정을 남길 수 있어야 한다.
+	if code, body := danaC.do("POST", "/api/v1/migrations/"+mig.ID+"/review",
+		map[string]any{"decision": "approved", "comment": "설명 듣고 확인했습니다"}); code != 200 {
+		t.Fatalf("반려 뒤 승인 = %d: %v", code, body)
+	}
+	if got := statusOf("승인"); got != store.MigrationApproved {
+		t.Errorf("승인으로 바꾼 뒤 상태 = %q, 기대 approved", got)
+	}
+
+	// 다시 문제를 발견하면 승인된 계획도 막을 수 있다.
+	if code, body := danaC.do("POST", "/api/v1/migrations/"+mig.ID+"/review",
+		map[string]any{"decision": "rejected", "comment": "역시 안 되겠습니다"}); code != 200 {
+		t.Fatalf("승인 뒤 반려 = %d: %v", code, body)
+	}
+	if got := statusOf("재반려"); got != store.MigrationRejected {
+		t.Errorf("다시 반려한 뒤 상태 = %q, 기대 rejected", got)
+	}
+
+	// 한 사람의 결정은 하나로 남는다(저장소가 이전 결정을 대신한다). 승인 수를 셀 때
+	// "같은 사람이 두 번 승인"이 두 표가 되어서는 안 되기 때문이다. 무엇을 언제
+	// 결정했는지는 감사 로그에 그대로 쌓인다.
+	got, err := e.st.GetMigration(ctx, mig.ID, true)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(got.Reviews) != 1 {
+		t.Errorf("리뷰 기록 = %d건, 기대 1건(마지막 결정)", len(got.Reviews))
+	}
+	if len(got.Reviews) == 1 && got.Reviews[0].Decision != store.ReviewRejected {
+		t.Errorf("남은 결정 = %q, 기대 rejected", got.Reviews[0].Decision)
+	}
+
+	// 실행된 계획의 결정은 바꿀 수 없다.
+	if err := e.st.SetMigrationStatus(ctx, mig.ID, store.MigrationDraft); err != nil {
+		t.Fatalf("draft: %v", err)
+	}
+	if err := e.st.SetMigrationStatus(ctx, mig.ID, store.MigrationInReview); err != nil {
+		t.Fatalf("in_review: %v", err)
+	}
+	if err := e.st.SetMigrationStatus(ctx, mig.ID, store.MigrationApproved); err != nil {
+		t.Fatalf("approved: %v", err)
+	}
+	if err := e.st.SetMigrationStatus(ctx, mig.ID, store.MigrationApplied); err != nil {
+		t.Fatalf("applied: %v", err)
+	}
+	if code, _ := danaC.do("POST", "/api/v1/migrations/"+mig.ID+"/review",
+		map[string]any{"decision": "rejected"}); code != 409 {
+		t.Errorf("적용된 계획의 반려 = %d, 409여야 합니다", code)
+	}
+}
+
 // aliceID는 시험 환경의 슈퍼 어드민 id다.
 func aliceID(t *testing.T, e *testEnv) string {
 	t.Helper()

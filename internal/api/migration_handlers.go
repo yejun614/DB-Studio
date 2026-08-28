@@ -556,9 +556,18 @@ func (s *Server) handleReviewMigration(c *fiber.Ctx) error {
 		return fail(c, fiber.StatusBadRequest, "bad_request",
 			"결정은 approved, rejected, comment 중 하나여야 합니다")
 	}
-	if mig.Status != store.MigrationInReview && decision != store.ReviewComment {
+	// 승인·반려는 **실행 전이면** 언제든 바꿀 수 있다.
+	//
+	// 반려한 뒤 마음을 바꾸는 길이 없으면, 되돌리는 방법은 "계획을 초안으로 되돌려
+	// 리뷰 기록을 통째로 지우기"뿐이다. 그것은 다른 사람의 승인까지 지우는 일이라
+	// 사람들은 반려를 누르기를 망설이게 되고, 결국 반려는 쓰이지 않는 버튼이 된다.
+	// 반대 방향도 같다 — 승인한 뒤 문제를 발견했는데 막을 방법이 없어서는 안 된다.
+	//
+	// 이미 실행된 계획(applied·failed·rolled_back)과 닫힌 계획은 결정을 바꿀 자리가
+	// 아니다. 그때 필요한 것은 새 계획이지 지난 결정의 수정이 아니다.
+	if decision != store.ReviewComment && !reviewableStatus(mig.Status) {
 		return fail(c, fiber.StatusConflict, "invalid_state",
-			"리뷰 중인 마이그레이션만 승인/반려할 수 있습니다")
+			"실행 전(리뷰 중·승인됨·반려됨)인 마이그레이션만 승인/반려할 수 있습니다")
 	}
 
 	u := currentUser(c)
@@ -613,12 +622,21 @@ func (s *Server) handleReviewMigration(c *fiber.Ctx) error {
 	}
 	required := migrate.RequiredApprovals(conn, mig.DestructiveCount)
 	approvals := store.ApprovalCount(reviews)
+	// 상태는 지금 남아 있는 결정에서 다시 계산한다.
+	//
+	// 결정마다 한 방향으로만 밀면(반려면 반려로) 마음을 바꿔도 상태가 따라오지
+	// 않는다. 상태를 결정의 함수로 두면 어느 방향이든 저절로 맞는다 — 반려를
+	// 승인으로 바꾸면 리뷰 중으로, 승인 수가 차면 승인됨으로.
 	nextStatus := mig.Status
-	switch {
-	case store.HasRejection(reviews):
-		nextStatus = store.MigrationRejected
-	case approvals >= required && mig.Status == store.MigrationInReview:
-		nextStatus = store.MigrationApproved
+	if reviewableStatus(mig.Status) {
+		switch {
+		case store.HasRejection(reviews):
+			nextStatus = store.MigrationRejected
+		case approvals >= required:
+			nextStatus = store.MigrationApproved
+		default:
+			nextStatus = store.MigrationInReview
+		}
 	}
 	if nextStatus != mig.Status {
 		if err := s.st.SetMigrationStatus(c.Context(), mig.ID, nextStatus); err != nil {
@@ -640,6 +658,18 @@ func (s *Server) handleReviewMigration(c *fiber.Ctx) error {
 		"review": review, "approvals": approvals,
 		"requiredApprovals": required, "status": nextStatus,
 	})
+}
+
+// reviewableStatus는 아직 결정을 남기거나 바꿀 수 있는 상태인지다.
+//
+// 실행 전까지가 그 범위다. 실행된 뒤에 결정을 바꾸는 것은 이력을 고치는 일이고,
+// 그때 필요한 것은 새 계획(또는 롤백)이지 지난 결정의 수정이 아니다.
+func reviewableStatus(status string) bool {
+	switch status {
+	case store.MigrationInReview, store.MigrationApproved, store.MigrationRejected:
+		return true
+	}
+	return false
 }
 
 // isDesignatedReviewer는 그 사람이 이 마이그레이션의 리뷰어로 지정되어 있는지 본다.
