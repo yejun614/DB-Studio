@@ -518,6 +518,60 @@ func (s *Store) ListMigrationReviews(ctx context.Context, migrationID string) ([
 	return out, nil
 }
 
+// GetMigrationReview는 리뷰 한 건을 가져온다.
+//
+// migrationID를 함께 받는 이유: id는 표 전체에서 하나뿐인 번호라서, 그것만으로
+// 찾으면 다른 마이그레이션의 리뷰를 이 계획의 것으로 다루게 된다. 권한 검사는
+// 계획 단위로 이뤄지므로 소속이 맞는지가 검사의 전제다.
+func (s *Store) GetMigrationReview(ctx context.Context, migrationID string, id int64) (*MigrationReview, error) {
+	var r MigrationReview
+	var createdAt string
+	err := s.db.QueryRowContext(ctx, `SELECT
+		id, migration_id, COALESCE(reviewer_id, ''), reviewer_name, decision, comment, created_at
+		FROM migration_reviews WHERE id = ? AND migration_id = ?`, id, migrationID).
+		Scan(&r.ID, &r.MigrationID, &r.ReviewerID, &r.ReviewerName,
+			&r.Decision, &r.Comment, &createdAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get review: %w", err)
+	}
+	r.CreatedAt = parseTime(createdAt)
+	return &r, nil
+}
+
+// UpdateMigrationReviewComment는 리뷰의 내용만 고친다.
+//
+// 결정(decision)은 건드리지 않는다. 승인·반려를 바꾸는 일은 승인 수와 상태를
+// 움직이므로 AddMigrationReview(다시 결정하기)를 지나가야 하고, 그래야 "언제
+// 무엇으로 바뀌었는가"가 기록으로 남는다. 여기서 고치는 것은 적어 둔 말뿐이다.
+func (s *Store) UpdateMigrationReviewComment(ctx context.Context, migrationID string, id int64, comment string) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE migration_reviews SET comment = ? WHERE id = ? AND migration_id = ?`,
+		comment, id, migrationID)
+	if err != nil {
+		return fmt.Errorf("update review comment: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// DeleteMigrationReview는 리뷰 한 건을 지운다.
+func (s *Store) DeleteMigrationReview(ctx context.Context, migrationID string, id int64) error {
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM migration_reviews WHERE id = ? AND migration_id = ?`, id, migrationID)
+	if err != nil {
+		return fmt.Errorf("delete review: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // ApprovalCount는 유효한 승인자 수를 센다.
 //
 // 사람 단위로 세는 이유: 한 사람이 여러 번 승인해도 검토자는 한 명이다.
