@@ -33,6 +33,10 @@ export async function renderNotify(outlet) {
   );
   const providerNote = h('span.field-help');
   const webhookInput = input({ value: '' });
+  // 이름과 안내는 메신저에 따라 달라지므로 요소로 들고 있는다.
+  const secretLabel = h('span.field-label', {}, '웹훅 주소');
+  const secretHelp = h('span.field-help');
+  const channelLabel = h('span.field-label', {}, '채널');
 
   // 메신저마다 주소 모양과 지켜야 할 것이 다르다. 고르면 안내와 예시가 함께 바뀐다 —
   // "채널을 적었는데 다른 곳으로 간다"(Slack 앱 웹훅)를 겪고 나서 찾아보게 두지 않는다.
@@ -40,18 +44,35 @@ export async function renderNotify(outlet) {
     const cur = providers.find((p) => p.value === providerSelect.value);
     providerNote.textContent = cur?.note ?? '';
     const kind = providerSelect.value;
+    // 텔레그램은 웹훅이 없다. 같은 칸에 다른 것(봇 토큰·채팅 ID)이 들어가므로
+    // 이름도 그렇게 바꾼다 — "웹훅 주소"라고 적힌 칸에 토큰을 넣으라고 하면
+    // 안내를 읽은 사람만 쓸 수 있는 기능이 된다.
+    const telegram = kind === 'telegram';
+    secretLabel.textContent = telegram ? '봇 토큰' : '웹훅 주소';
+    secretHelp.textContent = telegram
+      ? '@BotFather 가 준 토큰입니다. 이 토큰 하나로 봇이 글을 쓸 수 있으므로 암호화해 저장하고 일부만 보여줍니다.'
+      : '들어오는 웹훅(incoming webhook) 주소입니다. 이 주소 하나로 그 채널에 글을 쓸 수 있으므로 '
+        + '암호화해 저장하고 일부만 보여줍니다.';
+    channelLabel.textContent = telegram ? '채팅 ID' : '채널';
+    channelInput.placeholder = telegram
+      ? '예: -1001234567890 (필수)'
+      : '예: db-alerts (비우면 웹훅 기본 채널)';
+    usernameInput.disabled = telegram;
     // 채널·보내는 이름이 먹는지는 메신저마다 다르다. 디스코드는 채널만 못 바꾸고
     // 이름은 반영되므로, Slack과 한 덩어리로 묶으면 틀린 안내가 된다.
     channelHelp.textContent = {
       slack: '앱 웹훅에서는 무시됩니다(웹훅을 만들 때 고른 채널로 갑니다). 예전 방식의 커스텀 웹훅에서만 반영됩니다.',
       discord: '무시됩니다. 디스코드 웹후크는 만들 때 채널이 정해집니다.',
+      telegram: '봇이 글을 쓸 대화방의 ID입니다. 반드시 있어야 하며, 그룹은 -100 으로 시작하는 음수입니다.',
     }[kind] ?? '웹훅에 설정된 기본 채널 대신 보낼 채널입니다.';
-    usernameHelp.textContent = kind === 'slack'
-      ? '앱 웹훅에서는 무시됩니다. 앱 이름으로 표시됩니다.'
-      : '메시지에 표시할 이름입니다.';
+    usernameHelp.textContent = {
+      slack: '앱 웹훅에서는 무시됩니다. 앱 이름으로 표시됩니다.',
+      telegram: '텔레그램에서는 봇 이름으로 고정되어 바꿀 수 없습니다.',
+    }[kind] ?? '메시지에 표시할 이름입니다.';
     webhookInput.placeholder = cfg.webhookUrl || {
       slack: 'https://hooks.slack.com/services/T000/B000/xxxxxxxx',
       discord: 'https://discord.com/api/webhooks/000000/xxxxxxxx',
+      telegram: '123456789:AAH...',
     }[kind] || 'https://mattermost.example.com/hooks/xxxxxxxx';
   };
   providerSelect.addEventListener('change', syncProvider);
@@ -82,7 +103,7 @@ export async function renderNotify(outlet) {
   const test = h('button.btn', { type: 'button' }, icon('play'), '테스트 전송');
 
   mount(outlet,
-    pageHeader('알림', '모니터링 이벤트를 Mattermost·Slack 채널로 보냅니다'),
+    pageHeader('알림', '모니터링 이벤트를 Mattermost·Slack·Discord·Telegram 으로 보냅니다'),
     h('div.card', {},
       h('div.card-title', {},
         h('span', {}, '연결'),
@@ -90,14 +111,13 @@ export async function renderNotify(outlet) {
       ),
       field('메신저', providerSelect),
       providerNote,
-      h('p.field-help', {},
-        '들어오는 웹훅(incoming webhook) 주소를 넣습니다. '
-        + '이 주소는 그것 하나로 해당 채널에 글을 쓸 수 있는 비밀이므로 암호화해 저장하고, '
-        + '이 화면에는 일부만 보여줍니다.'),
-      field('웹훅 주소', webhookInput,
-        cfg.webhookUrl ? `지금 저장된 주소: ${cfg.webhookUrl} (바꿀 때만 입력하세요)` : '아직 저장된 주소가 없습니다'),
+      secretHelp,
+      h('label.field', {}, secretLabel, webhookInput,
+        h('span.field-help', {}, cfg.webhookUrl
+          ? `지금 저장된 값: ${cfg.webhookUrl} (바꿀 때만 입력하세요)`
+          : '아직 저장된 값이 없습니다')),
       h('div.form-grid', {},
-        h('label.field', {}, h('span.field-label', {}, '채널'), channelInput, channelHelp),
+        h('label.field', {}, channelLabel, channelInput, channelHelp),
         h('label.field', {}, h('span.field-label', {}, '보내는 이름'), usernameInput, usernameHelp),
       ),
       field('이 앱의 주소', appURLInput,
