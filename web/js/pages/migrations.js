@@ -147,6 +147,7 @@ export async function renderMigrationDetail(outlet, params) {
       peopleRow(m, reload),
       m.error ? h('div.notice.notice-danger', {}, icon('alert'), h('div', {}, h('strong', {}, '실행 오류'), h('p', {}, m.error))) : null,
       actionBar(m, res, precheckBox, reload),
+      applyGate(m, res, reload),
     ),
     precheckBox,
     warningsPanel(m),
@@ -228,12 +229,13 @@ function peopleRow(m, reload) {
 // 승인 수만 보면 "2/2 중 1"까지는 알아도 누구를 기다리는지는 모른다. 기다리는
 // 대상이 이름으로 보여야 재촉할 사람이 정해진다.
 function pendingReviewers(m) {
-  const decided = new Set((m.reviews ?? []).map((r) => r.reviewerId).filter(Boolean));
-  const waiting = (m.reviewers ?? []).filter((r) => !decided.has(r.userId));
+  // 의견만 남긴 사람도 기다리는 사람이다. 의견을 결정으로 세면 "다 봤다"로 표시된
+  // 채 승인 수는 차지 않아, 무엇을 기다리는지 알 수 없게 된다.
+  const waiting = pendingList(m);
   if (waiting.length === 0) return null;
   return h('p.field-help', {},
     '기다리는 리뷰어: ',
-    ...waiting.map((r, i) => h('span', {}, i ? ', ' : '', h('b', {}, r.name || r.userId))));
+    ...waiting.map((name, i) => h('span', {}, i ? ', ' : '', h('b', {}, name))));
 }
 
 // openAssignDialog는 담당자 한 명과 리뷰어 여럿을 함께 정한다.
@@ -422,6 +424,86 @@ function actionBar(m, res, precheckBox, reload) {
   }
 
   return h('div.mig-actions', {}, buttons);
+}
+
+// applyGate는 실행 버튼이 없는 까닭과 다음에 할 일을 한 줄로 말한다.
+//
+// 버튼을 그냥 감추면 화면은 "실행할 수 없다"까지만 말하고 "왜"와 "그래서 뭘 해야
+// 하는가"를 빠뜨린다. 승인 1/2 이라는 숫자는 옆에 있지만, 그것이 실행 버튼이 없는
+// 이유라는 것은 이 흐름을 아는 사람만 안다. 실제로 파괴적 변경 2건이라 2명이
+// 필요한 계획에서 "실행 버튼이 안 보이네요?" 라는 물음이 나왔다.
+//
+// 비활성 버튼을 두는 대신 문장을 쓰는 이유: 눌리지 않는 버튼은 이유를 말해 주지
+// 않으면서 자리만 차지한다. 여기서 필요한 것은 누를 것이 아니라 설명이다.
+function applyGate(m, res, reload) {
+  // 실행 버튼이 이미 있거나, 실행이 화제가 아닌 상태에서는 아무 말도 하지 않는다.
+  if (m.status === 'approved') return null;
+  const short = Math.max(0, res.requiredApprovals - res.approvals);
+  const why = res.requiredApprovals > 1
+    ? ' 운영 DB이거나 파괴적 변경이 포함되어 2명의 승인이 필요합니다.'
+    : '';
+
+  if (m.status === 'draft') {
+    return gateNote('info',
+      h('span', {},
+        '아직 ', h('b', {}, '초안'), ' 이라 실행할 수 없습니다. ',
+        '리뷰어를 지정하면 리뷰가 시작되고, 승인이 차면 실행 버튼이 나타납니다.', why),
+      h('button.btn.btn-small', {
+        type: 'button', onclick: () => openAssignDialog(m, reload),
+      }, icon('users'), '리뷰어 지정'));
+  }
+  if (m.status === 'in_review') {
+    // 세 가지를 가른다. "기다리는 사람이 없다"와 "부탁받은 사람이 아예 없다"는
+    // 화면에서는 비슷해 보이지만 할 일이 다르다 — 앞은 리뷰어를 더 부르는 것이고,
+    // 뒤는 아직 아무에게도 부탁하지 않은 것이다. 한 문장으로 합치면 지정된
+    // 리뷰어가 이미 결정한 계획에서 "리뷰어가 없습니다"라는 거짓말이 된다.
+    const waiting = pendingList(m);
+    const none = (m.reviewers ?? []).length === 0;
+    let tail = ` 기다리는 리뷰어: ${waiting.join(', ')}.`;
+    if (none) tail = ' 아직 아무에게도 부탁하지 않았습니다 — 리뷰어를 지정하세요.';
+    else if (waiting.length === 0) {
+      tail = ' 지정된 리뷰어는 모두 결정했습니다. 승인이 더 필요하니 리뷰어를 더 지정하세요.';
+    }
+    return gateNote('info',
+      h('span', {},
+        '승인이 ', h('b', {}, `${short}명`), ' 더 필요해서 실행 버튼이 아직 없습니다',
+        ` (지금 ${res.approvals}/${res.requiredApprovals}).`, why, tail),
+      waiting.length
+        ? null
+        : h('button.btn.btn-small', {
+          type: 'button', onclick: () => openAssignDialog(m, reload),
+        }, icon('users'), '리뷰어 지정'));
+  }
+  if (m.status === 'rejected') {
+    return gateNote('warn',
+      h('span', {},
+        h('b', {}, '반려된'), ' 계획이라 실행할 수 없습니다. ',
+        '반려를 남긴 사람이 결정을 바꾸거나, 지적을 반영한 새 계획이 필요합니다.'));
+  }
+  if (m.status === 'closed') {
+    return gateNote('info',
+      h('span', {},
+        h('b', {}, '닫힌'), ' 계획입니다. 다시 열면 초안으로 돌아가고, 승인을 다시 받아야 합니다.'));
+  }
+  // 적용됨·롤백됨·실패는 실행이 이미 지나간 일이다. 실행 이력 칸이 그것을 말한다.
+  return null;
+}
+
+// gateNote는 도구 줄 아래 한 줄 안내다. 오른쪽에 바로 할 일을 놓을 수 있다.
+function gateNote(kind, message, action = null) {
+  return h(`p.notice.notice-${kind}.mig-gate`, {},
+    icon(kind === 'warn' ? 'alert' : 'activity'), message, action);
+}
+
+// pendingList는 아직 결정하지 않은 리뷰어 이름이다.
+function pendingList(m) {
+  const decided = new Set((m.reviews ?? [])
+    .filter((r) => r.decision !== 'comment')
+    .map((r) => r.reviewerId)
+    .filter(Boolean));
+  return (m.reviewers ?? [])
+    .filter((r) => !decided.has(r.userId))
+    .map((r) => r.name || r.userId);
 }
 
 async function changeStatus(id, status, reload) {

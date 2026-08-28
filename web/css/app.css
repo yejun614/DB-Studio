@@ -2392,6 +2392,9 @@ tr.is-destructive td { background: hsl(var(--h-danger) / 0.08); }
 .mig-people-hint { flex-basis: 100%; margin: 0; }
 
 .mig-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+/* 실행 버튼이 없는 까닭을 적는 한 줄. 할 일이 있으면 오른쪽에 붙는다. */
+.mig-gate { margin: 12px 0 0; font-size: 13px; align-items: center; }
+.mig-gate .btn { margin-left: auto; flex: 0 0 auto; }
 .mig-precheck h2, .mig-head h2 { display: flex; align-items: center; gap: 8px; }
 
 .mig-sql-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
