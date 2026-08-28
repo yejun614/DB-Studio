@@ -311,6 +311,9 @@ func (s *Server) routes() {
 	conns.Get("/:id/explore", s.handleExplore)
 	conns.Post("/:id/schema/diff", s.handleSchemaDiff)
 	conns.Get("/:id/schema/ddl", s.handleSchemaDDL)
+	// 설명(주석) 고치기. 실제 DB를 바꾸는 일이므로 계획만 만들고, 리뷰·승인·실행은
+	// 여느 마이그레이션과 같은 길을 탄다.
+	conns.Post("/:id/schema/comments", s.handleSchemaComments)
 	// 구조 화면: 현재(또는 특정 버전) 스키마를 ERD로 본다.
 	// 배치·메모·그룹은 계정별로 저장되므로 저장 경로가 같은 커넥션 아래에 있다.
 	conns.Get("/:id/structure", s.handleGetStructure)

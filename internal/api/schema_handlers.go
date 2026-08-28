@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 
 	"dbstudio/internal/dbx"
+	"dbstudio/internal/migrate"
 	"dbstudio/internal/model"
 	"dbstudio/internal/schema"
 	"dbstudio/internal/store"
@@ -24,6 +26,138 @@ const introspectTimeout = 90 * time.Second
 // 실패 시 *fiber.Error를 반환한다. fail() 같은 "응답을 직접 쓰는" 헬퍼를 여기서
 // 쓰면 안 된다 — 그것들은 성공적으로 응답을 쓴 뒤 nil을 반환하므로 호출부의
 // err != nil 검사를 통과해버리고, 결과적으로 nil 커넥션으로 진행하게 된다.
+// handleSchemaComments는 테이블·컬럼 설명(주석)을 고치는 마이그레이션 계획을 만든다.
+//
+// 스키마 화면에서 설명을 바로 고쳐 실행하지 않는 이유: 설명은 DB에 저장되는 구조의
+// 일부이고(COMMENT), 그것을 바꾸는 것은 DDL이다. 이 앱에서 DDL은 언제나 계획 →
+// 리뷰 → 승인 → 실행을 거친다. 설명이라고 그 길을 비켜 가게 하면, 승인 없이 DB를
+// 바꾸는 문이 하나 더 생긴다 — 그것이 이 앱이 막으려는 바로 그 상황이다.
+//
+// 대신 사람이 하는 일은 줄인다: 여러 줄을 한 번에 고쳐 한 계획으로 만든다.
+func (s *Server) handleSchemaComments(c *fiber.Ctx) error {
+	var body struct {
+		Title string `json:"title"`
+		Items []struct {
+			Namespace string `json:"namespace"`
+			Table     string `json:"table"`
+			Column    string `json:"column"`
+			Comment   string `json:"comment"`
+		} `json:"items"`
+	}
+	if err := c.BodyParser(&body); err != nil {
+		return fail(c, fiber.StatusBadRequest, "bad_request", "요청 본문을 해석할 수 없습니다")
+	}
+	if len(body.Items) == 0 {
+		return fail(c, fiber.StatusBadRequest, "no_changes", "고칠 설명이 없습니다")
+	}
+
+	conn, adapter, err := s.resolveSchemaAccess(c, c.Params("id"))
+	if err != nil {
+		return err
+	}
+	// 계획을 만드는 것 자체는 실행이 아니지만 실행 대상을 정의하는 행위다.
+	// ERD에서 마이그레이션을 만들 때와 같은 등급을 요구한다.
+	d, err := s.requireLevel(c, conn.ID, model.LevelMigrate)
+	if err != nil {
+		return err
+	}
+	if !d.Allowed {
+		return fail(c, fiber.StatusForbidden, "forbidden", d.Reason)
+	}
+
+	current, ierr := s.introspectConnection(c, conn, adapter)
+	if ierr != nil {
+		return failDetail(c, fiber.StatusBadGateway, "introspect_failed",
+			"대상 DB의 스키마를 읽지 못했습니다", ierr.Error())
+	}
+
+	// 고친 결과를 담을 사본. 원본을 직접 고치면 diff의 "이전"이 사라진다.
+	next := current.Clone()
+	changed := 0
+	for _, it := range body.Items {
+		key := strings.ToLower(strings.TrimSpace(it.Table))
+		if ns := strings.TrimSpace(it.Namespace); ns != "" {
+			key = strings.ToLower(ns + "." + it.Table)
+		}
+		tbl := next.Table(key)
+		if tbl == nil {
+			return fail(c, fiber.StatusBadRequest, "table_not_found",
+				fmt.Sprintf("테이블 %s 을(를) 찾을 수 없습니다. 화면을 새로 고쳐 주세요", key))
+		}
+		comment := strings.TrimSpace(it.Comment)
+		if col := strings.TrimSpace(it.Column); col != "" {
+			target := tbl.Column(col)
+			if target == nil {
+				return fail(c, fiber.StatusBadRequest, "column_not_found",
+					fmt.Sprintf("%s 에 컬럼 %s 이(가) 없습니다. 화면을 새로 고쳐 주세요", key, col))
+			}
+			if target.Comment == comment {
+				continue
+			}
+			target.Comment = comment
+			changed++
+			continue
+		}
+		if tbl.Comment == comment {
+			continue
+		}
+		tbl.Comment = comment
+		changed++
+	}
+	if changed == 0 {
+		return fail(c, fiber.StatusBadRequest, "no_changes", "바뀐 설명이 없습니다")
+	}
+
+	diff := schema.Diff(current, next)
+	if diff.IsEmpty() {
+		return fail(c, fiber.StatusBadRequest, "no_changes", "바뀐 설명이 없습니다")
+	}
+	plan := schema.BuildPlan(string(conn.Kind), diff)
+	if len(plan.Up) == 0 {
+		// SQLite처럼 주석을 저장하지 않는 DB가 여기로 온다. 계획을 만들어 두면
+		// 아무것도 하지 않는 마이그레이션이 승인 대기 목록에 남는다.
+		return failDetail(c, fiber.StatusBadRequest, "no_statements",
+			"이 DB에서는 설명을 저장할 수 없습니다",
+			strings.Join(plan.Warnings, " / "))
+	}
+
+	u := currentUser(c)
+	latest, err := s.st.LatestSchemaVersion(c.Context(), conn.ID, false)
+	if err != nil {
+		return err
+	}
+	// 기준 버전은 지금 구조가 그 버전과 같을 때만 채운다(마이그레이션 생성과 같은 규칙).
+	var fromID *int64
+	if latest != nil && latest.Fingerprint == current.Fingerprint() {
+		fromID = &latest.ID
+	}
+
+	title := strings.TrimSpace(body.Title)
+	if title == "" {
+		title = fmt.Sprintf("설명 수정 %d건", changed)
+	}
+	mig, err := s.st.CreateMigration(c.Context(), store.CreateMigrationParams{
+		ConnectionID: conn.ID, Title: title,
+		FromVersion: fromID, BaseFinger: current.Fingerprint(),
+		TargetSchema: next, Plan: plan, Diff: diff, CreatedBy: u.ID,
+	})
+	if err != nil {
+		return err
+	}
+	s.audit(c, store.AuditParams{
+		Action: "schema.comments.plan", TargetType: "migration", TargetID: mig.ID,
+		Detail: map[string]any{
+			"connection": conn.Name, "title": title,
+			"changes": changed, "statements": len(plan.Up),
+		},
+	})
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
+		"migration":         mig,
+		"connection":        connSummary(conn),
+		"requiredApprovals": migrate.RequiredApprovals(conn, mig.DestructiveCount),
+	})
+}
+
 func (s *Server) resolveSchemaAccess(c *fiber.Ctx, connID string) (*model.Connection, dbx.Adapter, error) {
 	conn, err := s.st.GetConnection(c.Context(), connID)
 	if errors.Is(err, store.ErrNotFound) {
