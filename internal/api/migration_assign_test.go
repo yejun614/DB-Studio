@@ -183,8 +183,9 @@ func TestOnlyDesignatedReviewersDecide(t *testing.T) {
 	member(t, e, "bob", conn.ID, model.LevelMigrate)
 
 	alice := loginAs(t, e, "alice")
+	// 담당자는 리뷰어가 될 수 없으므로 리뷰어만 정한다(이 시험의 주제는 지정 여부다).
 	status, body := alice.do("PUT", "/api/v1/migrations/"+mig.ID+"/assignment",
-		map[string]any{"assigneeId": dana.ID, "reviewerIds": []string{dana.ID}})
+		map[string]any{"assigneeId": "", "reviewerIds": []string{dana.ID}})
 	if status != 200 {
 		t.Fatalf("지정 = %d: %v", status, body)
 	}
@@ -238,6 +239,95 @@ func TestOnlyDesignatedReviewersDecide(t *testing.T) {
 	}
 }
 
+// 담당자는 리뷰어가 될 수 없다.
+//
+// 자기가 끌고 가는 계획을 자기가 검토하는 것은 검토가 아니다. 승인 수만으로는 막지
+// 못한다 — 한 명만 필요한 계획에서는 담당자가 스스로 승인하고 끝낼 수 있다.
+func TestAssigneeCannotBeReviewer(t *testing.T) {
+	e, conn, mig := assignEnv(t)
+	dana := member(t, e, "dana", conn.ID, model.LevelMigrate)
+	erin := member(t, e, "erin", conn.ID, model.LevelMigrate)
+	alice := loginAs(t, e, "alice")
+
+	status, body := alice.do("PUT", "/api/v1/migrations/"+mig.ID+"/assignment",
+		map[string]any{"assigneeId": dana.ID, "reviewerIds": []string{dana.ID}})
+	if status != 400 {
+		t.Fatalf("자기 검토 지정 = %d: %v", status, body)
+	}
+	if body["error"] != "self_review" {
+		t.Errorf("사유 = %v", body["error"])
+	}
+	// 거절된 지정은 아무것도 저장하지 않아야 한다. 절반만 남으면 화면과 저장이
+	// 어긋난 채로 남는다.
+	got, err := e.st.GetMigration(context.Background(), mig.ID, false)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.AssigneeID != "" || len(got.Reviewers) != 0 {
+		t.Errorf("거절된 지정이 저장되었습니다: assignee=%q reviewers=%d",
+			got.AssigneeID, len(got.Reviewers))
+	}
+
+	// 다른 사람을 리뷰어로 두면 통과한다.
+	if status, body := alice.do("PUT", "/api/v1/migrations/"+mig.ID+"/assignment",
+		map[string]any{"assigneeId": dana.ID, "reviewerIds": []string{erin.ID}}); status != 200 {
+		t.Fatalf("정상 지정 = %d: %v", status, body)
+	}
+}
+
+// 슈퍼 어드민은 리뷰어로 지정되지 않아도 승인·반려할 수 있다.
+//
+// 지정한 리뷰어가 자리를 비운 사이 계획이 영원히 멈춰 있으면, 사람들은 이 흐름을
+// 우회하는 다른 길(콘솔에서 직접 실행)을 찾는다. 막다른 길을 만들지 않는 것이
+// 규칙을 지키게 하는 방법이다.
+func TestSuperadminReviewsWithoutDesignation(t *testing.T) {
+	e, conn, mig := assignEnv(t)
+	dana := member(t, e, "dana", conn.ID, model.LevelMigrate)
+	erin := member(t, e, "erin", conn.ID, model.LevelMigrate)
+
+	// alice(슈퍼 어드민)가 dana 를 리뷰어로 지정한다. alice 는 리뷰어가 아니다.
+	alice := loginAs(t, e, "alice")
+	if status, body := alice.do("PUT", "/api/v1/migrations/"+mig.ID+"/assignment",
+		map[string]any{"assigneeId": erin.ID, "reviewerIds": []string{dana.ID}}); status != 200 {
+		t.Fatalf("지정 = %d: %v", status, body)
+	}
+
+	// 지정되지 않은 일반 사용자는 여전히 막힌다.
+	erinC := loginAs(t, e, "erin")
+	if status, _ := erinC.do("POST", "/api/v1/migrations/"+mig.ID+"/review",
+		map[string]any{"decision": "approved"}); status != 403 {
+		t.Errorf("지정되지 않은 사용자의 승인 = %d, 403이어야 합니다", status)
+	}
+
+	// 슈퍼 어드민은 통과한다.
+	status, body := alice.do("POST", "/api/v1/migrations/"+mig.ID+"/review",
+		map[string]any{"decision": "approved", "comment": "리뷰어가 자리를 비워 대신 봅니다"})
+	if status != 200 {
+		t.Fatalf("슈퍼 어드민 승인 = %d: %v", status, body)
+	}
+	got, err := e.st.GetMigration(context.Background(), mig.ID, false)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Status != store.MigrationApproved {
+		t.Errorf("상태 = %q, 기대 approved", got.Status)
+	}
+	// 누가 결정했는지는 남아야 한다.
+	if len(got.Reviews) != 1 || got.Reviews[0].ReviewerID != aliceID(t, e) {
+		t.Errorf("리뷰 기록 = %+v", got.Reviews)
+	}
+}
+
+// aliceID는 시험 환경의 슈퍼 어드민 id다.
+func aliceID(t *testing.T, e *testEnv) string {
+	t.Helper()
+	u, err := e.st.GetUserByUsername(context.Background(), "alice")
+	if err != nil {
+		t.Fatalf("alice 조회: %v", err)
+	}
+	return u.ID
+}
+
 // 반려된 계획은 리뷰어를 다시 지정하면 다시 리뷰로 들어가고, 그때 지난 결정은 지워진다.
 //
 // 지우지 않으면 반려가 남아 있어, 새 검토가 들어오는 즉시 다시 반려로 돌아간다.
@@ -246,8 +336,9 @@ func TestReassignReopensRejectedReview(t *testing.T) {
 	dana := member(t, e, "dana", conn.ID, model.LevelMigrate)
 
 	alice := loginAs(t, e, "alice")
+	// 담당자는 리뷰어가 될 수 없으므로 여기서는 리뷰어만 정한다.
 	if status, body := alice.do("PUT", "/api/v1/migrations/"+mig.ID+"/assignment",
-		map[string]any{"assigneeId": dana.ID, "reviewerIds": []string{dana.ID}}); status != 200 {
+		map[string]any{"assigneeId": "", "reviewerIds": []string{dana.ID}}); status != 200 {
 		t.Fatalf("지정 = %d: %v", status, body)
 	}
 
@@ -266,7 +357,7 @@ func TestReassignReopensRejectedReview(t *testing.T) {
 
 	// 다시 부탁한다.
 	if status, body := alice.do("PUT", "/api/v1/migrations/"+mig.ID+"/assignment",
-		map[string]any{"assigneeId": dana.ID, "reviewerIds": []string{dana.ID}}); status != 200 {
+		map[string]any{"assigneeId": "", "reviewerIds": []string{dana.ID}}); status != 200 {
 		t.Fatalf("재지정 = %d: %v", status, body)
 	}
 	got, err = e.st.GetMigration(context.Background(), mig.ID, false)

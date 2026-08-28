@@ -568,7 +568,14 @@ func (s *Server) handleReviewMigration(c *fiber.Ctx) error {
 	// 시간에 걸면 안 됩니다"라고 적는 길까지 막으면, 그 말은 앱 밖으로 나가고
 	// 계획 옆에 남지 않는다. 반면 승인은 책임이 따르는 결정이므로, 부탁받은
 	// 사람의 것이어야 "누구에게 물어봤고 누가 답했는가"가 이력에서 이어진다.
-	if decision != store.ReviewComment && !isDesignatedReviewer(mig, u.ID) {
+	// 승인·반려는 리뷰어로 지정된 사람의 일이다. 의견은 누구나 남길 수 있다.
+	//
+	// 슈퍼 어드민은 예외다. 지정한 리뷰어가 휴가를 갔거나 계정이 잠긴 상황에서
+	// 계획이 영원히 멈춰 있으면, 사람들은 이 흐름을 우회하는 다른 길(콘솔에서 직접
+	// 실행)을 찾는다. 막다른 길을 만들지 않는 것이 규칙을 지키게 하는 방법이다.
+	// 누가 결정했는지는 리뷰 기록과 감사 로그에 그대로 남는다.
+	if decision != store.ReviewComment && !isDesignatedReviewer(mig, u.ID) &&
+		u.Role != model.RoleSuperadmin {
 		return fail(c, fiber.StatusForbidden, "not_reviewer",
 			"리뷰어로 지정된 사람만 승인·반려할 수 있습니다. 의견은 누구나 남길 수 있습니다")
 	}
@@ -950,6 +957,22 @@ func (s *Server) handleSetMigrationAssignment(c *fiber.Ctx) error {
 		}
 		seen[id] = true
 		reviewers = append(reviewers, id)
+	}
+
+	// 담당자는 리뷰어가 될 수 없다.
+	//
+	// 자기가 끌고 가는 계획을 자기가 검토하는 것은 검토가 아니다. 승인 수만으로는
+	// 이것을 막지 못한다 — 한 명만 필요한 계획에서는 담당자가 스스로 승인하고 끝낼 수
+	// 있고, 그러면 리뷰 단계는 이름만 남는다. 화면에서도 고를 수 없게 해 두었지만,
+	// 화면을 거치지 않는 요청이 있으므로 여기서 다시 본다.
+	if assignee != "" && seen[assignee] {
+		who := assignee
+		if target, err := s.st.GetUser(c.Context(), assignee); err == nil {
+			who = displayName(target)
+		}
+		return fail(c, fiber.StatusBadRequest, "self_review",
+			fmt.Sprintf("%s 은(는) 담당자이므로 리뷰어로 지정할 수 없습니다. "+
+				"담당자를 바꾸거나 다른 사람에게 검토를 부탁하세요", who))
 	}
 
 	u := currentUser(c)
