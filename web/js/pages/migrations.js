@@ -342,17 +342,35 @@ function openAssignDialog(m, reload) {
   })();
 }
 
+// myDecision은 내가 이 계획에 남긴 결정이다(없으면 null).
+//
+// 한 사람의 결정은 하나로 남는다(서버가 이전 결정을 대신한다). 그래서 "지금 내가
+// 무엇으로 남겨 두었는가"를 화면이 말해 줄 수 있다.
+function myDecision(m) {
+  const me = state.user?.id;
+  if (!me) return null;
+  const mine = (m.reviews ?? [])
+    .filter((r) => r.reviewerId === me && r.decision !== 'comment')
+    .pop();
+  return mine?.decision ?? null;
+}
+
 function actionBar(m, res, precheckBox, reload) {
   const buttons = [];
 
   // 리뷰는 리뷰어를 지정하면 시작된다. 따로 "리뷰 요청"을 누를 자리를 두지 않는다 —
   // 누구에게도 부탁하지 않은 채 열려 있는 리뷰는 아무도 자기 일로 여기지 않는다.
   // 반려된 계획도 리뷰어를 다시 지정하면 다시 리뷰로 들어간다.
-  if (m.status === 'in_review') {
+  //
+  // 승인됨·반려됨에서도 검토 창을 연다. 실행 전이라면 마음을 바꿀 수 있어야 하고
+  // (반려를 잘못 눌렀거나, 지적한 것이 그 자리에서 설명된 경우가 있다), 그 길이
+  // 없으면 되돌리는 방법은 리뷰 기록을 통째로 지우는 것뿐이다.
+  if (m.status === 'in_review' || m.status === 'approved' || m.status === 'rejected') {
+    const mine = myDecision(m);
     buttons.push(h('button.btn', {
       type: 'button',
       onclick: () => openReviewDialog(m, res, reload),
-    }, icon('check'), '검토하기'));
+    }, icon('check'), mine ? '검토 바꾸기' : '검토하기'));
   }
   if (m.status === 'approved') {
     buttons.push(h('button.btn', {
@@ -535,6 +553,7 @@ function reviewsPanel(m, res, reload) {
       '승인·반려는 ', h('b', {}, '리뷰어로 지정된 사람'), '만 남길 수 있습니다. ',
       '의견은 누구나 남길 수 있습니다.',
       ' 담당자는 자기가 맡은 계획을 승인할 수 없습니다.',
+      ' 실행 전이라면 결정을 바꿀 수 있습니다.',
       res.requiredApprovals > 1
         ? ' 운영 DB이거나 파괴적 변경이 포함되어 2명의 승인이 필요합니다.'
         : ''),
@@ -622,11 +641,22 @@ function openReviewDialog(m, res, reload) {
     }
   };
 
+  const mine = myDecision(m);
+  const mineLabel = { approved: '승인', rejected: '반려' }[mine] ?? '';
+
   openModal({
-    title: '마이그레이션 검토',
+    title: mine ? '검토 바꾸기' : '마이그레이션 검토',
     width: 560,
     body: () => [
       h('p.modal-message', {}, `"${m.title}" 을 ${isReviewer ? '검토합니다' : '봅니다'}.`),
+      // 지금 내가 무엇으로 남겨 두었는지 먼저 말한다. 그것을 모르면 "바꾸는 것"인지
+      // "처음 남기는 것"인지 알 수 없고, 같은 결정을 한 번 더 누르게 된다.
+      mine
+        ? h('p.notice.notice-info', {}, icon('activity'),
+          h('span', {},
+            '지금 이 계획에 ', h('b', {}, mineLabel), '으로 남겨 두었습니다. ',
+            '다시 고르면 그 결정을 대신합니다.'))
+        : null,
       h('dl.mig-meta', {},
         metaRow('변경', `${m.diff?.changes?.length ?? 0}건`),
         metaRow('파괴적 변경', `${m.destructiveCount}건`),
