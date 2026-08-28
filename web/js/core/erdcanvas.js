@@ -275,12 +275,6 @@ export class ErdCanvas {
     g.appendChild(svgEl('rect', {
       class: 'erd-card-bg', width: geom.w, height: geom.h, rx: 6,
     }));
-    if (holder) {
-      g.appendChild(svgEl('rect', {
-        class: 'erd-card-holder', width: geom.w, height: geom.h, rx: 6,
-        stroke: holder.color,
-      }));
-    }
     g.appendChild(svgEl('rect', { class: 'erd-card-head', width: geom.w, height: HEAD_H, rx: 6 }));
 
     // 아이콘이 지정되어 있으면 이름 왼쪽에 붙이고 제목을 그만큼 민다.
@@ -334,6 +328,26 @@ export class ErdCanvas {
           class: 'erd-col-more', x: 26, y: HEAD_H + MAX_VISIBLE_ROWS * ROW_H + 14,
         }, `… ${count - MAX_VISIBLE_ROWS}개 더`));
       }
+    }
+
+    // 테두리는 **맨 위에** 얹는다.
+    //
+    // 카드 배경(erd-card-bg)에 테두리를 그리면 그 위에 덮이는 머리띠(erd-card-head)가
+    // 테두리의 안쪽 절반을 가린다. 선은 가장자리를 가운데 두고 그려지기 때문이다.
+    // 그래서 고른 카드의 하이라이트가 제목 줄에서만 얇아 보였다.
+    //
+    // 언제나 그려 두고 색은 CSS가 정한다(고르지 않았으면 stroke:none). 고른 순간에만
+    // 요소를 만들면, 그림으로 내보낼 때 클래스를 떼어 원래 모습을 계산하는 방법이
+    // 통하지 않는다 — 그 요소는 여전히 남아 색이 박힌다.
+    g.appendChild(svgEl('rect', {
+      class: 'erd-card-outline', width: geom.w, height: geom.h, rx: 6,
+    }));
+    if (holder) {
+      // 다른 참여자가 고른 표시도 같은 이유로 맨 위다.
+      g.appendChild(svgEl('rect', {
+        class: 'erd-card-holder', width: geom.w, height: geom.h, rx: 6,
+        stroke: holder.color,
+      }));
     }
 
     g.addEventListener('pointerdown', (e) => this.onCardPointerDown(e, key, geom));

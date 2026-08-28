@@ -38,7 +38,7 @@ const MAX_PIXELS = 16000;
 // 관계선의 투명한 굵은 선(누르기 쉬우라고 겹쳐 둔 것)도 보이지는 않지만 파일만
 // 키우고, 벡터 편집기에서 열면 정체를 알 수 없는 도형으로 걸린다.
 const CHROME_ONLY = [
-  'erd-group-grip', 'erd-note-grip', 'erd-link-hit',
+  'erd-group-grip', 'erd-note-grip', 'erd-link-hit', 'erd-card-outline',
   // 다른 참여자가 고르고 있다는 표시와 커서, 빈 화면 안내문.
   'erd-card-holder', 'erd-cursor', 'erd-hint',
 ];

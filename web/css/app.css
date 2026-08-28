@@ -1867,10 +1867,14 @@ option { background: var(--surface); color: var(--text); }
   stroke: var(--border);
   stroke-width: 1;
 }
-.erd-card-g.is-selected .erd-card-bg { stroke: var(--chart-1); stroke-width: 2; }
+/* 고른 카드의 테두리. 카드 배경이 아니라 맨 위에 얹은 사각형에 그린다 —
+ * 배경에 그리면 그 위에 덮이는 머리띠가 테두리의 안쪽 절반을 가려, 제목 줄에서만
+ * 하이라이트가 얇아 보인다. */
+.erd-card-outline { fill: none; stroke: none; pointer-events: none; }
+.erd-card-g.is-selected .erd-card-outline { stroke: var(--chart-1); stroke-width: 2; }
 /* 여럿을 고른 상태에서 인스펙터가 보여주는 것(마지막에 고른 것)만 더 진하게.
  * 표시가 없으면 오른쪽 패널이 셋 중 어느 것을 말하는지 알 수 없다. */
-.erd-card-g.is-primary .erd-card-bg { stroke-width: 3; }
+.erd-card-g.is-primary .erd-card-outline { stroke-width: 3; }
 /* 범위 선택 사각형. 채우기를 옅게 두는 이유는 훑는 동안 그 아래 카드가 보여야
  * 무엇이 들어오는지 알 수 있기 때문이다. */
 .erd-band {
