@@ -8,6 +8,7 @@ import * as router from './core/router.js';
 import * as theme from './core/theme.js';
 import { avatarNode } from './core/avatars.js';
 import * as sidebar from './core/sidebar.js';
+import { bindPalette, openPalette } from './core/palette.js';
 import { renderLogin, renderPasswordChange, renderChangePasswordPage } from './pages/login.js';
 import { renderDashboard } from './pages/dashboard.js';
 import { renderUsers } from './pages/users.js';
@@ -182,6 +183,21 @@ const NAV = [
   },
 ];
 
+// paletteButton은 명령 팔레트로 가는 눈에 보이는 입구다.
+//
+// 단축키만 두지 않는 이유: 단축키는 아는 사람만 쓴다. 사이드바 맨 위에 검색 상자
+// 모양으로 두면, 그것을 눌러 본 사람이 그 자리에서 단축키도 알게 된다.
+function paletteButton() {
+  const mac = /mac/i.test(navigator.userAgent);
+  return h('button.palette-open', {
+    type: 'button',
+    onclick: () => openPalette(NAV, paletteOptions()),
+  },
+  icon('list', 15),
+  h('span', {}, '찾기'),
+  h('kbd', {}, mac ? '⌘K' : 'Ctrl K'));
+}
+
 // versionLine은 사이드바 아래에 지금 돌고 있는 버전을 적는다.
 //
 // 값을 /meta 에서 가져오는 이유: 셸을 그리기 전에 이미 한 번 받아 두는 응답이다.
@@ -230,6 +246,7 @@ function buildShell() {
     sidebar.createTopbar(),
     h('aside#sidebar.sidebar', {},
       h('a.brand', { href: '/' }, icon('database', 22), h('span', {}, 'DB Studio')),
+      paletteButton(),
       nav,
       h('div.sidebar-foot', {},
         // 칩 자체가 프로필로 가는 입구다. 프로필을 메뉴에 따로 두면 항목 하나를
@@ -256,8 +273,69 @@ function buildShell() {
   mount(appRoot, shell);
   appRoot.classList.remove('app-loading');
   sidebar.bindGlobalHandlers();
+  bindCommandPalette();
   router.setOutlet(outlet);
   return outlet;
+}
+
+// 명령 팔레트를 연결한다.
+//
+// 셸을 다시 만들 때(로그아웃 후 재로그인) 이전 연결을 버린다. 버리지 않으면 로그인마다
+// 리스너가 하나씩 쌓여 Ctrl+K 한 번에 팔레트가 여러 번 토글된다(= 열리지 않는다).
+let unbindPalette = null;
+
+function bindCommandPalette() {
+  unbindPalette?.();
+  unbindPalette = bindPalette(NAV, paletteOptions());
+}
+
+// paletteOptions는 팔레트가 바깥 세계와 닿는 지점이다.
+//
+// 동작 목록에 되돌릴 수 없는 것을 넣지 않는다. 팔레트는 눈으로 확인하지 않고 Enter를
+// 누르는 곳이라, 지우는 일이 여기 있으면 손이 미끄러지는 자리가 된다. 로그아웃은
+// 예외로 둔다 — 되돌릴 수 없지만 잃는 것이 없고, 자주 찾는 동작이다.
+function paletteOptions() {
+  return {
+    navigate: (path) => router.navigate(path),
+    onPopup: () => toggleAssistantPopup(),
+    actions: [
+      {
+        id: 'assistant',
+        label: 'AI 어시스턴트 열기 / 닫기',
+        icon: 'sparkles',
+        keywords: 'ai assistant 어시스턴트 물어보기',
+        run: () => toggleAssistantPopup(),
+      },
+      {
+        id: 'theme.light',
+        label: '밝은 테마',
+        icon: 'sun',
+        keywords: 'theme light 라이트 밝게',
+        run: () => theme.applyMode('light'),
+      },
+      {
+        id: 'theme.dark',
+        label: '어두운 테마',
+        icon: 'moon',
+        keywords: 'theme dark 다크 어둡게',
+        run: () => theme.applyMode('dark'),
+      },
+      {
+        id: 'theme.system',
+        label: '테마: 시스템 설정 따르기',
+        icon: 'monitor',
+        keywords: 'theme system 시스템',
+        run: () => theme.applyMode('system'),
+      },
+      {
+        id: 'logout',
+        label: '로그아웃',
+        icon: 'logout',
+        keywords: 'logout signout 나가기',
+        run: () => logout(),
+      },
+    ],
+  };
 }
 
 // userChip은 사이드바 하단의 사용자 표시이자 프로필 화면 입구다.

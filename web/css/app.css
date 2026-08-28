@@ -1782,6 +1782,69 @@ option { background: var(--surface); color: var(--text); }
 }
 .schema-edit-bar .btn:nth-last-child(2) { margin-left: auto; }
 
+/* 사이드바의 찾기 단추. 검색 상자처럼 보이게 두어 무엇을 하는 것인지 짐작하게 한다. */
+.palette-open {
+  display: flex; align-items: center; gap: 8px;
+  margin: 0 12px 10px; padding: 7px 10px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--bg-alt); color: var(--text-mute);
+  font-size: 13px; font-family: inherit; cursor: pointer;
+}
+.palette-open:hover { color: var(--text); border-color: var(--text-mute); }
+.palette-open span { flex: 1; text-align: left; }
+.palette-open kbd {
+  padding: 1px 5px; border: 1px solid var(--border); border-radius: 4px;
+  background: var(--surface); font-size: 10.5px; font-family: var(--mono);
+}
+
+/* 명령 팔레트.
+ *
+ * 화면 가운데가 아니라 위쪽에 띄운다. 목록이 길어질 때 아래로 자라야 하고,
+ * 사람의 눈은 이미 위(주소창·검색)에서 이런 상자를 기다리기 때문이다. */
+.palette-overlay {
+  position: fixed; inset: 0; z-index: 200;
+  display: flex; justify-content: center; align-items: flex-start;
+  padding: 12vh 16px 16px;
+  background: hsl(0 0% 0% / 0.45);
+}
+.palette {
+  width: min(640px, 100%);
+  display: flex; flex-direction: column;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 24px 64px hsl(0 0% 0% / 0.45);
+  overflow: hidden;
+}
+.palette-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 14px; border-bottom: 1px solid var(--border-soft);
+  color: var(--text-mute);
+}
+.palette-input {
+  flex: 1; min-width: 0;
+  border: none; background: none; outline: none;
+  color: var(--text); font-size: 15px; font-family: inherit;
+}
+.palette-list { max-height: 52vh; overflow-y: auto; padding: 6px; }
+.palette-item {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 8px 10px; border: none; border-radius: var(--radius-sm);
+  background: none; color: var(--text); text-align: left; cursor: pointer;
+  font-size: 13.5px; font-family: inherit;
+}
+/* 고른 줄은 마우스 없이 움직이는 사람에게 유일한 위치 표시다. */
+.palette-item.is-cursor { background: var(--surface-2); }
+.palette-item:hover { background: var(--surface-2); }
+.palette-icon { display: inline-flex; color: var(--text-mute); flex: none; }
+.palette-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.palette-hint { color: var(--text-mute); font-size: 11.5px; font-family: var(--mono); flex: none; }
+.palette-section { color: var(--text-mute); font-size: 11px; flex: none; }
+.palette-empty { margin: 0; padding: 18px; text-align: center; color: var(--text-mute); }
+.palette-foot {
+  padding: 8px 14px; border-top: 1px solid var(--border-soft);
+  color: var(--text-mute); font-size: 11.5px;
+}
+
 .erd-tool-group { display: flex; align-items: center; gap: 6px; }
 /* 지금 켜진 마우스 도구. 도구 막대에서 눌린 상태가 보여야 "왜 끌었는데 화면이
  * 안 움직이나"를 묻지 않는다. */
