@@ -590,7 +590,8 @@ class Editor {
       // 자주 바뀌는 상태이고, 그것을 모르면 캔버스에서 하는 모든 동작이 불안해진다.
       h('div.erd-tool-group', {},
         this.mouseToolBtn('cursor', 'select', '선택 도구 (V) — 빈 곳을 끌어 여러 개 고르기'),
-        this.mouseToolBtn('move', 'pan', '화면 이동 도구 (H) — 빈 곳을 끌어 화면 옮기기'),
+        this.mouseToolBtn('move', 'pan',
+          '화면 이동 도구 (H) — 끌면 화면이 움직입니다. 카드는 눌러서 고르기만 됩니다'),
       ),
       // 되돌리기는 그 다음이다. 실수를 되돌리는 손은 급하다.
       h('div.erd-tool-group', {},

@@ -1870,6 +1870,21 @@ option { background: var(--surface); color: var(--text); }
  * 화면이 움직이는지 범위가 그려지는지 알게 된다. */
 .erd-canvas.is-select { cursor: crosshair; }
 .erd-canvas.is-select:active { cursor: crosshair; }
+/* 화면 이동 도구에서는 무엇을 잡아도 화면이 움직인다. 카드 위에서도 커서를 손으로
+ * 바꾼다 — move 커서는 "이것을 옮길 수 있다"는 약속인데, 그 도구에서는 지켜지지 않는다. */
+.erd-canvas.is-pan .erd-card-g,
+.erd-canvas.is-pan .erd-note-g,
+.erd-canvas.is-pan .erd-group-g,
+.erd-canvas.is-pan .erd-note-grip,
+.erd-canvas.is-pan .erd-group-grip,
+.erd-canvas.is-space-pan .erd-card-g,
+.erd-canvas.is-space-pan .erd-note-g,
+.erd-canvas.is-space-pan .erd-group-g,
+.erd-canvas.is-space-pan .erd-note-grip,
+.erd-canvas.is-space-pan .erd-group-grip { cursor: grab; }
+.erd-canvas.is-pan:active .erd-card-g,
+.erd-canvas.is-space-pan:active .erd-card-g { cursor: grabbing; }
+
 /* 스페이스바를 누르고 있는 동안은 도구와 무관하게 화면 이동이다. 커서도 그렇게 말한다. */
 .erd-canvas.is-space-pan, .erd-canvas.is-select.is-space-pan { cursor: grab; }
 .erd-canvas.is-space-pan:active, .erd-canvas.is-select.is-space-pan:active { cursor: grabbing; }

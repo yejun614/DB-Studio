@@ -37,6 +37,12 @@ export class ErdCanvas {
     // tool은 **빈 곳을 끌 때** 무엇을 할지다: 'pan'이면 화면 이동, 'select'면 범위 선택.
     // 기본은 pan이다 — 이 값을 바꾸지 않는 화면(구조)은 지금까지와 똑같이 움직인다.
     this.tool = 'pan';
+    // hasToolPicker는 "이 화면에 마우스 도구 단추가 있는가"다.
+    //
+    // 없는 화면(구조)에서 tool은 그냥 기본값 'pan'일 뿐, 사람이 고른 것이 아니다.
+    // 그 둘을 구분하지 않으면 도구를 고른 적도 없는 화면에서 카드가 움직이지 않게
+    // 된다 — 구조 화면은 배치를 손으로 정리하는 곳이다.
+    this.hasToolPicker = false;
     // spaceHeld는 스페이스바를 누르고 있는 동안 켜진다. 그동안은 도구와 무관하게
     // 화면 이동이다 — 그림 도구들의 공통 관례이고, 도구를 바꾸고 되돌리는 두 번의
     // 클릭보다 손이 덜 움직인다.
@@ -91,9 +97,12 @@ export class ErdCanvas {
   // 도구를 캔버스가 기억하지 않고 화면이 정해 주는 이유: 어느 도구가 켜져 있는지를
   // 도구 막대가 보여줘야 하고, 그 선택은 사람마다 저장된다(localStorage).
   setTool(tool) {
+    // 이 함수를 부른다는 것은 화면에 도구 단추가 있다는 뜻이다.
+    this.hasToolPicker = true;
     this.tool = tool === 'select' ? 'select' : 'pan';
     // 커서가 도구를 말해 주지 않으면, 끌어 보고서야 무엇이 일어나는지 알게 된다.
     this.svg.classList.toggle('is-select', this.tool === 'select');
+    this.svg.classList.toggle('is-pan', this.tool === 'pan');
   }
 
   // setMarks는 화면 쪽이 들고 있는 선택 목록을 그대로 받는다.
@@ -692,6 +701,15 @@ export class ErdCanvas {
     };
   }
 
+  // panDrag는 "지금 무엇을 잡든 화면이 움직이는가"다.
+  //
+  // 화면 이동 도구를 고른 사람은 "당분간 배치는 건드리지 않겠다"고 말한 것이다.
+  // 카드를 잡아도 카드가 아니라 화면이 움직인다 — 고르는 것(속성 보기)은 그대로
+  // 되므로, 읽는 동안 실수로 배치가 흐트러지는 일이 없어진다.
+  get panDrag() {
+    return this.spaceHeld || (this.hasToolPicker && this.tool === 'pan');
+  }
+
   // canPick은 "여럿을 고를 수 있는가"다. 고르는 것은 편집이 아니므로 읽기 전용
   // 참여자도 할 수 있다 — 읽는 사람도 "이 넷이 한 덩어리"를 짚어 볼 수 있어야 한다.
   get canPick() {
@@ -834,6 +852,11 @@ export class ErdCanvas {
     this.svg.classList.toggle('is-space-pan', on);
   }
 
+  // isPanTool은 화면 이동 도구가 켜져 있는지다(CSS가 커서를 정할 때 쓴다).
+  get isPanTool() {
+    return this.hasToolPicker && this.tool === 'pan';
+  }
+
   // moveLinks는 끌고 있는 카드의 좌표를 반영해 관계선만 다시 그린다.
   //
   // 선 레이어만 갈아 끼우는 이유: 카드까지 다시 그리면 지금 잡고 있는 요소가 버려져
@@ -885,6 +908,11 @@ export class ErdCanvas {
     // 아무 일도 일어나지 않는다.
     this.render();
     if (!this.canEdit) return;
+    // 화면 이동 도구에서는 여기까지(고르기)만 하고 끌기는 화면 이동이다.
+    if (this.panDrag) {
+      this.startPan(e);
+      return;
+    }
     if (this.startMultiDrag(e)) return;
     const p = this.toCanvas(e.clientX, e.clientY);
     const el = this.svg.querySelector(`.erd-card-g[data-key="${cssEscape(key)}"]`);
@@ -911,6 +939,11 @@ export class ErdCanvas {
     }
     this.render();
     if (!this.canEdit) return;
+    // 크기 조절도 배치를 바꾸는 일이라 화면 이동 도구에서는 하지 않는다.
+    if (this.panDrag) {
+      this.startPan(e);
+      return;
+    }
     if (mode !== 'resize' && this.startMultiDrag(e)) return;
     const p = this.toCanvas(e.clientX, e.clientY);
     const el = this.svg.querySelector(`.erd-note-g[data-note="${cssEscape(note.id)}"]`);
@@ -940,6 +973,10 @@ export class ErdCanvas {
     }
     this.render();
     if (!this.canEdit) return;
+    if (this.panDrag) {
+      this.startPan(e);
+      return;
+    }
     if (mode !== 'resize' && this.startMultiDrag(e)) return;
     const p = this.toCanvas(e.clientX, e.clientY);
     const el = this.svg.querySelector(`.erd-group-g[data-group="${cssEscape(group.id)}"]`);
