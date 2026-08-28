@@ -139,6 +139,18 @@
 
 * { box-sizing: border-box; }
 
+/* hidden 은 무엇보다 세다.
+ *
+ * 브라우저의 기본 규칙([hidden] { display: none })은 **작성자 규칙보다 약하다**.
+ * 그래서 .btn { display: inline-flex } 같은 한 줄이 그것을 이기고, hidden=true 로
+ * 감춘 요소가 그대로 보인다. 증상은 늘 "이건 뭐죠?"로 나타난다 — 비어 있는 알약,
+ * 나란히 뜬 두 개의 칸, 눌러도 되는지 알 수 없는 단추.
+ *
+ * 자바스크립트 쪽에서 el.hidden = true 는 "지금은 없는 것"이라는 뜻으로 쓰이므로,
+ * 여기서 그 뜻을 끝까지 지켜 준다. 감춘 것을 CSS로 다시 보이게 하는 규칙은 이
+ * 프로젝트에 없다. */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   padding: 0;
