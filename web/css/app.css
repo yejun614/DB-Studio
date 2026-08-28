@@ -2413,6 +2413,30 @@ tr.is-destructive td { background: hsl(var(--h-danger) / 0.08); }
 .mig-review-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; }
 .mig-review-comment { margin: 6px 0 0; font-size: 13px; white-space: pre-wrap; }
 
+/* 누를 수 있는 리뷰 줄. 겉모습으로 구분하지 않으면 눌러도 안 되는 줄을
+   계속 누르게 되고, 그 다음부터는 아무 줄도 누르지 않게 된다. */
+.mig-review.is-editable { cursor: pointer; transition: background 0.12s, border-color 0.12s; }
+.mig-review.is-editable:hover { background: var(--surface-2); border-color: var(--border); }
+.mig-review.is-editable:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* "고치기" 표시는 줄에 손을 올릴 때만 보인다 — 리뷰를 읽는 데 방해가 되지 않게. */
+.mig-review-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.mig-review-edit .icon { width: 13px; height: 13px; }
+.mig-review.is-editable:hover .mig-review-edit,
+.mig-review.is-editable:focus-visible .mig-review-edit { opacity: 1; }
+/* 대화상자 아래 줄에서 지우기 버튼을 반대쪽으로 밀어 둔다.
+   저장 옆에 붙어 있으면 손이 미끄러지는 자리가 된다. */
+.modal-foot .spacer { flex: 1 1 auto; }
+
+
 .mig-exec code.mig-exec-sql {
   font-size: 11.5px;
   display: block;

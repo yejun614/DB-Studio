@@ -4,7 +4,7 @@ import { state, kindLabel } from '../core/store.js';
 import {
   h, mount, icon, select, input, textarea, spinner, emptyState, pageHeader,
   badge, envBadge, toast, toastError, relativeTime, formatDate, openModal,
-  copyToClipboard,
+  copyToClipboard, field, confirmDialog,
 } from '../core/ui.js';
 import { navigate } from '../core/router.js';
 import { serverDbPicker } from '../core/connpick.js';
@@ -561,21 +561,14 @@ function reviewsPanel(m, res, reload) {
       '승인·반려는 ', h('b', {}, '리뷰어로 지정된 사람'), '만 남길 수 있습니다. ',
       '의견은 누구나 남길 수 있습니다.',
       ' 담당자는 자기가 맡은 계획을 승인할 수 없습니다.',
-      ' 실행 전이라면 결정을 바꿀 수 있습니다.',
+      ' 실행 전이라면 결정을 바꿀 수 있고, 남긴 기록을 눌러 고치거나 지울 수 있습니다.',
       res.requiredApprovals > 1
         ? ' 운영 DB이거나 파괴적 변경이 포함되어 2명의 승인이 필요합니다.'
         : ''),
     pendingReviewers(m),
     reviews.length === 0
       ? h('p.muted', {}, '아직 리뷰가 없습니다')
-      : h('div.mig-reviews', {}, reviews.map((r) => h('div.mig-review', {},
-        h('div.mig-review-head', {},
-          h('strong', {}, r.reviewerName || '알 수 없음'),
-          reviewBadge(r.decision),
-          h('span.muted', {}, relativeTime(r.createdAt)),
-        ),
-        r.comment ? h('p.mig-review-comment', {}, r.comment) : null,
-      ))),
+      : h('div.mig-reviews', {}, reviews.map((r) => reviewRow(m, r, reload))),
     // 반려된 뒤에도 남아 있어야 한다. 여기가 리뷰를 보다가 바로 누르는 자리이고,
     // 마음을 바꾸는 일은 대개 남의 결정을 읽은 직후에 일어난다.
     canReviewNow(m.status)
@@ -584,6 +577,154 @@ function reviewsPanel(m, res, reload) {
       }, icon('check'), myDecision(m) ? '검토 바꾸기' : '검토 의견 남기기')
       : null,
   );
+}
+
+// reviewRow는 리뷰 한 건을 그린다. 내가 손댈 수 있는 것이면 눌러서 고칠 수 있다.
+//
+// 누를 수 있는 줄과 그냥 읽는 줄을 겉모습으로 구분한다(is-editable). 눌러도 아무
+// 일도 일어나지 않는 자리를 손가락 모양으로 가리키면, 다음부터는 아무 줄도 누르지
+// 않게 된다.
+function reviewRow(m, r, reload) {
+  const rights = reviewRights(m, r);
+  const open = () => openReviewEditDialog(m, r, reload);
+  const canOpen = rights.canEdit || rights.canDelete;
+  const body = [
+    h('div.mig-review-head', {},
+      h('strong', {}, r.reviewerName || '알 수 없음'),
+      reviewBadge(r.decision),
+      h('span.muted', {}, relativeTime(r.createdAt)),
+      canOpen ? h('span.mig-review-edit', {}, icon('edit'), '고치기') : null,
+    ),
+    r.comment ? h('p.mig-review-comment', {}, r.comment) : null,
+  ];
+  if (!canOpen) return h('div.mig-review', {}, ...body);
+  return h('div.mig-review.is-editable', {
+    role: 'button',
+    tabindex: '0',
+    title: rights.canEdit ? '눌러서 고치거나 지웁니다' : '눌러서 지웁니다',
+    onclick: open,
+    onkeydown: (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.preventDefault();
+      open();
+    },
+  }, ...body);
+}
+
+// reviewRights는 이 리뷰 한 건을 내가 고칠 수 있는지·지울 수 있는지다.
+//
+// 서버와 같은 규칙을 둔다. 고치기는 본인만(남의 입에 말을 넣을 수는 없다),
+// 지우기는 본인 또는 슈퍼 어드민(아무도 치울 수 없는 부스러기를 남기지 않는다).
+// 실행된 계획의 승인·반려는 실행을 허락한 근거이므로 지울 수 없다.
+function reviewRights(m, r) {
+  const me = state.user?.id;
+  const mine = Boolean(me) && r.reviewerId === me;
+  const superadmin = state.user?.role === 'superadmin';
+  const isDecision = r.decision !== 'comment';
+  return {
+    mine,
+    canEdit: mine,
+    canDelete: (mine || superadmin) && (!isDecision || canReviewNow(m.status)),
+    isDecision,
+  };
+}
+
+// openReviewEditDialog는 리뷰 한 건을 고치거나 지우는 창이다.
+//
+// 결정 자체(승인·반려)는 여기서 바꾸지 않는다. 그것은 승인 수와 상태를 움직이는
+// 일이라 "검토 바꾸기"를 지나야 하고, 여기서 하는 일은 적어 둔 말을 고치거나
+// 기록을 거두는 것이다. 두 창을 섞으면 오타를 고치려다 상태를 바꾸게 된다.
+function openReviewEditDialog(m, r, reload) {
+  const rights = reviewRights(m, r);
+  const label = { approved: '승인', rejected: '반려', comment: '의견' }[r.decision] ?? r.decision;
+  const commentInput = textarea({
+    value: r.comment ?? '',
+    placeholder: rights.isDecision ? '이 결정에 남길 말' : '의견',
+    autofocus: rights.canEdit ? '' : null,
+  });
+
+  const save = async (close) => {
+    try {
+      await api.patch(
+        `/migrations/${encodeURIComponent(m.id)}/review/${r.id}`,
+        { comment: commentInput.value },
+      );
+      close();
+      toast('리뷰를 고쳤습니다', 'success');
+      reload();
+    } catch (err) {
+      toastError(err);
+    }
+  };
+
+  // 이름에 조사를 붙이면 "슈퍼 어드민 의 의견" 처럼 어긋난다. "남긴" 을 끼워
+  // 문장을 만들고, 내 것이면 이름을 부르지 않는다.
+  const who = rights.mine
+    ? '내가 남긴'
+    : `${r.reviewerName || '알 수 없음'} 님이 남긴`;
+
+  const remove = async (close) => {
+    // 결정을 거두면 승인 수가 줄고 상태가 따라 움직인다. 그것까지 말해 준다 —
+    // "리뷰 하나 지우기"로 보이는 일이 실제로는 승인됨을 리뷰 중으로 되돌린다.
+    const ok = await confirmDialog({
+      title: '리뷰 지우기',
+      message: `${who} ${rights.isDecision
+        ? `${label} 기록을 지웁니다. 승인 수가 다시 계산되어 계획 상태가 바뀔 수 있습니다.`
+        : '의견을 지웁니다. 되돌릴 수 없습니다.'}`,
+      confirmLabel: '지우기',
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      const out = await api.del(`/migrations/${encodeURIComponent(m.id)}/review/${r.id}`);
+      close();
+      toast(rights.isDecision
+        ? `기록을 지웠습니다 (승인 ${out.approvals}/${out.requiredApprovals})`
+        : '의견을 지웠습니다', 'success');
+      reload();
+    } catch (err) {
+      toastError(err);
+    }
+  };
+
+  openModal({
+    title: rights.isDecision ? `${label} 기록` : '의견',
+    width: 520,
+    body: () => [
+      h('div.mig-review-head', {},
+        h('strong', {}, r.reviewerName || '알 수 없음'),
+        reviewBadge(r.decision),
+        h('span.muted', {}, formatDate(r.createdAt)),
+      ),
+      rights.canEdit
+        ? field(rights.isDecision ? '이 결정에 남긴 말' : '의견', commentInput,
+          rights.isDecision
+            ? '결정을 바꾸려면 리뷰 칸의 "검토 바꾸기" 를 쓰세요. 여기서는 말만 고쳐집니다.'
+            : '남긴 말을 고칩니다.')
+        : h('p.mig-review-comment', {}, r.comment || '(내용 없음)'),
+      rights.canEdit
+        ? null
+        : h('p.notice.notice-info', {}, icon('activity'),
+          h('span', {}, '남이 남긴 기록이라 ', h('b', {}, '고칠 수는 없습니다'),
+            '. 슈퍼 어드민은 지울 수 있습니다.')),
+      rights.isDecision && !canReviewNow(m.status)
+        ? h('p.notice.notice-warn', {}, icon('alert'),
+          h('span', {}, '이미 실행된 계획입니다. 이 ', h('b', {}, label),
+            ' 은 실행을 허락한 근거이므로 지울 수 없습니다.'))
+        : null,
+    ],
+    footer: (close) => [
+      rights.canDelete
+        ? h('button.btn.btn-danger', { type: 'button', onclick: () => remove(close) },
+          icon('trash'), '지우기')
+        : null,
+      h('span.spacer'),
+      h('button.btn', { type: 'button', onclick: close }, '닫기'),
+      rights.canEdit
+        ? h('button.btn.btn-primary', { type: 'button', onclick: () => save(close) }, '저장')
+        : null,
+    ],
+  });
 }
 
 function reviewBadge(decision) {
