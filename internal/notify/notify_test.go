@@ -323,6 +323,139 @@ func TestDiscordWire(t *testing.T) {
 	}
 }
 
+// 텔레그램은 웹훅이 아니라 봇 API다. 본문 모양도, 보낼 주소를 만드는 방법도 다르다.
+func TestTelegramWire(t *testing.T) {
+	cfg := store.NotifySettings{
+		Enabled: true, Provider: store.ProviderTelegram,
+		WebhookURL: "123456789:AAH1234567890abcdefghij",
+		Channel:    "-1001234567890", Username: "무시되는 이름",
+		AppURL: "https://db.example.com",
+	}
+	value, threshold := 96.0, 95.0
+	ev := &store.Event{
+		Kind: store.EventThreshold, Severity: store.SeverityCritical,
+		Message: "세션 사용률이 96%입니다", Metric: "conn.used_pct",
+		Value: &value, Threshold: &threshold,
+	}
+	wire := buildPayload(&cfg, ev, "shop", false).forWire()
+
+	if got := wire["chat_id"]; got != "-1001234567890" {
+		t.Errorf("chat_id = %v (채팅 ID가 곧 보낼 곳이다)", got)
+	}
+	for _, key := range []string{"attachments", "embeds", "channel", "username"} {
+		if _, ok := wire[key]; ok {
+			t.Errorf("텔레그램에 %s 를 보냈습니다", key)
+		}
+	}
+	text, _ := wire["text"].(string)
+	// 첨부가 없으므로 대상·심각도·지표·값이 본문 줄로 들어가야 한다.
+	for _, want := range []string{"세션 사용률", "shop", "심각", "conn.used_pct", "96", "기준 95"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("본문에 %q 가 없습니다:\n%s", want, text)
+		}
+	}
+	if !strings.Contains(text, "https://db.example.com/events") {
+		t.Errorf("이벤트 링크가 없습니다:\n%s", text)
+	}
+	// 그림문자는 진짜 글자여야 한다. 텔레그램은 :rotating_light: 를 그대로 보여준다.
+	if strings.Contains(text, ":rotating_light:") || !strings.Contains(text, "🚨") {
+		t.Errorf("그림문자가 바뀌지 않았습니다:\n%s", text)
+	}
+	// 서식 표시가 글자로 남으면 안 된다(서식 없이 보낸다).
+	if strings.Contains(text, "**") || strings.Contains(text, "](") {
+		t.Errorf("서식 표시가 그대로 들어갔습니다:\n%s", text)
+	}
+	if _, ok := wire["parse_mode"]; ok {
+		t.Error("parse_mode 를 보내면 <, &, _ 가 든 메시지가 400으로 거부된다")
+	}
+}
+
+// 실제로 나가는 요청을 본다. 본문을 만드는 것과 보내는 것은 다른 일이고,
+// 텔레그램은 그 둘이 모두 다른 유일한 메신저다(주소도 본문도).
+func TestTelegramPost(t *testing.T) {
+	var mu sync.Mutex
+	var got map[string]any
+	var path string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		path = r.URL.Path
+		_ = json.Unmarshal(body, &got)
+		mu.Unlock()
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	n := New(nil, nil)
+	// 완성된 주소는 그대로 쓴다. 그래서 시험용 서버로 보낼 수 있다.
+	p := payload{
+		Provider: store.ProviderTelegram,
+		URL:      srv.URL + "/bot123:abc/sendMessage",
+		Channel:  "-100777",
+		Text:     ":rotating_light: 무언가 일어났습니다",
+		Attachments: []attachment{{
+			Color:  colorCritical,
+			Fields: []field{{Title: "대상", Value: "shop"}},
+		}},
+	}
+	if err := n.post(context.Background(), p); err != nil {
+		t.Fatalf("전송 실패: %v", err)
+	}
+	mu.Lock()
+	sent, sentPath := got, path
+	mu.Unlock()
+
+	if sentPath != "/bot123:abc/sendMessage" {
+		t.Errorf("주소 = %q", sentPath)
+	}
+	if sent["chat_id"] != "-100777" {
+		t.Errorf("chat_id = %v", sent["chat_id"])
+	}
+	text, _ := sent["text"].(string)
+	if !strings.Contains(text, "🚨") || !strings.Contains(text, "대상: shop") {
+		t.Errorf("본문 = %q", text)
+	}
+	if sent["disable_web_page_preview"] != true {
+		t.Errorf("링크 미리보기를 끄지 않았습니다: %v", sent["disable_web_page_preview"])
+	}
+
+	// 채팅 ID가 없으면 보내지 않는다(주소는 멀쩡해도 갈 곳이 없다).
+	p.Channel = ""
+	if err := n.post(context.Background(), p); err == nil {
+		t.Error("채팅 ID 없이 보냈습니다")
+	}
+}
+
+// 봇 토큰은 사람이 받는 그대로 넣는다. 주소를 만드는 것은 우리 몫이다.
+func TestTelegramEndpoint(t *testing.T) {
+	got := telegramAPI("123456789:AAH1234")
+	want := "https://api.telegram.org/bot123456789:AAH1234/sendMessage"
+	if got != want {
+		t.Errorf("주소 = %q, 기대값 %q", got, want)
+	}
+	// 이미 완성된 주소를 넣은 사람도 있다. 그대로 쓴다.
+	full := "https://api.telegram.org/bot1:2/sendMessage"
+	if got := telegramAPI(full); got != full {
+		t.Errorf("완성된 주소 = %q", got)
+	}
+}
+
+// 채팅 ID가 없으면 보내지 않는다. 켜 두고도 아무 데도 가지 않는 상태가 가장 나쁘다 —
+// 화면은 "켜짐"이라고 말하기 때문이다.
+func TestTelegramNeedsChatID(t *testing.T) {
+	cfg := store.NotifySettings{
+		Enabled: true, Provider: store.ProviderTelegram,
+		WebhookURL: "123456789:AAH1234567890abcdefghij",
+	}
+	if cfg.Active() {
+		t.Error("채팅 ID가 없는데 보내는 상태입니다")
+	}
+	n := New(nil, nil)
+	if err := n.Test(context.Background(), cfg); err == nil {
+		t.Error("채팅 ID 없이 테스트 전송이 성공했습니다")
+	}
+}
+
 // TestDiscordClampsContent는 상한(2000자)을 넘는 본문을 자르는지 본다.
 // 넘겨 보내면 디스코드가 400으로 거부하고, 그러면 알림이 아예 오지 않는다.
 func TestDiscordClampsContent(t *testing.T) {

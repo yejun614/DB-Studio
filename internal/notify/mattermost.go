@@ -1,4 +1,4 @@
-// Package notify는 모니터링 이벤트를 메신저(Mattermost · Slack · Discord)로 보낸다.
+// Package notify는 모니터링 이벤트를 메신저(Mattermost · Slack · Discord · Telegram)로 보낸다.
 //
 // 왜 필요한가: 이벤트는 화면을 열어야 보인다. 디스크가 차거나 운영 DB가 응답을 멈춘
 // 사실은 **보고 있지 않을 때** 일어나고, 그때 사람에게 닿지 않으면 이벤트 목록은
@@ -8,6 +8,9 @@
 // 권한 관리가 따라오는데, 우리가 필요한 것은 "정해진 채널에 글 한 줄"이다. 웹훅은
 // 주소 하나가 곧 그 권한이고, 그래서 이 앱은 그 주소를 커넥션 비밀번호와 같은 급으로
 // 다룬다(암호화 저장, 화면에는 마스킹).
+//
+// 텔레그램만 웹훅이 없어서 봇 토큰으로 sendMessage를 부른다. 그래도 다루는 방식은
+// 같다 — 토큰 하나가 곧 그 권한이므로 같은 자리에 같은 급으로 저장한다.
 package notify
 
 import (
@@ -142,10 +145,16 @@ func (n *Notifier) enqueue(ctx context.Context, ev *store.Event, resolved bool) 
 // 큐에 넣고 성공을 돌려주면 실패해도 화면은 성공이라고 말한다.
 func (n *Notifier) Test(ctx context.Context, cfg store.NotifySettings) error {
 	if !cfg.HasWebhook() {
+		if cfg.Kind() == store.ProviderTelegram {
+			return fmt.Errorf("봇 토큰과 채팅 ID를 모두 적어야 합니다")
+		}
 		return fmt.Errorf("웹훅 주소가 비어 있습니다")
 	}
 	body := payload{
-		URL:      strings.TrimSpace(cfg.WebhookURL),
+		URL: strings.TrimSpace(cfg.WebhookURL),
+		// 어느 메신저의 모양으로 만들지 여기서도 정해 줘야 한다. 비워 두면 테스트만
+		// 다른 모양으로 나가서, 테스트는 되는데 실제 알림은 거부되는 상태가 생긴다.
+		Provider: cfg.Kind(),
 		Channel:  strings.TrimSpace(cfg.Channel),
 		Username: displayName(cfg),
 		Text: ":white_check_mark: " +
@@ -204,9 +213,29 @@ func (n *Notifier) record(err error) {
 	n.last.Detail = ""
 }
 
+// telegramAPI는 봇 토큰을 sendMessage 주소로 바꾼다.
+//
+// 토큰만 받는 이유: 텔레그램이 사람에게 주는 것은 토큰이다(123456:AA...). 주소를
+// 직접 적게 하면 /bot 접두사나 메서드 이름을 틀리기 쉽고, 그 실수는 "왜 안 오지"로만
+// 나타난다. 이미 완성된 주소를 넣은 사람도 있을 수 있으므로 그것도 그대로 받는다.
+func telegramAPI(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
+		return raw
+	}
+	return "https://api.telegram.org/bot" + raw + "/sendMessage"
+}
+
 // post는 웹훅으로 한 건을 보낸다.
 func (n *Notifier) post(ctx context.Context, body payload) error {
-	target, err := url.Parse(strings.TrimSpace(body.URL))
+	endpoint := strings.TrimSpace(body.URL)
+	if body.Provider == store.ProviderTelegram {
+		if strings.TrimSpace(body.Channel) == "" {
+			return fmt.Errorf("채팅 ID가 비어 있습니다")
+		}
+		endpoint = telegramAPI(endpoint)
+	}
+	target, err := url.Parse(endpoint)
 	if err != nil || target.Host == "" {
 		return fmt.Errorf("웹훅 주소가 올바르지 않습니다")
 	}

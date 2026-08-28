@@ -33,15 +33,22 @@ const SettingNotifyMattermost = "notify.mattermost"
 // 호환으로 만들었다) — 글자 문법만 다르다. 디스코드는 본문 구조가 다르다:
 // attachments 대신 embeds 이고 색이 문자열이 아니라 정수다. 그 차이는 notify 패키지의
 // forWire 한 곳에 가둬 둔다.
+// 텔레그램만 방식이 다르다. 들어오는 웹훅이 없고 **봇 토큰**으로 API를 부른다.
+// 그래도 저장 구조는 같은 것을 쓴다: WebhookURL 자리에 봇 토큰(같은 급의 비밀이라
+// 암호화·마스킹이 그대로 맞다), Channel 자리에 채팅 ID(보낼 곳이라는 뜻이 같다).
+// 필드를 새로 만들면 화면·저장·마이그레이션이 셋 다 늘어나는데, 늘어난 만큼
+// "어느 필드가 어느 메신저의 것인지"를 매번 확인해야 한다.
 const (
 	ProviderMattermost = "mattermost"
 	ProviderSlack      = "slack"
 	ProviderDiscord    = "discord"
+	ProviderTelegram   = "telegram"
 )
 
 // ValidProvider는 아는 메신저인지 본다.
 func ValidProvider(p string) bool {
-	return p == ProviderMattermost || p == ProviderSlack || p == ProviderDiscord
+	return p == ProviderMattermost || p == ProviderSlack ||
+		p == ProviderDiscord || p == ProviderTelegram
 }
 
 // NotifySettings는 이벤트를 메신저로 보낼 규칙이다.
@@ -50,9 +57,11 @@ type NotifySettings struct {
 	// Provider는 보낼 메신저다(mattermost | slack | discord). 비어 있으면 mattermost로 본다 —
 	// 이 값이 생기기 전에 저장된 설정은 모두 Mattermost였다.
 	Provider string `json:"provider,omitempty"`
-	// WebhookURL은 Mattermost의 들어오는 웹훅 주소다. 저장할 때 암호화한다.
+	// WebhookURL은 들어오는 웹훅 주소다. 저장할 때 암호화한다.
+	// 텔레그램에서는 이 자리에 **봇 토큰**이 들어간다(형태만 다를 뿐 같은 급의 비밀이다).
 	WebhookURL string `json:"webhookUrl,omitempty"`
 	// Channel은 웹훅에 설정된 기본 채널 대신 보낼 채널이다(비우면 웹훅의 기본값).
+	// 텔레그램에서는 **채팅 ID**이고, 비울 수 없다 — 봇은 어디로 보낼지 스스로 알지 못한다.
 	Channel string `json:"channel,omitempty"`
 	// Username은 메시지에 표시할 이름이다. 비우면 "DB Studio".
 	Username string `json:"username,omitempty"`
@@ -81,7 +90,18 @@ func (n NotifySettings) Kind() string {
 }
 
 // HasWebhook은 보낼 곳이 정해져 있는지다.
-func (n NotifySettings) HasWebhook() bool { return strings.TrimSpace(n.WebhookURL) != "" }
+//
+// 텔레그램은 토큰만으로는 보낼 곳을 알 수 없다. 채팅 ID가 없으면 "설정을 마쳤다"고
+// 볼 수 없으므로 여기서 함께 본다 — 그러지 않으면 켜 놓고도 아무 데도 가지 않는다.
+func (n NotifySettings) HasWebhook() bool {
+	if strings.TrimSpace(n.WebhookURL) == "" {
+		return false
+	}
+	if n.Kind() == ProviderTelegram {
+		return strings.TrimSpace(n.Channel) != ""
+	}
+	return true
+}
 
 // Active는 실제로 보내는 상태인지다.
 func (n NotifySettings) Active() bool { return n.Enabled && n.HasWebhook() }
@@ -124,6 +144,11 @@ func maskSecretURL(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return ""
+	}
+	// 텔레그램 봇 토큰(123456:AA...)에는 경로가 없다. 앞의 봇 번호는 남긴다 —
+	// 어느 봇인지 확인할 수 있어야 "다른 봇의 토큰이 들어 있다"를 알아챈다.
+	if at := strings.Index(raw, ":"); at > 0 && !strings.Contains(raw, "/") {
+		return raw[:at+1] + "••••"
 	}
 	// 마지막 경로 조각(토큰)만 가린다. 호스트는 남겨야 "어디로 가는지"를 확인할 수 있다.
 	at := strings.LastIndex(raw, "/")

@@ -60,6 +60,9 @@ func (p payload) forWire() map[string]any {
 	if p.Provider == store.ProviderDiscord {
 		return p.discordWire()
 	}
+	if p.Provider == store.ProviderTelegram {
+		return p.telegramWire()
+	}
 	out := map[string]any{"text": p.Text}
 	if p.Channel != "" {
 		out["channel"] = p.Channel
@@ -117,6 +120,54 @@ func (p payload) discordWire() map[string]any {
 	return out
 }
 
+// telegramWire는 텔레그램 sendMessage 본문이다.
+//
+// 색도 첨부도 없다. 그래서 첨부에 담았던 것(대상·심각도·지표·값)을 줄로 펼쳐 적는다 —
+// 채널에서 훑을 때 색 대신 맨 앞의 그림문자가 그 일을 한다.
+//
+// 서식(parse_mode)을 쓰지 않는 이유: 텔레그램의 HTML·마크다운 모드는 본문에 <, &, _
+// 같은 글자가 들어 있으면 400으로 거부한다. 이벤트 메시지에는 DB가 준 문자열이 그대로
+// 들어오므로(테이블 이름, 오류 문구) 언젠가 반드시 그런 글자가 온다. 그때 알림이
+// 통째로 사라지는 것보다, 굵은 글씨 없이 확실히 도착하는 편이 낫다.
+func (p payload) telegramWire() map[string]any {
+	lines := []string{plainEmoji(p.Text)}
+	if len(p.Attachments) > 0 {
+		a := p.Attachments[0]
+		if a.Title != "" {
+			lines = append(lines, a.Title)
+		}
+		for _, f := range a.Fields {
+			lines = append(lines, fmt.Sprintf("%s: %s", f.Title, f.Value))
+		}
+		if a.Text != "" {
+			lines = append(lines, plainEmoji(a.Text))
+		}
+	}
+	return map[string]any{
+		"chat_id": p.Channel,
+		// 4096자가 상한이다. 넘으면 거부되므로 여기서 자른다.
+		"text": clamp(strings.Join(lines, "\n"), 4096),
+		// 링크 미리보기를 끈다. 알림 한 건마다 앱 화면의 미리보기 카드가 붙으면
+		// 채널이 그림으로 덮인다.
+		"disable_web_page_preview": true,
+	}
+}
+
+// plainEmoji는 :shortcode: 를 진짜 그림문자로 바꾼다.
+//
+// Slack·Mattermost·Discord는 :rotating_light: 를 알아보지만 텔레그램은 그대로 글자로
+// 보여준다. 심각도를 한눈에 알리는 것이 맨 앞 글자의 역할이라, 그것이 ":rotating_light:"
+// 라는 글자로 보이면 아무 역할도 하지 못한다.
+func plainEmoji(s string) string {
+	rep := strings.NewReplacer(
+		":rotating_light:", "🚨",
+		":warning:", "⚠️",
+		":information_source:", "ℹ️",
+		":white_check_mark:", "✅",
+	)
+	return rep.Replace(s)
+}
+
 // discordColor는 "#rrggbb"를 디스코드가 받는 정수로 바꾼다.
 func discordColor(hex string) int64 {
 	s := strings.TrimPrefix(strings.TrimSpace(hex), "#")
@@ -139,17 +190,27 @@ func clamp(s string, max int) string {
 }
 
 // bold는 메신저별 "굵게" 문법이다.
+//
+// 텔레그램은 서식 없이 보내므로(telegramWire 참고) 표시를 붙이지 않는다. 붙이면
+// 별표가 그대로 보인다.
 func bold(provider, text string) string {
-	if provider == store.ProviderSlack {
+	switch provider {
+	case store.ProviderSlack:
 		return "*" + text + "*"
+	case store.ProviderTelegram:
+		return text
 	}
 	return "**" + text + "**"
 }
 
 // link는 메신저별 링크 문법이다.
 func link(provider, url, text string) string {
-	if provider == store.ProviderSlack {
+	switch provider {
+	case store.ProviderSlack:
 		return "<" + url + "|" + text + ">"
+	case store.ProviderTelegram:
+		// 평문이라 주소를 그대로 적는다. 텔레그램은 주소를 알아서 누를 수 있게 만든다.
+		return text + ": " + url
 	}
 	return "[" + text + "](" + url + ")"
 }
