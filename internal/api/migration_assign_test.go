@@ -318,6 +318,78 @@ func TestSuperadminReviewsWithoutDesignation(t *testing.T) {
 	}
 }
 
+// 슈퍼 어드민은 자기가 맡은 계획도 승인할 수 있다.
+//
+// 계획을 만든 사람이 곧 담당자가 되므로(기본값), 슈퍼 어드민이 만든 계획은 예외가
+// 없으면 아무도 승인하지 못하는 상태가 된다 — 혼자 쓰는 설치나 운영자가 한 명뿐인
+// 팀에서 그것은 막다른 길이다.
+func TestSuperadminApprovesOwnAssignment(t *testing.T) {
+	e, conn, mig := assignEnv(t)
+	dana := member(t, e, "dana", conn.ID, model.LevelMigrate)
+	alice := loginAs(t, e, "alice")
+	me := aliceID(t, e)
+
+	// alice 가 담당자다(계획을 만든 사람이 기본 담당자다). 리뷰어는 dana —
+	// 담당자는 리뷰어가 될 수 없으므로 다른 사람이어야 하고, 이 지정으로 리뷰가 열린다.
+	if status, body := alice.do("PUT", "/api/v1/migrations/"+mig.ID+"/assignment",
+		map[string]any{"assigneeId": me, "reviewerIds": []string{dana.ID}}); status != 200 {
+		t.Fatalf("지정 = %d: %v", status, body)
+	}
+
+	status, body := alice.do("POST", "/api/v1/migrations/"+mig.ID+"/review",
+		map[string]any{"decision": "approved", "comment": "직접 확인했습니다"})
+	if status != 200 {
+		t.Fatalf("담당자인 슈퍼 어드민의 승인 = %d: %v", status, body)
+	}
+	got, err := e.st.GetMigration(context.Background(), mig.ID, false)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Status != store.MigrationApproved {
+		t.Errorf("상태 = %q, 기대 approved", got.Status)
+	}
+}
+
+// 담당자는 자기가 맡은 계획을 승인할 수 없다. 기준은 작성자가 아니라 담당자다.
+//
+// 지정 규칙(담당자 ≠ 리뷰어)이 생기기 전에 저장된 자료에서는 담당자가 리뷰어로 남아
+// 있을 수 있다. 그때도 자기 승인이 되어서는 안 된다.
+func TestAssigneeCannotApprove(t *testing.T) {
+	e, conn, mig := assignEnv(t)
+	ctx := context.Background()
+	dana := member(t, e, "dana", conn.ID, model.LevelMigrate)
+
+	// 예전 자료를 흉내 낸다: 저장소에 직접 담당자 = 리뷰어로 넣는다.
+	if err := e.st.SetMigrationAssignment(ctx, mig.ID, dana.ID, []string{dana.ID},
+		aliceID(t, e)); err != nil {
+		t.Fatalf("지정: %v", err)
+	}
+	if err := e.st.SetMigrationStatus(ctx, mig.ID, store.MigrationInReview); err != nil {
+		t.Fatalf("상태: %v", err)
+	}
+
+	danaC := loginAs(t, e, "dana")
+	status, body := danaC.do("POST", "/api/v1/migrations/"+mig.ID+"/review",
+		map[string]any{"decision": "approved"})
+	if status != 403 {
+		t.Fatalf("담당자의 자기 승인 = %d: %v", status, body)
+	}
+	if body["error"] != "self_approval" {
+		t.Errorf("사유 = %v", body["error"])
+	}
+
+	// 의견은 남길 수 있다. 담당자가 자기 계획에 설명을 다는 것까지 막을 이유는 없다.
+	if status, body := danaC.do("POST", "/api/v1/migrations/"+mig.ID+"/review",
+		map[string]any{"decision": "comment", "comment": "인덱스는 새벽에 겁니다"}); status != 200 {
+		t.Fatalf("담당자의 의견 = %d: %v", status, body)
+	}
+	// 반려는 막지 않는다. 자기가 맡은 계획을 접는 것은 스스로 통과시키는 것과 다르다.
+	if status, body := danaC.do("POST", "/api/v1/migrations/"+mig.ID+"/review",
+		map[string]any{"decision": "rejected", "comment": "다시 만들겠습니다"}); status != 200 {
+		t.Fatalf("담당자의 반려 = %d: %v", status, body)
+	}
+}
+
 // aliceID는 시험 환경의 슈퍼 어드민 id다.
 func aliceID(t *testing.T, e *testEnv) string {
 	t.Helper()

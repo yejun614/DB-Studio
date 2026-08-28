@@ -534,8 +534,9 @@ function reviewsPanel(m, res, reload) {
     h('p.field-help', {},
       '승인·반려는 ', h('b', {}, '리뷰어로 지정된 사람'), '만 남길 수 있습니다. ',
       '의견은 누구나 남길 수 있습니다.',
+      ' 담당자는 자기가 맡은 계획을 승인할 수 없습니다.',
       res.requiredApprovals > 1
-        ? ' 운영 DB이거나 파괴적 변경이 포함되어 2명의 승인이 필요하며, 본인이 만든 계획은 승인할 수 없습니다.'
+        ? ' 운영 DB이거나 파괴적 변경이 포함되어 2명의 승인이 필요합니다.'
         : ''),
     pendingReviewers(m),
     reviews.length === 0
@@ -599,7 +600,10 @@ function openReviewDialog(m, res, reload) {
   const me = state.user?.id;
   const designated = (m.reviewers ?? []).some((r) => r.userId === me);
   const superadmin = state.user?.role === 'superadmin';
-  const isReviewer = designated || superadmin;
+  // 담당자는 자기가 맡은 계획을 승인할 수 없다. 지정 규칙이 생기기 전에 저장된
+  // 자료에서는 담당자가 리뷰어로 남아 있을 수 있어, 여기서도 한 번 더 본다.
+  const isAssignee = Boolean(me) && m.assigneeId === me;
+  const isReviewer = superadmin || (designated && !isAssignee);
   const commentInput = textarea({
     placeholder: isReviewer
       ? '검토 의견 (반려 시 필수는 아니지만 남겨주세요)'
@@ -636,9 +640,13 @@ function openReviewDialog(m, res, reload) {
       isReviewer
         ? null
         : h('p.notice.notice-info', {}, icon('activity'),
-          h('span', {},
-            '리뷰어로 지정되지 않아 ', h('b', {}, '의견만'), ' 남길 수 있습니다. ',
-            '승인·반려가 필요하면 담당자에게 리뷰어 지정을 요청하세요.')),
+          isAssignee
+            ? h('span', {},
+              '이 계획의 ', h('b', {}, '담당자'), ' 라 승인·반려할 수 없습니다. ',
+              '의견은 남길 수 있고, 결정은 리뷰어에게 부탁하세요.')
+            : h('span', {},
+              '리뷰어로 지정되지 않아 ', h('b', {}, '의견만'), ' 남길 수 있습니다. ',
+              '승인·반려가 필요하면 담당자에게 리뷰어 지정을 요청하세요.')),
       // 대신 결정하는 것임을 스스로도 알고 있어야 한다. 리뷰 기록에는 이름이 남는다.
       !designated && superadmin
         ? h('p.notice.notice-warn', {}, icon('alert'),

@@ -568,7 +568,6 @@ func (s *Server) handleReviewMigration(c *fiber.Ctx) error {
 	// 시간에 걸면 안 됩니다"라고 적는 길까지 막으면, 그 말은 앱 밖으로 나가고
 	// 계획 옆에 남지 않는다. 반면 승인은 책임이 따르는 결정이므로, 부탁받은
 	// 사람의 것이어야 "누구에게 물어봤고 누가 답했는가"가 이력에서 이어진다.
-	// 승인·반려는 리뷰어로 지정된 사람의 일이다. 의견은 누구나 남길 수 있다.
 	//
 	// 슈퍼 어드민은 예외다. 지정한 리뷰어가 휴가를 갔거나 계정이 잠긴 상황에서
 	// 계획이 영원히 멈춰 있으면, 사람들은 이 흐름을 우회하는 다른 길(콘솔에서 직접
@@ -579,12 +578,23 @@ func (s *Server) handleReviewMigration(c *fiber.Ctx) error {
 		return fail(c, fiber.StatusForbidden, "not_reviewer",
 			"리뷰어로 지정된 사람만 승인·반려할 수 있습니다. 의견은 누구나 남길 수 있습니다")
 	}
-	// 자기가 만든 계획을 자기가 승인하는 것은 검토가 아니다.
-	// 승인 2명이 필요한 경우(운영·파괴적 변경)에 이 규칙이 실질적인 안전장치가 된다.
-	if decision == store.ReviewApproved && mig.CreatedBy == u.ID &&
-		migrate.RequiredApprovals(conn, mig.DestructiveCount) > 1 {
+	// 담당자는 자기가 맡은 계획을 승인할 수 없다.
+	//
+	// 기준이 작성자가 아니라 담당자인 이유: 계획을 만드는 일과 그것을 끌고 가는 일은
+	// 다르다. 스크립트나 AI가 만든 계획도 있고, 남이 만든 계획을 내가 맡기도 한다.
+	// 검토를 받아야 하는 사람은 "누가 썼는가"가 아니라 "누가 책임지는가"다.
+	//
+	// 승인 수를 따지지 않는 이유: 담당자는 애초에 리뷰어로 지정될 수 없으므로
+	// (handleSetMigrationAssignment) 보통은 위의 not_reviewer 에서 걸린다. 이 검사는
+	// 그 규칙이 생기기 전에 저장된 지정(담당자 = 리뷰어)을 위한 두 번째 잠금이고,
+	// 그런 자료에서는 승인이 한 명만 필요해도 자기 승인이 되어서는 안 된다.
+	//
+	// 슈퍼 어드민은 예외다. 리뷰어 지정과 마찬가지로, 막다른 길을 만들지 않는 것이
+	// 규칙을 지키게 하는 방법이다 — 누가 결정했는지는 기록에 남는다.
+	if decision == store.ReviewApproved && mig.AssigneeID == u.ID &&
+		u.Role != model.RoleSuperadmin {
 		return fail(c, fiber.StatusForbidden, "self_approval",
-			"본인이 만든 계획은 승인할 수 없습니다. 다른 검토자의 승인이 필요합니다")
+			"담당자는 자기가 맡은 계획을 승인할 수 없습니다. 다른 검토자의 승인이 필요합니다")
 	}
 
 	review := &store.MigrationReview{
