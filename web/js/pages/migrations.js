@@ -342,6 +342,14 @@ function openAssignDialog(m, reload) {
   })();
 }
 
+// canReviewNow는 지금 결정을 남기거나 바꿀 수 있는 상태인지다(서버의 reviewableStatus와 같다).
+//
+// 두 곳(도구 줄, 리뷰 칸)이 같은 판단을 하도록 함수로 둔다. 한쪽만 고치면 "여기서는
+// 보이는데 저기서는 안 보인다"가 되고, 그것이 바로 반려 뒤에 일어났던 일이다.
+function canReviewNow(status) {
+  return status === 'in_review' || status === 'approved' || status === 'rejected';
+}
+
 // myDecision은 내가 이 계획에 남긴 결정이다(없으면 null).
 //
 // 한 사람의 결정은 하나로 남는다(서버가 이전 결정을 대신한다). 그래서 "지금 내가
@@ -365,7 +373,7 @@ function actionBar(m, res, precheckBox, reload) {
   // 승인됨·반려됨에서도 검토 창을 연다. 실행 전이라면 마음을 바꿀 수 있어야 하고
   // (반려를 잘못 눌렀거나, 지적한 것이 그 자리에서 설명된 경우가 있다), 그 길이
   // 없으면 되돌리는 방법은 리뷰 기록을 통째로 지우는 것뿐이다.
-  if (m.status === 'in_review' || m.status === 'approved' || m.status === 'rejected') {
+  if (canReviewNow(m.status)) {
     const mine = myDecision(m);
     buttons.push(h('button.btn', {
       type: 'button',
@@ -568,10 +576,12 @@ function reviewsPanel(m, res, reload) {
         ),
         r.comment ? h('p.mig-review-comment', {}, r.comment) : null,
       ))),
-    m.status === 'in_review'
+    // 반려된 뒤에도 남아 있어야 한다. 여기가 리뷰를 보다가 바로 누르는 자리이고,
+    // 마음을 바꾸는 일은 대개 남의 결정을 읽은 직후에 일어난다.
+    canReviewNow(m.status)
       ? h('button.btn.btn-primary', {
         type: 'button', onclick: () => openReviewDialog(m, res, reload),
-      }, icon('check'), '검토 의견 남기기')
+      }, icon('check'), myDecision(m) ? '검토 바꾸기' : '검토 의견 남기기')
       : null,
   );
 }
@@ -622,7 +632,9 @@ function openReviewDialog(m, res, reload) {
   // 담당자는 자기가 맡은 계획을 승인할 수 없다. 지정 규칙이 생기기 전에 저장된
   // 자료에서는 담당자가 리뷰어로 남아 있을 수 있어, 여기서도 한 번 더 본다.
   const isAssignee = Boolean(me) && m.assigneeId === me;
-  const isReviewer = superadmin || (designated && !isAssignee);
+  // 결정할 수 있는 상태인지도 함께 본다. 실행된 계획에서는 서버가 거부하므로,
+  // 눌리는 버튼을 내놓으면 403이 설명을 대신하게 된다.
+  const isReviewer = (superadmin || (designated && !isAssignee)) && canReviewNow(m.status);
   const commentInput = textarea({
     placeholder: isReviewer
       ? '검토 의견 (반려 시 필수는 아니지만 남겨주세요)'
