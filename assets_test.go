@@ -58,7 +58,7 @@ var browserGlobals = []string{
 	"Map", "Set", "WeakMap", "WeakSet", "Promise", "Error", "Symbol", "Proxy", "Reflect",
 	"BigInt", "Intl", "CSS", "URL", "URLSearchParams", "AbortController", "Blob", "File",
 	"FileReader", "FormData", "Image", "Event", "CustomEvent", "Node", "Element",
-	"HTMLElement", "SVGElement", "DOMParser", "WebSocket", "EventSource", "Worker",
+	"HTMLElement", "SVGElement", "DOMParser", "XMLSerializer", "WebSocket", "EventSource", "Worker",
 	"TextDecoder", "TextEncoder", "IntersectionObserver", "ResizeObserver",
 	"MutationObserver", "performance", "crypto", "globalThis", "isNaN", "isFinite",
 	"parseInt", "parseFloat", "encodeURIComponent", "decodeURIComponent",

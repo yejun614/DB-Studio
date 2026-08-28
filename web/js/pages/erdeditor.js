@@ -28,6 +28,7 @@ import {
 import { navigate } from '../core/router.js';
 import { panelResizeHandle, attachPanelResize } from '../core/panelresize.js';
 import { renderMarkdown } from '../core/markdown.js';
+import { openImageExportDialog } from '../core/erdimage.js';
 import { streamAIChat } from '../core/aistream.js';
 import { errorPanel } from './users.js';
 import { statusBadge } from './erd.js';
@@ -612,6 +613,8 @@ class Editor {
       h('div.erd-tool-group', {},
         this.toolBtn('database', 'SQL 불러오기', () => this.importSQL(), { needsEdit: true }),
         this.toolBtn('save', 'SQL 내보내기', () => this.exportSQL()),
+        this.toolBtn('image', '사진으로 내보내기',
+          () => openImageExportDialog(this.canvas, this.doc.name || '설계')),
       ),
       h('div.erd-tool-group', {},
         !hasTarget ? null : this.toolBtn('activity', '변경 비교', () => this.showDiff()),

@@ -24,6 +24,7 @@ import { panelResizeHandle, attachPanelResize } from '../core/panelresize.js';
 import { errorPanel } from './users.js';
 import { ErdSession } from '../core/erdsocket.js';
 import { columnIcon, chosenIconFor } from '../core/colicon.js';
+import { openImageExportDialog } from '../core/erdimage.js';
 import { roomChatView, scrollChatToBottom } from '../core/roomchat.js';
 // 구조 화면과 ERD 편집기는 같은 op를 주고받는다. 반영 규칙을 두 벌로 두면
 // 언젠가 어긋나고, 그때 조용히 사라지는 것은 남의 편집이다.
@@ -400,6 +401,12 @@ class StructureView {
           type: 'button', title: '카드를 격자에 다시 늘어놓습니다',
           onclick: () => this.relayout(),
         }, icon('refresh'), '자동 배치'),
+        // 지금 보고 있는 시점의 그림을 그대로 파일로 남긴다. 과거 시점을 보는
+        // 중이라면 그때의 구조가 나온다 — 화면에 그려진 것이 곧 내용이다.
+        h('button.btn.btn-small', {
+          type: 'button', title: '다이어그램을 그림 파일로 내려받습니다',
+          onclick: () => openImageExportDialog(this.canvas, this.imageName()),
+        }, icon('image'), '사진'),
       ),
       h('div.erd-tool-group', {},
         h('button.btn.btn-small', { type: 'button', onclick: () => this.load() },
@@ -914,6 +921,15 @@ class StructureView {
         }, '추가'),
       ],
     });
+  }
+
+  // imageName은 내려받을 그림의 이름이다. 무엇을 언제 찍은 것인지 파일 이름만 보고
+  // 알 수 있어야 한다 — 구조 그림은 대개 여러 장을 모아 두고 비교하는 데 쓴다.
+  imageName() {
+    const conn = this.data?.connection?.name || '구조';
+    const src = this.data?.source ?? {};
+    const at = src.kind === 'version' ? `v${src.versionNo}` : '현재';
+    return `${conn}_${at}`;
   }
 
   // relayout은 카드를 격자에 다시 늘어놓는다.
