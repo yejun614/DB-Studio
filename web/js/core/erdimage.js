@@ -31,6 +31,18 @@ const INHERITED = new Set([
 // 브라우저가 그릴 수 있는 그림의 한계. 이보다 크면 canvas가 조용히 빈 그림을 준다.
 const MAX_PIXELS = 16000;
 
+// 그림에서 빼는 것들. 모두 **마우스를 위한 것**이지 내용이 아니다.
+//
+// 크기 손잡이(묶음·메모 오른쪽 아래의 작은 사각형)가 대표적이다. 화면에서는 "여기를
+// 끌면 커진다"는 안내지만, 파일로 받은 사람에게는 아무 뜻 없는 사각형 하나다.
+// 관계선의 투명한 굵은 선(누르기 쉬우라고 겹쳐 둔 것)도 보이지는 않지만 파일만
+// 키우고, 벡터 편집기에서 열면 정체를 알 수 없는 도형으로 걸린다.
+const CHROME_ONLY = [
+  'erd-group-grip', 'erd-note-grip', 'erd-link-hit',
+  // 다른 참여자가 고르고 있다는 표시와 커서, 빈 화면 안내문.
+  'erd-card-holder', 'erd-cursor', 'erd-hint',
+];
+
 // diagramBounds는 그림 전체(테이블·메모·묶음)를 감싸는 사각형이다.
 //
 // 지금 보고 있는 화면이 아니라 전체인 이유: 내보내기는 "이 설계를 그림으로 남긴다"는
@@ -62,6 +74,31 @@ export function diagramBounds(canvas, pad = 40) {
 // buildSVG는 혼자서도 같은 그림이 되는 SVG 문자열을 만든다.
 function buildSVG(canvas, box, background) {
   const source = canvas.svg;
+
+  // "고른 표시"는 화면에서 **잠깐 떼고** 읽는다.
+  //
+  // 계산된 값을 박아 넣는 방식이라, 골라 둔 것의 파란 테두리(묶음은 파선까지)가
+  // 그대로 그림에 굳는다. 어느 속성이 달라졌는지 하나씩 되돌리는 것은 종류마다
+  // 다른 규칙을 손으로 흉내 내는 일이라 언젠가 어긋난다. 클래스를 떼면 브라우저가
+  // 원래 모습을 계산해 준다.
+  //
+  // 떼고 붙이는 사이에 화면이 다시 그려지지는 않는다. 이 함수가 끝날 때까지
+  // 브라우저는 그리지 않으므로 사람 눈에는 아무 일도 일어나지 않는다.
+  const marked = [];
+  for (const el of source.querySelectorAll('.is-selected, .is-primary')) {
+    const had = ['is-selected', 'is-primary'].filter((c) => el.classList.contains(c));
+    marked.push({ el, had });
+    el.classList.remove(...had);
+  }
+  try {
+    return paintAndSerialize(source, box, background);
+  } finally {
+    for (const { el, had } of marked) el.classList.add(...had);
+  }
+}
+
+// paintAndSerialize는 계산된 값을 박아 넣고 문자열로 만든다.
+function paintAndSerialize(source, box, background) {
   const clone = source.cloneNode(true);
 
   // 계산된 값을 요소마다 박는다. 원본과 사본은 같은 순서로 훑을 수 있다
@@ -94,16 +131,9 @@ function buildSVG(canvas, box, background) {
   for (const el of [...clone.querySelectorAll('.erd-layer-cursors, .erd-layer-band')]) el.remove();
   const drop = [];
   for (let i = 0; i < from.length; i += 1) {
-    if (from[i].classList?.contains('erd-card-holder')) drop.push(to[i]);
-    if (from[i].classList?.contains('erd-hint')) drop.push(to[i]);
-    if (from[i].classList?.contains('erd-cursor')) drop.push(to[i]);
-    // 선택 테두리는 이미 계산된 값으로 박혔다. 두께만 보통으로 되돌린다 —
-    // 고른 것만 굵게 남으면 "이 표는 왜 다른가"를 파일을 받은 사람이 묻는다.
-    if (from[i].classList?.contains('is-selected') || from[i].classList?.contains('is-primary')) {
-      for (const node of to[i].querySelectorAll('rect, path')) {
-        node.style.setProperty('stroke-width', '1.4');
-      }
-    }
+    const classes = from[i].classList;
+    if (!classes) continue;
+    if (CHROME_ONLY.some((name) => classes.contains(name))) drop.push(to[i]);
   }
   for (const el of drop) el.remove();
 
