@@ -209,8 +209,65 @@ func TestNotifySettingsFlow(t *testing.T) {
 		t.Errorf("모르는 종류 = %d, 400이어야 합니다", status)
 	}
 	if status, _ := c2.do("PUT", "/api/v1/notify/",
-		map[string]any{"provider": "telegram"}); status != 400 {
+		map[string]any{"provider": "carrier-pigeon"}); status != 400 {
 		t.Errorf("모르는 메신저 = %d, 400이어야 합니다", status)
+	}
+}
+
+// 텔레그램은 다른 셋과 달리 웹훅이 없다. 봇 토큰과 채팅 ID 두 가지가 있어야 보낼 수
+// 있고, 그 사실이 저장 단계에서 걸러져야 한다 — 켜 두고도 아무 데도 가지 않는 상태가
+// 가장 나쁘다(화면은 "켜짐"이라고 말한다).
+func TestNotifyTelegram(t *testing.T) {
+	e := newTestEnv(t)
+	c := login(t, e, "alice")
+
+	// 웹훅 주소를 넣던 습관대로 https 주소를 넣으면 막는다.
+	if status, _ := c.do("PUT", "/api/v1/notify/", map[string]any{
+		"provider": "telegram", "webhookUrl": "https://hooks.slack.com/services/T1/B1/xyz",
+	}); status != 400 {
+		t.Errorf("엉뚱한 토큰 = %d, 400이어야 합니다", status)
+	}
+	// 토큰만 있고 채팅 ID가 없으면 막는다.
+	if status, _ := c.do("PUT", "/api/v1/notify/", map[string]any{
+		"provider": "telegram", "webhookUrl": "123456789:AAH1234567890abcdefghij",
+	}); status != 400 {
+		t.Errorf("채팅 ID 없음 = %d, 400이어야 합니다", status)
+	}
+	// 둘 다 있으면 저장된다.
+	status, _ := c.do("PUT", "/api/v1/notify/", map[string]any{
+		"provider": "telegram", "webhookUrl": "123456789:AAH1234567890abcdefghij",
+		"channel": "-1001234567890", "enabled": true, "minSeverity": "warning",
+	})
+	if status != 200 {
+		t.Fatalf("저장 = %d", status)
+	}
+	cfg, err := e.st.NotifySettings(context.Background())
+	if err != nil {
+		t.Fatalf("설정 조회: %v", err)
+	}
+	if cfg.Kind() != store.ProviderTelegram {
+		t.Errorf("메신저 = %q", cfg.Kind())
+	}
+	if cfg.WebhookURL != "123456789:AAH1234567890abcdefghij" {
+		t.Errorf("토큰이 그대로 저장되지 않았습니다: %q", cfg.WebhookURL)
+	}
+	if !cfg.Active() {
+		t.Error("토큰과 채팅 ID가 모두 있는데 보내는 상태가 아닙니다")
+	}
+
+	// 화면에는 토큰이 그대로 나가면 안 된다. 봇 번호는 남아야 어느 봇인지 안다.
+	_, body := c.do("GET", "/api/v1/notify/", nil)
+	settings, _ := body["settings"].(map[string]any)
+	masked, _ := settings["webhookUrl"].(string)
+	if masked == cfg.WebhookURL || !strings.HasPrefix(masked, "123456789:") {
+		t.Errorf("마스킹된 토큰 = %q", masked)
+	}
+
+	// 채팅 ID를 지우면 켤 수 없다.
+	if status, _ := c.do("PUT", "/api/v1/notify/", map[string]any{
+		"provider": "telegram", "channel": "", "enabled": true,
+	}); status != 400 {
+		t.Errorf("채팅 ID를 지운 저장 = %d, 400이어야 합니다", status)
 	}
 }
 
@@ -244,6 +301,7 @@ func TestNotifyProviderChoice(t *testing.T) {
 	}
 	for _, want := range []string{
 		store.ProviderMattermost, store.ProviderSlack, store.ProviderDiscord,
+		store.ProviderTelegram,
 	} {
 		if !seen[want] {
 			t.Errorf("메신저 %q 를 고를 수 없습니다", want)

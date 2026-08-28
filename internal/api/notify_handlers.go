@@ -101,6 +101,10 @@ func (s *Server) handleTestNotify(c *fiber.Ctx) error {
 		return err
 	}
 	if !cfg.HasWebhook() {
+		if cfg.Kind() == store.ProviderTelegram {
+			return fail(c, fiber.StatusBadRequest, "no_webhook",
+				"봇 토큰과 채팅 ID를 먼저 저장하세요")
+		}
 		return fail(c, fiber.StatusBadRequest, "no_webhook",
 			"웹훅 주소를 먼저 저장하세요")
 	}
@@ -131,11 +135,18 @@ func mergeNotify(cur store.NotifySettings, in notifyPayload) (store.NotifySettin
 	out.AppURL = strings.TrimRight(strings.TrimSpace(in.AppURL), "/")
 
 	if in.WebhookURL != nil {
-		url := strings.TrimSpace(*in.WebhookURL)
-		if url != "" && !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+		secret := strings.TrimSpace(*in.WebhookURL)
+		// 텔레그램은 주소가 아니라 봇 토큰(123456:AA...)을 받는다. 이미 완성된
+		// API 주소를 넣은 사람도 그대로 받는다.
+		if provider == store.ProviderTelegram {
+			if secret != "" && !looksLikeTelegramSecret(secret) {
+				return out, "봇 토큰이 올바르지 않습니다 (예: 123456789:AA...)"
+			}
+		} else if secret != "" &&
+			!strings.HasPrefix(secret, "http://") && !strings.HasPrefix(secret, "https://") {
 			return out, "웹훅 주소는 http:// 또는 https:// 로 시작해야 합니다"
 		}
-		out.WebhookURL = url
+		out.WebhookURL = secret
 	}
 
 	sev := store.Severity(strings.TrimSpace(in.MinSeverity))
@@ -164,10 +175,39 @@ func mergeNotify(cur store.NotifySettings, in notifyPayload) (store.NotifySettin
 	}
 	out.Kinds = kinds
 
+	// 텔레그램은 채팅 ID가 곧 보낼 곳이다. 비어 있으면 켤 수도, 시험할 수도 없다.
+	if out.Kind() == store.ProviderTelegram && strings.TrimSpace(out.WebhookURL) != "" &&
+		strings.TrimSpace(out.Channel) == "" {
+		return out, "텔레그램은 채팅 ID가 있어야 합니다"
+	}
 	if out.Enabled && !out.HasWebhook() {
+		if out.Kind() == store.ProviderTelegram {
+			return out, "봇 토큰과 채팅 ID가 있어야 알림을 켤 수 있습니다"
+		}
 		return out, "웹훅 주소가 있어야 알림을 켤 수 있습니다"
 	}
 	return out, ""
+}
+
+// looksLikeTelegramSecret은 봇 토큰이나 완성된 API 주소인지 본다.
+//
+// 형태만 본다(진짜인지는 테스트 전송이 답한다). 그래도 여기서 한 번 거르는 이유는,
+// 웹훅 주소를 붙여 넣는 습관 그대로 https:// 주소를 넣으면 저장은 되고 전송만
+// 조용히 실패하기 때문이다.
+func looksLikeTelegramSecret(raw string) bool {
+	if strings.HasPrefix(raw, "https://") || strings.HasPrefix(raw, "http://") {
+		return strings.Contains(raw, "api.telegram.org")
+	}
+	number, rest, ok := strings.Cut(raw, ":")
+	if !ok || number == "" || len(rest) < 10 {
+		return false
+	}
+	for _, r := range number {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // notifyProviders는 고를 수 있는 메신저다. 각각의 안내가 다르므로 함께 보낸다 —
@@ -191,6 +231,11 @@ func notifyProviders() []struct {
 		{store.ProviderDiscord, "Discord",
 			"채널 설정 → 연동 → 웹후크에서 주소를 만듭니다. 채널은 웹후크를 만들 때 정해져 여기서 바꿀 수 " +
 				"없고, 보내는 이름은 반영됩니다."},
+		{store.ProviderTelegram, "Telegram",
+			"@BotFather 로 봇을 만들어 토큰을 받고, 그 봇을 알림 받을 대화방에 초대합니다. " +
+				"채팅 ID는 대화방에 아무 글이나 쓴 뒤 https://api.telegram.org/bot<토큰>/getUpdates 를 " +
+				"열면 chat.id 로 보입니다(그룹은 -100 으로 시작하는 음수입니다). " +
+				"보내는 이름은 봇 이름으로 고정되고, 서식 없이 보냅니다."},
 	}
 }
 
