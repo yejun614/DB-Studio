@@ -128,7 +128,7 @@ export async function renderSchema(outlet, params, query) {
     mount(body, spinner(`${current.connection.name} 스키마를 읽는 중…`));
     try {
       const sc = await api.get(`/connections/${current.connection.id}/schema`);
-      mount(body, ...schemaView(sc));
+      mount(body, ...schemaView(sc, current));
     } catch (err) {
       mount(body, errorPanel(err));
     }
@@ -139,8 +139,21 @@ export async function renderSchema(outlet, params, query) {
 
 // ---------- 스키마 표시 ----------
 
-function schemaView(sc) {
+// COMMENT_KINDS는 설명(주석)을 저장할 수 있는 DB다.
+//
+// SQLite는 컬럼 주석을 저장하지 않는다. 고칠 수 있게 두면 적어 놓고 저장을 눌렀을 때
+// "실행할 SQL이 없습니다"를 만나게 되므로, 그 화면에서는 아예 읽기 전용으로 둔다.
+const COMMENT_KINDS = new Set(['mysql', 'postgres', 'mssql', 'oracle']);
+
+function schemaView(sc, current) {
   const parts = [];
+  // 설명은 DB에 저장되는 구조의 일부다(COMMENT). 고치는 것은 DDL이므로 여기서 바로
+  // 실행하지 않고 마이그레이션 계획을 만든다 — 이 앱에서 DB 구조는 언제나
+  // 계획 → 리뷰 → 승인 → 실행을 거친다.
+  const canEdit = Boolean(current)
+    && current.level === 'migrate'
+    && COMMENT_KINDS.has(current.connection?.kind);
+  const edit = canEdit ? newCommentEditor(current.connection) : null;
 
   parts.push(h('div.stat-row', {},
     statTile('테이블', sc.stats.tables, 'database'),
@@ -214,7 +227,7 @@ function schemaView(sc) {
       ? `${filtered.length} / ${sc.tables.length}개 테이블`
       : `${sc.tables.length}개 테이블`;
     mount(listBox, filtered.length
-      ? filtered.map((t) => tableCard(t, sc, scope === 'table' ? '' : q))
+      ? filtered.map((t) => tableCard(t, sc, scope === 'table' ? '' : q, edit))
       : emptyState('검색 결과가 없습니다'));
   };
   search.addEventListener('input', renderList);
@@ -226,6 +239,7 @@ function schemaView(sc) {
     countLabel,
   ));
   parts.push(listBox);
+  if (edit) parts.push(edit.bar);
   renderList();
 
   if (sc.views?.length) {
@@ -255,6 +269,92 @@ function schemaView(sc) {
   return parts;
 }
 
+// newCommentEditor는 고친 설명을 모았다가 마이그레이션 계획으로 만든다.
+//
+// 한 줄 고칠 때마다 계획을 만들지 않는 이유: 설명은 대개 여러 줄을 훑으며 한 번에
+// 채운다. 줄마다 계획이 생기면 승인 대기 목록이 설명 수정으로 가득 찬다.
+function newCommentEditor(conn) {
+  // 키는 "테이블\u0000컬럼"이다. 검색으로 목록을 다시 그려도 고친 값이 남아야 하므로
+  // 입력 요소가 아니라 이 지도가 기억한다.
+  const edits = new Map();
+  // 화면에 살아 있는 입력 칸들. 되돌릴 때 값을 제자리에서 되돌리기 위해 들고 있는다.
+  // 화면을 통째로 다시 그리면 펼쳐 둔 테이블이 모두 접혀, 고치던 자리를 잃는다.
+  const boxes = [];
+  const bar = h('div.schema-edit-bar', { hidden: true });
+  const keyOf = (t, column) => `${(t.namespace ? `${t.namespace}.` : '') + t.name}\u0000${column}`.toLowerCase();
+
+  const renderBar = () => {
+    bar.hidden = edits.size === 0;
+    if (!edits.size) {
+      mount(bar);
+      return;
+    }
+    mount(bar,
+      h('span', {}, `설명 ${edits.size}건을 고쳤습니다`),
+      h('span.muted.small', {}, '실제 DB를 바꾸는 일이라 마이그레이션으로 만들어 승인을 받습니다'),
+      h('button.btn.btn-small', {
+        type: 'button',
+        onclick: () => {
+          edits.clear();
+          // 이미 사라진 칸은 건너뛴다(검색으로 목록이 다시 그려졌을 수 있다).
+          for (const { box, original } of boxes) {
+            if (!box.isConnected) continue;
+            box.value = original;
+            box.classList.remove('is-changed');
+          }
+          renderBar();
+        },
+      }, '되돌리기'),
+      h('button.btn.btn-small.btn-primary', { type: 'button', onclick: () => submit() },
+        icon('play', 13), ' 마이그레이션 만들기'),
+    );
+  };
+
+  const submit = async () => {
+    const items = [...edits.values()];
+    try {
+      const res = await api.post(`/connections/${conn.id}/schema/comments`, {
+        title: `설명 수정 ${items.length}건`,
+        items,
+      });
+      toast('마이그레이션 계획을 만들었습니다', 'success');
+      navigate(`/migrations/${encodeURIComponent(res.migration.id)}`);
+    } catch (err) {
+      toastError(err);
+    }
+  };
+
+  return {
+    bar,
+    // field는 설명 한 칸이다. 원래 값과 같아지면 목록에서 빠진다 —
+    // 고쳤다가 되돌린 것을 "바꾼 것"으로 세면 계획에 빈 변경이 들어간다.
+    field(t, column, original) {
+      const key = keyOf(t, column);
+      const box = input({
+        value: edits.get(key)?.comment ?? original,
+        // 줄마다 긴 안내가 반복되면 표가 안내문으로 덮인다. 열 이름이 이미
+        // '설명'이므로 여기서는 짧게만 권한다.
+        placeholder: '설명 추가',
+        class: 'input comment-input',
+      });
+      boxes.push({ box, original: original ?? '' });
+      box.classList.toggle('is-changed', edits.has(key));
+      box.addEventListener('input', () => {
+        const value = box.value;
+        if (value.trim() === (original ?? '').trim()) edits.delete(key);
+        else {
+          edits.set(key, {
+            namespace: t.namespace ?? '', table: t.name, column, comment: value,
+          });
+        }
+        box.classList.toggle('is-changed', edits.has(key));
+        renderBar();
+      });
+      return box;
+    },
+  };
+}
+
 function statTile(label, value, iconName) {
   return h('div.stat', {},
     h('div.stat-icon', {}, icon(iconName, 18)),
@@ -266,7 +366,7 @@ function statTile(label, value, iconName) {
 // 테이블이 수백 개일 수 있으므로 펼칠 때 내용을 만든다.
 // hit는 컬럼 이름으로 걸린 검색어다. 어느 컬럼 때문에 이 표가 나왔는지
 // 접힌 상태에서는 알 수 없어, 하나하나 펼쳐 보게 된다.
-function tableCard(t, sc, hit = '') {
+function tableCard(t, sc, hit = '', edit = null) {
   const detail = h('div.table-detail');
   let built = false;
   const matched = hit
@@ -277,7 +377,7 @@ function tableCard(t, sc, hit = '') {
     ontoggle: (e) => {
       if (e.target.open && !built) {
         built = true;
-        mount(detail, ...tableDetail(t, sc));
+        mount(detail, ...tableDetail(t, sc, edit));
       }
     },
   },
@@ -305,9 +405,15 @@ function tableCard(t, sc, hit = '') {
   return el;
 }
 
-function tableDetail(t, sc) {
+function tableDetail(t, sc, edit = null) {
   const parts = [];
-  if (t.comment) parts.push(h('p.table-comment', {}, t.comment));
+  if (edit) {
+    parts.push(h('div.table-comment-edit', {},
+      h('span.field-label', {}, '테이블 설명'),
+      edit.field(t, '', t.comment ?? '')));
+  } else if (t.comment) {
+    parts.push(h('p.table-comment', {}, t.comment));
+  }
 
   const pkCols = new Set((t.primaryKey?.columns ?? []).map((c) => c.toLowerCase()));
   const fkCols = new Map();
@@ -346,10 +452,11 @@ function tableDetail(t, sc) {
         h('td', {}, h('code.type-cell', { title: c.rawType || '' }, typeLabel(c))),
         h('td', {}, c.nullable ? h('span.muted', {}, 'NULL') : h('strong', {}, 'NOT NULL')),
         h('td', {}, c.hasDefault ? h('code.default-cell', {}, c.default) : h('span.muted', {}, '—')),
-        h('td.detail-cell', {},
-          c.comment || (c.presence !== undefined && c.presence < 1
+        h('td.detail-cell', {}, edit
+          ? edit.field(t, c.name, c.comment ?? '')
+          : (c.comment || (c.presence !== undefined && c.presence < 1
             ? `샘플 중 ${Math.round(c.presence * 100)}% 문서에 존재`
-            : '')),
+            : ''))),
       );
     })),
   ));
