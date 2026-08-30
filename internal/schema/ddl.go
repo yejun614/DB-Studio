@@ -13,6 +13,15 @@ type Statement struct {
 	Table       string     `json:"table,omitempty"`
 	Object      string     `json:"object,omitempty"`
 	Destructive bool       `json:"destructive"`
+	// Seq는 이 문장을 낳은 변경의 번호다(1부터). up과 down의 짝을 잇는 유일한 끈이다.
+	//
+	// 한 변경이 문장 여러 개를 낳기도 하고(SQLite의 테이블 재작성), 순서도 up과 down이
+	// 서로 반대라서 위치로는 짝지을 수 없다. 이 번호가 있어야 "적용된 앞부분만 되돌리기"
+	// 를 정확히 할 수 있다 — 트랜잭션이 없는 DB(MySQL·Oracle)에서 실패했을 때 필요하다.
+	//
+	// 0은 "모른다"는 뜻이다. 이 항목이 생기기 전에 저장된 계획이 그렇고, 그런 계획은
+	// 자동 되돌리기 대상에서 빠진다(짐작으로 DDL을 실행하지 않는다).
+	Seq int `json:"seq,omitempty"`
 	// Note는 이 문장에 대한 주의사항이다 (예: SQLite 제약, 수동 확인 필요).
 	Note string `json:"note,omitempty"`
 }
@@ -184,8 +193,17 @@ func BuildPlan(dialect string, diff *DiffResult) *Plan {
 	p := &Plan{Dialect: dialect}
 	r := &renderer{q: q, dialect: dialect, plan: p}
 
-	for _, c := range order(diff.Changes) {
+	// 변경마다 번호를 매겨 그 변경이 낳은 문장에 찍는다. 렌더러의 모든 emit 자리를
+	// 고치는 대신 여기서 구간을 잘라 찍는다 — 한 곳에서만 매기므로 빠뜨릴 자리가 없다.
+	for i, c := range order(diff.Changes) {
+		upFrom, downFrom := len(p.Up), len(p.Down)
 		r.render(c)
+		for j := upFrom; j < len(p.Up); j++ {
+			p.Up[j].Seq = i + 1
+		}
+		for j := downFrom; j < len(p.Down); j++ {
+			p.Down[j].Seq = i + 1
+		}
 	}
 	for _, u := range diff.Unsupported {
 		p.Warnings = append(p.Warnings, u)
