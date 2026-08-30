@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"sort"
 	"strconv"
 	"testing"
 
@@ -683,6 +684,115 @@ func TestReviewFromAnotherMigrationRejected(t *testing.T) {
 	}
 	if left, _ := e.st.ListMigrationReviews(ctx, mig.ID); len(left) != 1 {
 		t.Errorf("원래 계획의 리뷰가 지워졌습니다 (%d건 남음)", len(left))
+	}
+}
+
+// 계획 하나의 이력은 계획을 볼 수 있는 사람이면 볼 수 있어야 한다.
+//
+// 감사 로그 전체는 슈퍼 어드민 전용이지만, "누가 이 계획을 승인했는가"까지 관리자만
+// 볼 수 있으면 리뷰 흐름은 어딘가에서 정해진 일이 된다. 대신 내보내는 항목은 좁힌다.
+func TestMigrationActivity(t *testing.T) {
+	e, conn, mig := assignEnv(t)
+	ctx := context.Background()
+	dana := member(t, e, "dana", conn.ID, model.LevelMigrate)
+
+	alice := loginAs(t, e, "alice")
+	if code, body := alice.do("PUT", "/api/v1/migrations/"+mig.ID+"/assignment",
+		map[string]any{"assigneeId": "", "reviewerIds": []string{dana.ID}}); code != 200 {
+		t.Fatalf("지정 = %d: %v", code, body)
+	}
+	danaC := loginAs(t, e, "dana")
+	if code, body := danaC.do("POST", "/api/v1/migrations/"+mig.ID+"/review",
+		map[string]any{"decision": "approved", "comment": "확인했습니다"}); code != 200 {
+		t.Fatalf("승인 = %d: %v", code, body)
+	}
+	if code, body := alice.do("POST", "/api/v1/migrations/"+mig.ID+"/status",
+		map[string]any{"status": "closed"}); code != 200 {
+		t.Fatalf("닫기 = %d: %v", code, body)
+	}
+	// 다시 열면 리뷰는 지워진다. 그래도 "누가 승인했었는가"는 이력에 남아야 한다.
+	if code, body := alice.do("POST", "/api/v1/migrations/"+mig.ID+"/status",
+		map[string]any{"status": "draft"}); code != 200 {
+		t.Fatalf("다시 열기 = %d: %v", code, body)
+	}
+	reopened, err := e.st.GetMigration(ctx, mig.ID, true)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(reopened.Reviews) != 0 {
+		t.Fatalf("다시 열었는데 리뷰가 %d건 남았습니다", len(reopened.Reviews))
+	}
+
+	code, body := danaC.do("GET", "/api/v1/migrations/"+mig.ID+"/activity", nil)
+	if code != 200 {
+		t.Fatalf("활동 기록 = %d: %v", code, body)
+	}
+	list, _ := body["activity"].([]any)
+	if len(list) == 0 {
+		t.Fatalf("활동 기록이 비었습니다: %v", body)
+	}
+
+	seen := map[string]map[string]any{}
+	var prev string
+	for _, raw := range list {
+		item, _ := raw.(map[string]any)
+		action, _ := item["action"].(string)
+		seen[action] = item
+		// 오래된 것부터 와야 한다. 이력은 위에서 아래로 읽는다.
+		at, _ := item["at"].(string)
+		if prev != "" && at < prev {
+			t.Errorf("시간 순이 아닙니다: %s 뒤에 %s", prev, at)
+		}
+		prev = at
+		// IP처럼 이 화면에 필요 없는 것은 나가지 않는다.
+		if _, bad := item["ip"]; bad {
+			t.Errorf("활동 기록에 IP가 들어 있습니다: %v", item)
+		}
+		detail, _ := item["detail"].(map[string]any)
+		for k := range detail {
+			if !activitySafeKeys[k] {
+				t.Errorf("허용하지 않은 detail 열쇠가 나갔습니다: %q", k)
+			}
+		}
+	}
+
+	for _, want := range []string{"migration.assigned", "migration.review", "migration.status"} {
+		if _, ok := seen[want]; !ok {
+			t.Errorf("%s 기록이 없습니다 (있는 것: %v)", want, keysOf(seen))
+		}
+	}
+	// 리뷰가 지워진 뒤에도 누가 승인했는지가 남아 있어야 한다.
+	rv := seen["migration.review"]
+	if name, _ := rv["actorName"].(string); name == "" {
+		t.Errorf("승인한 사람 이름이 없습니다: %v", rv)
+	}
+	if d, _ := rv["detail"].(map[string]any); d["decision"] != "approved" {
+		t.Errorf("승인 기록의 decision = %v", d["decision"])
+	}
+	// 등록 기록은 감사 로그에 없어도 계획 자신의 시각으로 채워진다.
+	if _, ok := seen["migration.create"]; !ok {
+		t.Errorf("등록 기록이 없습니다 (있는 것: %v)", keysOf(seen))
+	}
+}
+
+func keysOf(m map[string]map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// 이 커넥션을 볼 수 없는 사람은 이력도 볼 수 없다.
+func TestMigrationActivityNeedsAccess(t *testing.T) {
+	e, conn, mig := assignEnv(t)
+	// 등급을 비워 두면 이 커넥션에 닿지 못하는 사람이다.
+	member(t, e, "frank", conn.ID, "")
+
+	frank := loginAs(t, e, "frank")
+	if code, _ := frank.do("GET", "/api/v1/migrations/"+mig.ID+"/activity", nil); code == 200 {
+		t.Errorf("권한 없는 사람이 이력을 읽었습니다 (%d)", code)
 	}
 }
 

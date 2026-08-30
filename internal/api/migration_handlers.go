@@ -791,6 +791,86 @@ func (s *Server) recountMigrationStatus(c *fiber.Ctx, mig *store.Migration, conn
 	return next, approvals, required, nil
 }
 
+// handleMigrationActivity는 이 계획에 일어난 일을 시간 순으로 준다.
+//
+// 감사 로그 전체는 슈퍼 어드민만 볼 수 있지만, 이것은 **이 계획 하나의 이력**이다.
+// 누가 등록했고 누가 승인했으며 누가 닫았는지는 계획을 볼 수 있는 사람이라면 함께
+// 봐야 하는 것이다 — 그것을 못 보면 리뷰 흐름은 "어딘가에서 정해진 일"이 된다.
+//
+// 대신 내보내는 것을 좁힌다. IP처럼 이 화면에 필요 없는 것은 빼고, 뜻이 정해진
+// 열쇠만 통과시킨다(activitySafeKeys). 나중에 감사 detail에 무엇이 추가되더라도
+// 여기로 새어 나오지 않게 하려는 것이다 — 기본값이 "보여준다"이면 언젠가 샌다.
+func (s *Server) handleMigrationActivity(c *fiber.Ctx) error {
+	mig, _, err := s.resolveMigration(c, c.Params("migId"), model.LevelMigrate)
+	if err != nil {
+		return err
+	}
+	const activityLimit = 300
+	entries, total, err := s.st.ListAudit(c.Context(), store.AuditFilter{
+		TargetType: "migration", TargetID: mig.ID, Limit: activityLimit,
+	})
+	if err != nil {
+		return err
+	}
+
+	// ListAudit은 최신순이다. 이력은 위에서 아래로 읽는 것이라 뒤집는다.
+	out := make([]fiber.Map, 0, len(entries)+1)
+	created := false
+	for i := len(entries) - 1; i >= 0; i-- {
+		e := entries[i]
+		if e.Action == "migration.create" || e.Action == "schema.comments.plan" {
+			created = true
+		}
+		out = append(out, fiber.Map{
+			"at": e.At, "actorName": e.ActorName, "action": e.Action,
+			"result": e.Result, "detail": activityDetail(e.Detail),
+		})
+	}
+
+	// 등록 기록이 없을 수 있다: 감사 로그가 정리됐거나, 이 표가 생기기 전에 만든
+	// 계획이다. 그때도 "언제 생겼는가"는 계획 자신이 알고 있으므로 그것으로 채운다.
+	// 빈 이력은 "아무 일도 없었다"로 읽히는데, 계획이 있다는 것 자체가 이미 사건이다.
+	if !created {
+		who := ""
+		if mig.CreatedBy != "" {
+			if u, uerr := s.st.GetUser(c.Context(), mig.CreatedBy); uerr == nil {
+				who = displayName(u)
+			}
+		}
+		out = append([]fiber.Map{{
+			"at": mig.CreatedAt, "actorName": who, "action": "migration.create",
+			"result": "ok", "detail": fiber.Map{"title": mig.Title},
+		}}, out...)
+	}
+	// total을 함께 주는 이유: 잘렸다는 사실을 화면이 말할 수 있어야 한다. 잘린 줄
+	// 모르면 "이게 전부"로 읽히고, 그것이 이력에서 가장 나쁜 오해다.
+	return c.JSON(fiber.Map{"activity": out, "total": total, "limit": activityLimit})
+}
+
+// activitySafeKeys는 활동 기록에 내보내도 되는 detail 열쇠다.
+//
+// 통과 목록으로 두는 이유: 막을 것을 적으면 새로 추가되는 열쇠가 기본으로 통과한다.
+// 감사 detail은 여러 곳에서 자유롭게 채워지므로, 여기서는 반대로 두어야 한다.
+var activitySafeKeys = map[string]bool{
+	"from": true, "to": true, "status": true,
+	"decision": true, "approvals": true, "required": true,
+	"assignee": true, "reviewers": true, "author": true, "reviewId": true,
+	"title": true, "document": true, "changes": true, "destructive": true,
+	"statements": true, "applied": true, "error": true,
+	"branch": true, "branchCreated": true, "commit": true, "files": true,
+	"pr": true, "via": true,
+}
+
+func activityDetail(detail map[string]any) map[string]any {
+	out := map[string]any{}
+	for k, v := range detail {
+		if activitySafeKeys[k] {
+			out[k] = v
+		}
+	}
+	return out
+}
+
 // reviewableStatus는 아직 결정을 남기거나 바꿀 수 있는 상태인지다.
 //
 // 실행 전까지가 그 범위다. 실행된 뒤에 결정을 바꾸는 것은 이력을 고치는 일이고,

@@ -424,6 +424,9 @@ func (s *Server) routes() {
 	migs.Delete("/:migId/review/:reviewId", s.handleDeleteMigrationReview)
 	// 담당자·리뷰어 지정. 후보 목록은 대상 커넥션을 만질 수 있는 사람만 담는다.
 	migs.Get("/:migId/people", s.handleListMigrationPeople)
+	// 이 계획 하나의 이력. 감사 로그 전체(슈퍼 어드민 전용)와 달리 계획을 볼 수
+	// 있는 사람이면 볼 수 있다 — 누가 승인했는지 모르는 리뷰는 절차가 아니다.
+	migs.Get("/:migId/activity", s.handleMigrationActivity)
 	migs.Put("/:migId/assignment", s.handleSetMigrationAssignment)
 	migs.Post("/:migId/precheck", s.handlePrecheckMigration)
 	migs.Post("/:migId/apply", s.handleApplyMigration)
