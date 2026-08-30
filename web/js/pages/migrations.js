@@ -430,8 +430,8 @@ function actionBar(m, res, precheckBox, reload) {
 //
 // 버튼을 그냥 감추면 화면은 "실행할 수 없다"까지만 말하고 "왜"와 "그래서 뭘 해야
 // 하는가"를 빠뜨린다. 승인 1/2 이라는 숫자는 옆에 있지만, 그것이 실행 버튼이 없는
-// 이유라는 것은 이 흐름을 아는 사람만 안다. 실제로 파괴적 변경 2건이라 2명이
-// 필요한 계획에서 "실행 버튼이 안 보이네요?" 라는 물음이 나왔다.
+// 이유라는 것은 이 흐름을 아는 사람만 안다. 승인이 모자란 계획에서 "실행 버튼이
+// 안 보이네요?" 라는 물음이 실제로 나왔다.
 //
 // 비활성 버튼을 두는 대신 문장을 쓰는 이유: 눌리지 않는 버튼은 이유를 말해 주지
 // 않으면서 자리만 차지한다. 여기서 필요한 것은 누를 것이 아니라 설명이다.
@@ -439,8 +439,9 @@ function applyGate(m, res, reload) {
   // 실행 버튼이 이미 있거나, 실행이 화제가 아닌 상태에서는 아무 말도 하지 않는다.
   if (m.status === 'approved') return null;
   const short = Math.max(0, res.requiredApprovals - res.approvals);
+  // 필요한 수가 1을 넘는 경우에만 그 숫자를 말한다. 규칙이 바뀌어도 문장은 참이다.
   const why = res.requiredApprovals > 1
-    ? ' 운영 DB이거나 파괴적 변경이 포함되어 2명의 승인이 필요합니다.'
+    ? ` 이 계획은 승인 ${res.requiredApprovals}명이 필요합니다.`
     : '';
 
   if (m.status === 'draft') {
@@ -645,8 +646,8 @@ function reviewsPanel(m, res, reload) {
       ' 담당자는 자기가 맡은 계획을 승인할 수 없습니다.',
       ' 실행 전이라면 결정을 바꿀 수 있고, 남긴 기록을 눌러 고치거나 지울 수 있습니다.',
       res.requiredApprovals > 1
-        ? ' 운영 DB이거나 파괴적 변경이 포함되어 2명의 승인이 필요합니다.'
-        : ''),
+        ? ` 이 계획은 승인 ${res.requiredApprovals}명이 필요합니다.`
+        : ' 승인 1명이면 실행할 수 있습니다.'),
     pendingReviewers(m),
     reviews.length === 0
       ? h('p.muted', {}, '아직 리뷰가 없습니다')
