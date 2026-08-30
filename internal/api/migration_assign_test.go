@@ -277,6 +277,44 @@ func TestAssigneeCannotBeReviewer(t *testing.T) {
 	}
 }
 
+// 슈퍼 어드민은 담당자이면서 리뷰어일 수 있다.
+//
+// 리뷰 쪽 규칙(not_reviewer·self_approval)에는 이미 예외가 있어서 슈퍼 어드민은 자기가
+// 맡은 계획도 승인할 수 있다. 지정에서만 막으면 "승인은 되는데 리뷰어로는 못 넣는"
+// 어긋난 상태가 되고, 사람이 하나뿐인 팀에서는 담당자 자리를 비워야만 승인을 받을 수
+// 있게 된다. 누가 자기 계획을 승인했는지는 활동 기록에 그대로 남는다.
+func TestSuperadminCanBeAssigneeAndReviewer(t *testing.T) {
+	e, _, mig := assignEnv(t)
+	ctx := context.Background()
+	alice := loginAs(t, e, "alice")
+
+	if status, body := alice.do("PUT", "/api/v1/migrations/"+mig.ID+"/assignment",
+		map[string]any{"assigneeId": aliceID(t, e), "reviewerIds": []string{aliceID(t, e)}}); status != 200 {
+		t.Fatalf("슈퍼 어드민 자기 지정 = %d: %v", status, body)
+	}
+	got, err := e.st.GetMigration(ctx, mig.ID, true)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.AssigneeID != aliceID(t, e) || len(got.Reviewers) != 1 {
+		t.Fatalf("지정이 저장되지 않았습니다: assignee=%q reviewers=%d",
+			got.AssigneeID, len(got.Reviewers))
+	}
+	// 그리고 실제로 승인까지 갈 수 있어야 한다. 지정만 되고 승인이 막히면
+	// 예외를 둔 뜻이 없다.
+	if status, body := alice.do("POST", "/api/v1/migrations/"+mig.ID+"/review",
+		map[string]any{"decision": "approved", "comment": "혼자 맡고 혼자 봅니다"}); status != 200 {
+		t.Fatalf("슈퍼 어드민 자기 승인 = %d: %v", status, body)
+	}
+	after, err := e.st.GetMigration(ctx, mig.ID, false)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if after.Status != store.MigrationApproved {
+		t.Errorf("승인 뒤 상태 = %q, 기대 approved", after.Status)
+	}
+}
+
 // 슈퍼 어드민은 리뷰어로 지정되지 않아도 승인·반려할 수 있다.
 //
 // 지정한 리뷰어가 자리를 비운 사이 계획이 영원히 멈춰 있으면, 사람들은 이 흐름을

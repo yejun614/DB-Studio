@@ -1216,7 +1216,16 @@ func (s *Server) handleSetMigrationAssignment(c *fiber.Ctx) error {
 	// 이것을 막지 못한다 — 한 명만 필요한 계획에서는 담당자가 스스로 승인하고 끝낼 수
 	// 있고, 그러면 리뷰 단계는 이름만 남는다. 화면에서도 고를 수 없게 해 두었지만,
 	// 화면을 거치지 않는 요청이 있으므로 여기서 다시 본다.
-	if assignee != "" && seen[assignee] {
+	//
+	// 슈퍼 어드민은 예외다. 리뷰 쪽 규칙(not_reviewer·self_approval)에는 이미 예외가
+	// 있어서, 슈퍼 어드민은 자기가 맡은 계획도 승인할 수 있다. 그런데 여기서만 막으면
+	// "승인은 되는데 리뷰어로는 못 넣는" 어긋난 상태가 된다 — 같은 사람에 대해 규칙이
+	// 두 갈래로 갈리면 어느 쪽이 진짜인지 아무도 모른다.
+	//
+	// 사람이 하나뿐인 팀에서는 이것이 유일한 길이기도 하다. 부탁할 사람이 없는데
+	// 담당자 자리까지 비워야 승인을 받을 수 있다면, 사람들은 이 흐름을 우회하는 다른
+	// 길을 찾는다. 누가 자기 계획을 자기가 승인했는지는 활동 기록에 그대로 남는다.
+	if assignee != "" && seen[assignee] && !isSuperadminID(c, s, assignee) {
 		who := assignee
 		if target, err := s.st.GetUser(c.Context(), assignee); err == nil {
 			who = displayName(target)
@@ -1289,6 +1298,15 @@ func (s *Server) handleSetMigrationAssignment(c *fiber.Ctx) error {
 // error가 아니라 값으로 돌려주는 이유: 이 파일의 fail()은 응답을 쓰고 nil을
 // 반환한다. 그것을 그대로 넘기면 호출부의 err != nil 검사가 통과해 버려, 400을
 // 쓴 뒤에도 저장이 이어진다 — 실제로 그렇게 새어 나갔다.
+// isSuperadminID는 그 사람이 슈퍼 어드민인지 본다.
+//
+// 조회에 실패하면 false다 — 확인하지 못한 것을 예외로 통과시키면, 예외는 규칙보다
+// 넓어진다. 여기까지 오는 id는 이미 assignableReason을 지났으므로 실제로는 있다.
+func isSuperadminID(c *fiber.Ctx, s *Server, userID string) bool {
+	u, err := s.st.GetUser(c.Context(), userID)
+	return err == nil && u.Role == model.RoleSuperadmin
+}
+
 func (s *Server) assignableReason(c *fiber.Ctx, conn *model.Connection, userID string) (string, string) {
 	u, err := s.st.GetUser(c.Context(), userID)
 	if err != nil {
