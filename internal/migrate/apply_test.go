@@ -631,6 +631,89 @@ func containsSubstring(list []string, want string) bool {
 	return false
 }
 
+// 롤백한 계획은 승인을 지닌 채 다시 실행할 수 있어야 한다.
+//
+// 롤백은 "이 변경을 물린다"이지 "이 계획을 버린다"가 아니다. 실행 중 문제가 생겨
+// 일단 되돌렸다가 원인을 고친 뒤 같은 변경을 다시 넣는 일이 흔하다. 그때마다 계획을
+// 새로 만들고 승인을 다시 받아야 한다면 사람들은 롤백을 누르기를 망설이게 된다.
+//
+// 여기서 실제로 확인하는 것은 두 가지다: 다시 실행한 뒤 DB가 목표 구조가 되는가,
+// 그리고 그 사이 승인 기록이 살아 있는가.
+func TestRerunAfterRollbackAppliesAgain(t *testing.T) {
+	skipUnlessIntegration(t)
+
+	for _, tc := range dialectCases(t) {
+		t.Run(tc.name, func(t *testing.T) {
+			h := tc.newHarness(t)
+			beforeFinger := h.introspect(t).Fingerprint()
+
+			mig := h.createMigration(t, "재실행", addColumnTarget(t, h))
+			mig = h.approve(t, mig)
+			targetFinger := ""
+
+			if _, err := h.runner.Apply(h.ctx, ApplyParams{
+				Conn: h.conn, Secret: h.secret, Mig: mig, Actor: h.author,
+			}); err != nil {
+				t.Fatalf("첫 실행: %v", err)
+			}
+			targetFinger = h.introspect(t).Fingerprint()
+			if targetFinger == beforeFinger {
+				t.Fatalf("실행했는데 구조가 그대로입니다 (설정 확인)")
+			}
+
+			applied, err := h.st.GetMigration(h.ctx, mig.ID, true)
+			if err != nil {
+				t.Fatalf("reload: %v", err)
+			}
+			if _, err := h.runner.Rollback(h.ctx, ApplyParams{
+				Conn: h.conn, Secret: h.secret, Mig: applied, Actor: h.author,
+			}, false); err != nil {
+				t.Fatalf("롤백: %v", err)
+			}
+			if got := h.introspect(t).Fingerprint(); got != beforeFinger {
+				t.Fatalf("롤백 뒤 구조가 원래와 다릅니다")
+			}
+
+			// 여기가 이번 변경이다: 롤백된 계획을 다시 실행 대기로 되돌린다.
+			if err := h.st.SetMigrationStatus(h.ctx, mig.ID, store.MigrationApproved); err != nil {
+				t.Fatalf("다시 실행 대기로: %v", err)
+			}
+			again, err := h.st.GetMigration(h.ctx, mig.ID, true)
+			if err != nil {
+				t.Fatalf("reload: %v", err)
+			}
+			// 승인 기록이 살아 있어야 한다. 닫기 후 다시 열기와 다른 점이다.
+			if store.ApprovalCount(again.Reviews) == 0 {
+				t.Fatalf("다시 실행 대기로 되돌렸는데 승인이 사라졌습니다: %+v", again.Reviews)
+			}
+
+			// 사전 검사가 통과해야 한다. 롤백으로 DB가 계획의 기준 구조로 돌아왔으므로
+			// 기준 지문이 다시 맞는다 — 이것이 재실행이 안전한 까닭이다.
+			pc, err := h.runner.Check(h.ctx, h.conn, h.secret, again)
+			if err != nil {
+				t.Fatalf("사전 검사: %v", err)
+			}
+			if !pc.OK {
+				t.Fatalf("다시 실행할 수 없습니다: %v", pc.Blockers)
+			}
+
+			res, err := h.runner.Apply(h.ctx, ApplyParams{
+				Conn: h.conn, Secret: h.secret, Mig: again, Actor: h.author,
+			})
+			if err != nil {
+				t.Fatalf("재실행: %v", err)
+			}
+			if res.Status != store.MigrationApplied {
+				t.Fatalf("재실행 상태 = %s, 오류 = %s", res.Status, res.Error)
+			}
+			if got := h.introspect(t).Fingerprint(); got != targetFinger {
+				t.Errorf("재실행 뒤 구조가 첫 실행 때와 다릅니다:\n  첫 %s\n  다시 %s",
+					targetFinger, got)
+			}
+		})
+	}
+}
+
 // 실패 시 동작은 DB 종류에 따라 달라야 한다.
 // 트랜잭션 DDL을 지원하는 DB는 전부 되돌아가고, 그렇지 않은 DB는 어디까지
 // 적용됐는지 기록되어야 한다.
@@ -880,6 +963,9 @@ func TestStatusTransitions(t *testing.T) {
 		// 실행된 뒤에는 결정을 바꿀 자리가 아니다.
 		{store.MigrationApplied, store.MigrationRejected, false},
 		{store.MigrationRolledBack, store.MigrationInReview, false},
+		// 롤백된 계획은 다시 실행할 수 있다. 승인 기록은 그대로 남아 있으므로
+		// 승인됨으로 곧장 돌아간다 — 되돌리기가 비싸면 아무도 되돌리지 않는다.
+		{store.MigrationRolledBack, store.MigrationApproved, true},
 		{store.MigrationFailed, store.MigrationDraft, true},
 		{store.MigrationFailed, store.MigrationApplied, false},
 	}
