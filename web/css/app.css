@@ -2508,6 +2508,10 @@ tr.is-destructive td { background: hsl(var(--h-danger) / 0.08); }
   color: var(--warn);
 }
 .exec-undo-tag .icon { width: 13px; height: 13px; }
+/* 미리 검사에서 막힌 문장. 결과 알림 바로 아래에 붙는다. */
+.dryrun-stmt { margin-top: 10px; }
+.dryrun-stmt .field-label { display: block; margin-bottom: 4px; }
+.dryrun-stmt .sql-block { max-height: 220px; }
 .text-danger { color: var(--danger); }
 
 /* ---------- 버전 이력 ---------- */
