@@ -1024,9 +1024,13 @@ function statusText(d) {
 // 오른쪽 칸에는 성공·실패만 남긴다. 표를 훑을 때 필요한 것은 어느 줄이 실패했는가
 // 하나이고, 무엇이 잘못됐는지는 그 줄을 찾은 다음의 일이다.
 function execRow(s, okMark) {
-  return h('tr', { class: s.error ? 'is-destructive' : '' },
+  // 되돌리기 문장은 적용과 같은 표에 이어 붙는다. 표시가 없으면 "적용된 문장"으로
+  // 읽히는데, 실제로는 그 반대를 한 문장이다.
+  const cls = [s.error ? 'is-destructive' : '', s.undo ? 'is-undo' : ''].filter(Boolean).join(' ');
+  return h('tr', { class: cls },
     h('td.nowrap', {}, String(s.index + 1)),
     h('td', {},
+      s.undo ? h('span.exec-undo-tag', {}, icon('refresh'), '되돌리기') : null,
       codeBlock(s.sql, 'sql', { className: 'mig-exec-sql' }),
       s.error ? h('p.mig-exec-error', {}, icon('alert'), h('span', {}, s.error)) : null),
     h('td.nowrap', {}, `${s.durationMs}ms`),
@@ -1038,10 +1042,14 @@ function executionPanel(m) {
   const log = m.executionLog ?? [];
   if (log.length === 0) return null;
   const failed = log.filter((s) => s.error).length;
+  const undone = log.filter((s) => s.undo).length;
   return h('section.card.mig-execlog', {},
     h('h2', {}, '실행 기록',
       h('span.muted', {}, `${m.appliedStatements}문장 적용`),
-      failed ? badge(`실패 ${failed}`, 'danger') : null),
+      failed ? badge(`실패 ${failed}`, 'danger') : null,
+      // 되돌린 문장이 있으면 그 사실이 제목에 있어야 한다. 표를 펴 보기 전에
+      // "지금 DB에 무엇이 남았는가"를 알 수 있어야 하기 때문이다.
+      undone ? badge(`되돌림 ${undone}`, 'warn') : null),
     h('div.table-wrap', {},
       h('table.table.mig-exec', {},
         h('thead', {}, h('tr', {},
