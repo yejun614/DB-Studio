@@ -544,8 +544,11 @@ func TestApprovalGate(t *testing.T) {
 	}
 }
 
-// 파괴적 변경은 승인 2명을 요구해야 한다.
-func TestDestructiveRequiresTwoApprovals(t *testing.T) {
+// 파괴적 변경도 승인 1명이면 실행할 수 있고, 대신 경고가 반드시 남아야 한다.
+//
+// 승인 수를 안전장치로 쓰지 않기로 했으므로(RequiredApprovals) 남는 장치는 경고와
+// 사전 검사다. 그것마저 없으면 컬럼을 지우는 계획이 아무 표시 없이 지나간다.
+func TestDestructiveNeedsOneApprovalAndWarns(t *testing.T) {
 	skipUnlessIntegration(t)
 
 	tc := dialectCases(t)[2] // sqlite
@@ -567,13 +570,23 @@ func TestDestructiveRequiresTwoApprovals(t *testing.T) {
 	if mig.DestructiveCount == 0 {
 		t.Fatalf("컬럼 삭제가 파괴적으로 분류되지 않았습니다")
 	}
-	if got := RequiredApprovals(h.conn, mig.DestructiveCount); got != 2 {
-		t.Errorf("필요 승인 수 = %d, 기대값 2", got)
+	if got := RequiredApprovals(h.conn, mig.DestructiveCount); got != 1 {
+		t.Errorf("필요 승인 수 = %d, 기대값 1", got)
 	}
 
 	if err := h.st.SetMigrationStatus(h.ctx, mig.ID, store.MigrationInReview); err != nil {
 		t.Fatalf("to in_review: %v", err)
 	}
+	// 아직 아무도 승인하지 않았다 — 파괴적이든 아니든 승인 없이는 막힌다.
+	reloaded, _ := h.st.GetMigration(h.ctx, mig.ID, true)
+	pc, err := h.runner.Check(h.ctx, h.conn, h.secret, reloaded)
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if pc.OK {
+		t.Errorf("승인 0명인데 실행 가능으로 판정했습니다 (필요 %d)", pc.RequiredApprovals)
+	}
+
 	// 승인 1명
 	if err := h.st.AddMigrationReview(h.ctx, &store.MigrationReview{
 		MigrationID: mig.ID, ReviewerID: h.reviewer.ID, ReviewerName: "검토자",
@@ -584,16 +597,15 @@ func TestDestructiveRequiresTwoApprovals(t *testing.T) {
 	if err := h.st.SetMigrationStatus(h.ctx, mig.ID, store.MigrationApproved); err != nil {
 		t.Fatalf("to approved: %v", err)
 	}
-	reloaded, _ := h.st.GetMigration(h.ctx, mig.ID, true)
-	pc, err := h.runner.Check(h.ctx, h.conn, h.secret, reloaded)
+	reloaded, _ = h.st.GetMigration(h.ctx, mig.ID, true)
+	pc, err = h.runner.Check(h.ctx, h.conn, h.secret, reloaded)
 	if err != nil {
 		t.Fatalf("check: %v", err)
 	}
-	if pc.OK {
-		t.Errorf("승인 1명으로 실행 가능해졌습니다 (필요 %d, 현재 %d)",
-			pc.RequiredApprovals, pc.Approvals)
+	if !pc.OK {
+		t.Errorf("승인 1명인데 막혔습니다: %v", pc.Blockers)
 	}
-	// 같은 사람이 두 번 승인해도 1명이어야 한다.
+	// 같은 사람이 두 번 승인해도 1명이다. 사람 단위로 세는 규칙은 그대로다.
 	if err := h.st.AddMigrationReview(h.ctx, &store.MigrationReview{
 		MigrationID: mig.ID, ReviewerID: h.reviewer.ID, ReviewerName: "검토자",
 		Decision: store.ReviewApproved,
@@ -603,22 +615,6 @@ func TestDestructiveRequiresTwoApprovals(t *testing.T) {
 	reloaded, _ = h.st.GetMigration(h.ctx, mig.ID, true)
 	if got := store.ApprovalCount(reloaded.Reviews); got != 1 {
 		t.Errorf("같은 사람의 반복 승인이 %d명으로 계산되었습니다", got)
-	}
-
-	// 다른 사람이 승인하면 통과한다.
-	if err := h.st.AddMigrationReview(h.ctx, &store.MigrationReview{
-		MigrationID: mig.ID, ReviewerID: h.author.ID, ReviewerName: "작성자",
-		Decision: store.ReviewApproved,
-	}); err != nil {
-		t.Fatalf("second approve: %v", err)
-	}
-	reloaded, _ = h.st.GetMigration(h.ctx, mig.ID, true)
-	pc, err = h.runner.Check(h.ctx, h.conn, h.secret, reloaded)
-	if err != nil {
-		t.Fatalf("check: %v", err)
-	}
-	if !pc.OK {
-		t.Errorf("승인 2명인데 막혔습니다: %v", pc.Blockers)
 	}
 	// 파괴적 변경 경고는 반드시 있어야 한다.
 	if !containsSubstring(pc.Warnings, "데이터 손실") {
@@ -888,20 +884,28 @@ func TestStatusTransitions(t *testing.T) {
 	}
 }
 
+// 승인은 어디서나 1명이면 된다.
+//
+// 두 번째 승인자를 구하지 못해 계획이 멈추면 사람들은 이 흐름을 우회한다. 그러면
+// 검토는 한 명도 거치지 않은 것이 된다 — 지키지 못할 규칙은 규칙을 통째로 잃게
+// 만든다. 파괴적 변경은 승인 수 대신 경고와 사전 검사로 막는다.
 func TestRequiredApprovalsRules(t *testing.T) {
 	dev := &model.Connection{Environment: model.EnvDev}
 	prod := &model.Connection{Environment: model.EnvProd}
 
-	if got := RequiredApprovals(dev, 0); got != 1 {
-		t.Errorf("개발 + 비파괴 = %d, 기대값 1", got)
-	}
-	if got := RequiredApprovals(dev, 2); got != 2 {
-		t.Errorf("개발 + 파괴적 = %d, 기대값 2", got)
-	}
-	if got := RequiredApprovals(prod, 0); got != 2 {
-		t.Errorf("운영 = %d, 기대값 2", got)
-	}
-	if got := RequiredApprovals(prod, 5); got != 2 {
-		t.Errorf("운영 + 파괴적 = %d, 기대값 2", got)
+	for _, tc := range []struct {
+		name string
+		conn *model.Connection
+		dest int
+	}{
+		{"개발 + 비파괴", dev, 0},
+		{"개발 + 파괴적", dev, 2},
+		{"운영", prod, 0},
+		{"운영 + 파괴적", prod, 5},
+		{"커넥션 없음", nil, 0},
+	} {
+		if got := RequiredApprovals(tc.conn, tc.dest); got != 1 {
+			t.Errorf("%s = %d, 기대값 1", tc.name, got)
+		}
 	}
 }

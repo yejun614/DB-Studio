@@ -84,18 +84,20 @@ type Precheck struct {
 	Current *schema.Schema `json:"-"`
 }
 
-// RequiredApprovals는 이 커넥션에 필요한 승인 수를 정한다.
+// RequiredApprovals는 이 커넥션에 필요한 승인 수를 정한다. 언제나 1명이다.
 //
-// 운영 DB는 2명, 개발 DB는 1명이다. 운영에서 2명을 요구하는 것은 계획을 만든 사람
-// 외의 다른 사람이 한 번 더 봤다는 뜻이며, 계획 검토가 실질적인 안전장치가 되려면
-// 그 "다른 사람"이 필요하다. 파괴적 변경이 있으면 개발 DB도 2명을 요구한다.
+// 예전에는 운영 DB와 파괴적 변경에 2명을 요구했다. 두 사람이 보는 것이 더 안전한
+// 것은 맞지만, 두 번째 승인자를 구하지 못해 계획이 며칠씩 멈추면 사람들은 이
+// 흐름을 우회하는 다른 길(콘솔에서 직접 실행)을 찾는다. 그러면 검토는 한 명도
+// 거치지 않은 것이 된다 — 지키지 못할 규칙은 규칙을 통째로 잃게 만든다.
+//
+// 한 명이 남기는 승인은 여전히 "담당자가 아닌 다른 사람이 봤다"는 뜻이다. 담당자는
+// 리뷰어가 될 수 없고(handleSetMigrationAssignment) 자기 계획을 승인할 수도 없기
+// 때문이다. 파괴적 변경은 승인 수 대신 경고와 사전 검사로 막는다.
+//
+// 인자를 남겨 두는 이유: 커넥션·파괴적 변경 수에 따라 다시 갈라야 할 때 부르는 쪽을
+// 고치지 않아도 되게 하기 위해서다. 규칙은 여기 한 곳에만 있다.
 func RequiredApprovals(conn *model.Connection, destructive int) int {
-	if conn != nil && conn.Environment == model.EnvProd {
-		return 2
-	}
-	if destructive > 0 {
-		return 2
-	}
 	return 1
 }
 
