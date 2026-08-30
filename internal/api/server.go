@@ -432,6 +432,9 @@ func (s *Server) routes() {
 	migs.Get("/:migId/activity", s.handleMigrationActivity)
 	migs.Put("/:migId/assignment", s.handleSetMigrationAssignment)
 	migs.Post("/:migId/precheck", s.handlePrecheckMigration)
+	// 미리 검사: 조건이 아니라 SQL 자체를 본다. 그림자 DB에서 돌려 보므로
+	// 대상 DB는 손대지 않는다.
+	migs.Post("/:migId/dryrun", s.handleMigrationDryRun)
 	migs.Post("/:migId/apply", s.handleApplyMigration)
 	migs.Post("/:migId/rollback", s.handleRollbackMigration)
 	migs.Post("/:migId/push", s.handlePushMigration)

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -976,6 +977,7 @@ var activitySafeKeys = map[string]bool{
 	"statements": true, "applied": true, "error": true,
 	"branch": true, "branchCreated": true, "commit": true, "files": true,
 	"pr": true, "via": true,
+	"ok": true, "skipped": true,
 }
 
 func activityDetail(detail map[string]any) map[string]any {
@@ -1008,6 +1010,63 @@ func isDesignatedReviewer(mig *store.Migration, userID string) bool {
 		}
 	}
 	return false
+}
+
+// handleMigrationDryRun은 실행하기 전에 이 계획의 SQL이 실제로 도는지 확인한다.
+//
+// 사전 검사(handlePrecheckMigration)와 하는 일이 다르다. 사전 검사는 "지금 실행해도
+// 되는 조건인가"를 본다 — 승인 수, 반려, 드리프트, 상태. 이것은 "이 SQL이 이 DB에서
+// 도는가"를 본다. 조건은 다 맞는데 SQL이 깨진 경우가 이 기능이 생긴 까닭이다.
+//
+// 그림자 DB의 기준은 **지금 대상 DB**다. 계획이 실제로 부딪힐 상대가 그것이기
+// 때문이다 — 계획을 만들 때의 기준이 아니라. 그 사이 DB가 바뀌었다면 그 때문에 나는
+// 실패까지 여기서 보이는 것이 맞다(무엇이 바뀌었는지는 사전 검사가 따로 말한다).
+func (s *Server) handleMigrationDryRun(c *fiber.Ctx) error {
+	mig, conn, err := s.resolveMigration(c, c.Params("migId"), model.LevelMigrate)
+	if err != nil {
+		return err
+	}
+	if mig.Plan == nil || len(mig.Plan.Up) == 0 {
+		return fail(c, fiber.StatusBadRequest, "no_statements", "실행할 SQL이 없습니다")
+	}
+	adapter, err := s.erdAdapterFor(conn)
+	if err != nil {
+		return err
+	}
+	current, ierr := s.introspectConnection(c, conn, adapter)
+	if ierr != nil {
+		return failDetail(c, fiber.StatusBadGateway, "introspect_failed",
+			"대상 DB의 스키마를 읽지 못했습니다", ierr.Error())
+	}
+	secret, err := s.st.GetSecret(c.Context(), conn.ID)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(c.Context(), dryRunTimeout)
+	defer cancel()
+	report, err := dbx.DryRunDDL(ctx, adapter, dbx.Target{Conn: conn, Secret: secret},
+		seedStatements(string(conn.Kind), current, mig.TargetSchema), sqlList(mig.Plan.Up),
+		dbx.ExecOptions{StatementTimeout: dryRunStatementTimeout})
+	if err != nil {
+		return failDetail(c, fiber.StatusBadGateway, "dryrun_failed",
+			"미리 실행해 보지 못했습니다", err.Error())
+	}
+
+	s.audit(c, store.AuditParams{
+		Action: "migration.dryrun", TargetType: "migration", TargetID: mig.ID,
+		Result: dryRunResult(report),
+		Detail: map[string]any{
+			"connection": conn.Name, "statements": len(mig.Plan.Up),
+			"ok": report.OK, "skipped": report.Skipped,
+		},
+	})
+	return c.JSON(fiber.Map{
+		"dryRun": report, "base": "지금 DB", "statements": len(mig.Plan.Up),
+		// 여기서는 초안이 아니라 계획을 고쳐야 한다. 화면이 시키는 다음 행동이
+		// 다르므로 문장도 다르게 준다.
+		"after": "계획을 다시 만들거나, 초안을 고친 뒤 새 계획을 만드세요. 아직 실행되지 않았습니다.",
+	})
 }
 
 // handlePrecheckMigration은 실행 전 검사만 수행한다.
