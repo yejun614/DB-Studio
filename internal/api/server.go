@@ -394,6 +394,9 @@ func (s *Server) routes() {
 	docs.Post("/:docId/diff", s.handleERDDiff)
 	// 초안을 SQL로 받는다. 대상 DB가 없는 초안에서는 이것이 유일한 산출물이다.
 	docs.Get("/:docId/ddl", s.handleERDDDL)
+	// 계획을 만들기 전에 SQL이 실제로 실행되는지 확인한다. 그림자 DB를 만들어
+	// 거기서 돌려 보므로 대상 DB는 손대지 않는다.
+	docs.Post("/:docId/dryrun", s.handleERDDryRun)
 	// SQL을 읽어 초안에 반영한다. 미리보기(dryRun)와 적용이 같은 경로다 —
 	// 무엇이 바뀔지 보여준 것과 실제로 적용되는 것이 갈리면 미리보기가 거짓말이 된다.
 	docs.Post("/:docId/import", s.handleERDImportSQL)

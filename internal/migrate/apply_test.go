@@ -714,6 +714,165 @@ func TestRerunAfterRollbackAppliesAgain(t *testing.T) {
 	}
 }
 
+// 미리 실행해 보기: 깨진 SQL을 잡고, 대상 DB는 건드리지 않고, 뒷정리까지 한다.
+//
+// 계획을 만들고 나서야 SQL이 깨진 것을 알면 한 바퀴가 통째로 낭비된다(만들고, 리뷰
+// 받고, 실행하고, 실패를 보고, 고쳐서 다시 처음부터). 그 한 바퀴를 없애는 장치이므로
+// 세 가지가 모두 참이어야 값어치가 있다: 진짜로 잡는가, 대상 DB에 자국을 남기지
+// 않는가, 검사용 DB를 남기지 않는가.
+func TestDryRunCatchesBadSQL(t *testing.T) {
+	skipUnlessIntegration(t)
+
+	for _, tc := range dialectCases(t) {
+		t.Run(tc.name, func(t *testing.T) {
+			h := tc.newHarness(t)
+			adapter, err := dbx.Get(h.conn.Kind)
+			if err != nil {
+				t.Fatalf("adapter: %v", err)
+			}
+			target := dbx.Target{Conn: h.conn, Secret: h.secret}
+			before := h.introspect(t)
+			seed := dryRunSeed(t, string(h.conn.Kind), before)
+
+			// 첫 문장은 되고, 둘째 문장은 반드시 실패한다.
+			good := "CREATE TABLE mg_dryrun_probe (id INT)"
+			if h.conn.Kind == model.KindPostgres {
+				good = "CREATE TABLE mig_test.mg_dryrun_probe (id INT)"
+			}
+			rep, err := dbx.DryRunDDL(h.ctx, adapter, target, seed,
+				[]string{good, tc.badSQL}, dbx.ExecOptions{})
+			if err != nil {
+				t.Fatalf("미리 실행: %v", err)
+			}
+			if rep.Skipped != "" {
+				t.Fatalf("검사하지 못했습니다: %s", rep.Skipped)
+			}
+			if rep.OK {
+				t.Fatalf("깨진 SQL을 통과시켰습니다: %+v", rep.Steps)
+			}
+			if rep.FailedIndex != 1 {
+				t.Errorf("막힌 자리 = %d, 기대 1 (첫 문장은 되어야 합니다)", rep.FailedIndex)
+			}
+			if rep.Error == "" {
+				t.Error("막힌 사유가 비어 있습니다")
+			}
+
+			// 대상 DB에는 아무 자국도 없어야 한다. 이것이 깨지면 "미리 검사"는
+			// 검사가 아니라 실행이다.
+			after := h.introspect(t)
+			if got := after.Fingerprint(); got != before.Fingerprint() {
+				t.Errorf("대상 DB가 바뀌었습니다: %v", summaries(schema.Diff(before, after)))
+			}
+			if findTableOrNil(after, "mg_dryrun_probe") != nil {
+				t.Error("검사용 테이블이 대상 DB에 남았습니다")
+			}
+
+			// 그림자 DB도 남지 않아야 한다. 남으면 서버에 정체 모를 DB가 쌓인다.
+			if leftovers := dryRunLeftovers(t, h); len(leftovers) > 0 {
+				t.Errorf("그림자 DB가 남았습니다: %v", leftovers)
+			}
+		})
+	}
+}
+
+// 멀쩡한 계획은 통과해야 한다. 무엇이든 막아 세우는 검사는 곧 꺼진다.
+func TestDryRunPassesGoodPlan(t *testing.T) {
+	skipUnlessIntegration(t)
+
+	for _, tc := range dialectCases(t) {
+		t.Run(tc.name, func(t *testing.T) {
+			h := tc.newHarness(t)
+			adapter, err := dbx.Get(h.conn.Kind)
+			if err != nil {
+				t.Fatalf("adapter: %v", err)
+			}
+			before := h.introspect(t)
+			target := h.introspect(t)
+			findTable(target, "mg_users").Columns = append(
+				findTable(target, "mg_users").Columns,
+				&schema.Column{
+					Name: "memo", Type: schema.LogicalType{Base: schema.TypeText}, Nullable: true,
+				})
+			plan := schema.BuildPlan(string(h.conn.Kind), schema.Diff(before, target))
+			if len(plan.Up) == 0 {
+				t.Fatalf("계획이 비었습니다: %v", plan.Warnings)
+			}
+
+			rep, err := dbx.DryRunDDL(h.ctx, adapter, dbx.Target{Conn: h.conn, Secret: h.secret},
+				dryRunSeed(t, string(h.conn.Kind), before), statementList(plan.Up),
+				dbx.ExecOptions{})
+			if err != nil {
+				t.Fatalf("미리 실행: %v", err)
+			}
+			if rep.Skipped != "" {
+				t.Fatalf("검사하지 못했습니다: %s", rep.Skipped)
+			}
+			if !rep.OK {
+				t.Fatalf("멀쩡한 계획이 막혔습니다: %s (%d번째)", rep.Error, rep.FailedIndex+1)
+			}
+			if got := h.introspect(t).Fingerprint(); got != before.Fingerprint() {
+				t.Error("검사가 대상 DB를 바꿨습니다")
+			}
+		})
+	}
+}
+
+// dryRunSeed는 그림자 DB에 기준 구조를 세우는 문장이다(API의 seedStatements와 같은 일).
+func dryRunSeed(t *testing.T, dialect string, from *schema.Schema) []string {
+	t.Helper()
+	out := []string{}
+	seen := map[string]bool{}
+	for _, tb := range from.Tables {
+		ns := strings.TrimSpace(tb.Namespace)
+		if ns == "" || seen[ns] {
+			continue
+		}
+		seen[ns] = true
+		if dialect == string(model.KindPostgres) {
+			out = append(out, `CREATE SCHEMA IF NOT EXISTS "`+ns+`"`)
+		}
+	}
+	empty := &schema.Schema{Dialect: dialect, Shape: schema.ShapeRelational}
+	return append(out, statementList(schema.BuildPlan(dialect, schema.Diff(empty, from)).Up)...)
+}
+
+// dryRunLeftovers는 서버에 남은 그림자 DB를 찾는다.
+func dryRunLeftovers(t *testing.T, h *harness) []string {
+	t.Helper()
+	if h.conn.Kind == model.KindSQLite {
+		// SQLite의 그림자는 임시 파일이라 서버에 남을 것이 없다.
+		return nil
+	}
+	// 커넥션이 아는 것으로 서버를 빚는다. 목록 조회는 서버 단위라서 필요하다.
+	srv := &model.Server{
+		ID: h.conn.ServerID, Name: h.conn.ServerName, Kind: h.conn.Kind,
+		Host: h.conn.Host, Port: h.conn.Port, Options: h.conn.Options,
+		DefaultEnvironment: h.conn.Environment, Enabled: true,
+	}
+	names, err := dbx.ListDatabases(h.ctx, srv, h.secret)
+	if err != nil {
+		t.Logf("DB 목록을 읽지 못해 뒷정리 확인을 건너뜁니다: %v", err)
+		return nil
+	}
+	out := []string{}
+	for _, n := range names {
+		if strings.HasPrefix(n.Name, "dbstudio_dryrun_") {
+			out = append(out, n.Name)
+		}
+	}
+	return out
+}
+
+// findTableOrNil은 없으면 nil을 준다(findTable은 없으면 시험을 끝낸다).
+func findTableOrNil(sc *schema.Schema, name string) *schema.Table {
+	for _, t := range sc.Tables {
+		if strings.EqualFold(t.Name, name) {
+			return t
+		}
+	}
+	return nil
+}
+
 // 실패 시 동작은 DB 종류에 따라 달라야 한다.
 // 트랜잭션 DDL을 지원하는 DB는 전부 되돌아가고, 그렇지 않은 DB는 어디까지
 // 적용됐는지 기록되어야 한다.

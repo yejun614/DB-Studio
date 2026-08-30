@@ -1,8 +1,11 @@
 package api
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -550,6 +553,177 @@ func (s *Server) handleERDDDL(c *fiber.Ctx) error {
 		"stats":     doc.Schema.Stats(),
 		"fromEmpty": baseSpec == "",
 	})
+}
+
+// dryRunTimeout은 미리 실행해 보기 전체에 주는 시간이다. 그림자 DB를 만들고,
+// 기준 구조를 세우고, 계획을 돌리는 데까지가 그 안이다.
+//
+// 기준 구조가 크면 seed가 오래 걸린다. 그래도 상한은 있어야 한다 — 검사 하나가
+// 대상 서버의 연결을 하염없이 붙들고 있으면 그것이 새 사고가 된다.
+const (
+	dryRunTimeout          = 3 * time.Minute
+	dryRunStatementTimeout = 60 * time.Second
+)
+
+// sqlList는 계획 문장에서 SQL만 뽑는다.
+func sqlList(stmts []schema.Statement) []string {
+	out := make([]string, 0, len(stmts))
+	for _, s := range stmts {
+		out = append(out, s.SQL)
+	}
+	return out
+}
+
+// handleERDDryRun은 계획을 만들기 전에 SQL이 실제로 실행되는지 확인한다.
+//
+// 계획을 만들고 나서야 SQL이 깨진 것을 아는 흐름은 비싸다: 만들고, 리뷰를 받고,
+// 실행하고, 실패를 보고, 초안을 고치고, 다시 처음부터 — 한 바퀴가 사람 여럿의
+// 시간이다. "이 문장이 이 DB에서 실행되는가"는 계획을 만들기 전에 물어볼 수 있다.
+//
+// 대상 DB는 손대지 않는다. 그림자 DB를 새로 만들어 기준 구조를 세우고, 계획을
+// 실행해 본 뒤 통째로 지운다(dbx.DryRunDDL).
+func (s *Server) handleERDDryRun(c *fiber.Ctx) error {
+	// 그림자 DB를 만드는 일은 서버에 쓰는 동작이다. 읽기 권한만으로 열어 주지 않는다.
+	doc, conn, _, err := s.resolveERDDocument(c, c.Params("docId"), model.LevelMigrate)
+	if err != nil {
+		return err
+	}
+	if err := requireERDConnection(conn, "미리 실행"); err != nil {
+		return err
+	}
+	var body struct {
+		Base    string `json:"base"`
+		Dialect string `json:"dialect"`
+	}
+	if err := c.BodyParser(&body); err != nil {
+		return fail(c, fiber.StatusBadRequest, "bad_request", "요청 본문을 해석할 수 없습니다")
+	}
+
+	dialect := strings.TrimSpace(body.Dialect)
+	if dialect == "" {
+		dialect = string(conn.Kind)
+	}
+	// 다른 종류의 SQL은 이 서버에서 실행해 볼 수 없다. 검사하지 못하는 것과 계획이
+	// 틀린 것은 사람이 할 일이 다르므로, 여기서 분명히 갈라 말한다.
+	if dialect != string(conn.Kind) {
+		return c.JSON(fiber.Map{"dryRun": &dbx.DryRunReport{
+			FailedIndex: -1,
+			Skipped: fmt.Sprintf("%s 로 만든 SQL은 %s 서버에서 미리 실행해 볼 수 없습니다",
+				dialect, conn.Kind),
+		}})
+	}
+
+	adapter, err := s.erdAdapterFor(conn)
+	if err != nil {
+		return err
+	}
+	// 기준이 비어 있으면 "처음부터 만드는" 스크립트다. 그때 그림자 DB는 빈 채로
+	// 두고 계획만 실행한다.
+	from := &schema.Schema{Dialect: dialect, Shape: schema.ShapeRelational}
+	baseLabel := "빈 스키마"
+	if strings.TrimSpace(body.Base) != "" {
+		base, berr := s.resolveBase(c, conn, adapter, body.Base)
+		if berr != nil {
+			return berr
+		}
+		from = base.Schema
+		baseLabel = base.Label
+	}
+
+	plan := schema.BuildPlan(dialect, schema.Diff(from, doc.Schema))
+	if len(plan.Up) == 0 {
+		return c.JSON(fiber.Map{"dryRun": &dbx.DryRunReport{
+			OK: true, FailedIndex: -1, Steps: []dbx.ExecStep{},
+		}, "base": baseLabel, "statements": 0})
+	}
+
+	secret, err := s.st.GetSecret(c.Context(), conn.ID)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(c.Context(), dryRunTimeout)
+	defer cancel()
+
+	report, err := dbx.DryRunDDL(ctx, adapter, dbx.Target{Conn: conn, Secret: secret},
+		seedStatements(dialect, from, doc.Schema), sqlList(plan.Up),
+		dbx.ExecOptions{StatementTimeout: dryRunStatementTimeout})
+	if err != nil {
+		return failDetail(c, fiber.StatusBadGateway, "dryrun_failed",
+			"미리 실행해 보지 못했습니다", err.Error())
+	}
+
+	s.audit(c, store.AuditParams{
+		Action: "erd.dryrun", TargetType: "erd_document", TargetID: doc.ID,
+		Result: dryRunResult(report),
+		Detail: map[string]any{
+			"name": doc.Name, "connection": connName(conn), "dialect": dialect,
+			"base": baseLabel, "statements": len(plan.Up),
+			"ok": report.OK, "skipped": report.Skipped,
+		},
+	})
+	return c.JSON(fiber.Map{
+		"dryRun": report, "base": baseLabel, "statements": len(plan.Up),
+		"warnings": plan.Warnings,
+	})
+}
+
+// dryRunResult는 감사 로그의 결과 칸을 정한다.
+//
+// 감사 로그는 ok·denied·error 셋만 안다. "검사하지 못함"은 그중 무엇도 아니지만
+// denied가 가장 가깝다 — 하려다 못 한 것이지 계획이 틀린 것이 아니다. 진짜 사유는
+// detail의 skipped에 그대로 남는다.
+func dryRunResult(r *dbx.DryRunReport) string {
+	switch {
+	case r.Skipped != "":
+		return "denied"
+	case !r.OK:
+		return "error"
+	}
+	return "ok"
+}
+
+// seedStatements는 그림자 DB에 기준 구조를 세우는 문장이다.
+//
+// 스키마(네임스페이스)를 먼저 만든다. PostgreSQL·MS-SQL의 계획은 테이블 이름에
+// 스키마를 붙여 쓰는데, 갓 만든 그림자 DB에는 public 말고는 아무것도 없다 — 그것
+// 없이 seed를 돌리면 "스키마가 없다"는 엉뚱한 실패로 검사가 끝난다.
+//
+// 목표 스키마의 네임스페이스도 함께 만든다. 계획이 새 스키마에 테이블을 만드는
+// 경우가 있고, 그 CREATE SCHEMA는 계획에 들어 있지 않다.
+func seedStatements(dialect string, from, target *schema.Schema) []string {
+	out := []string{}
+	for _, ns := range namespacesOf(from, target) {
+		switch dialect {
+		case string(model.KindPostgres):
+			out = append(out, `CREATE SCHEMA IF NOT EXISTS "`+ns+`"`)
+		case string(model.KindMSSQL):
+			out = append(out, fmt.Sprintf(
+				"IF SCHEMA_ID('%s') IS NULL EXEC('CREATE SCHEMA [%s]')", ns, ns))
+		}
+	}
+	out = append(out, sqlList(schema.BuildPlan(dialect,
+		schema.Diff(&schema.Schema{Dialect: dialect, Shape: schema.ShapeRelational}, from)).Up)...)
+	return out
+}
+
+// namespacesOf는 두 스키마에 나오는 네임스페이스를 순서대로 모은다.
+func namespacesOf(schemas ...*schema.Schema) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, sc := range schemas {
+		if sc == nil {
+			continue
+		}
+		for _, t := range sc.Tables {
+			ns := strings.TrimSpace(t.Namespace)
+			if ns == "" || seen[ns] {
+				continue
+			}
+			seen[ns] = true
+			out = append(out, ns)
+		}
+	}
+	return out
 }
 
 // ---------- 공용 헬퍼 ----------
