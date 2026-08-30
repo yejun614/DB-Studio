@@ -76,7 +76,13 @@ var allowedTransitions = map[string][]string{
 	// 바뀌지 않았고, 롤백으로 DB가 실행 전 구조로 돌아왔으므로 그때의 승인은
 	// 여전히 "지금 이 구조에 이 변경을 해도 좋다"는 뜻이다. 구조가 실제로 그런지는
 	// 사전 검사가 기준 지문으로 다시 확인한다.
-	MigrationRolledBack: {MigrationApproved},
+	//
+	// 닫을 수도 있다. 되돌린 뒤 "이 변경은 하지 않기로 했다"고 정하는 것이 롤백의
+	// 흔한 결말인데, 닫을 길이 없으면 그 계획은 목록에서 영원히 "롤백됨"으로 남아
+	// 아직 할 일인지 끝난 일인지 구분되지 않는다. 적용됨과 다른 점: 롤백된 계획은
+	// DB에 남긴 것이 없으므로, 닫아도 "지금 DB가 어떻게 됐는가"의 답이 사라지지
+	// 않는다(그 답은 롤백 버전과 활동 기록에 있다).
+	MigrationRolledBack: {MigrationApproved, MigrationClosed},
 }
 
 // CanTransition은 상태 전이가 허용되는지 판단한다.

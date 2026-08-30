@@ -428,7 +428,12 @@ function actionBar(m, res, precheckBox, reload) {
   // 진행하지 않기로 한 계획은 지우는 대신 닫는다. 지우면 "이런 계획을 세웠다가
   // 접었다"는 사실과 그때의 리뷰까지 사라져, 같은 논의가 다시 올라왔을 때 왜
   // 접었는지 아무도 모른다. 닫힌 계획은 다시 열 수 있다.
-  if (m.status !== 'applied' && m.status !== 'rolled_back' && m.status !== 'closed') {
+  //
+  // 롤백된 계획도 닫는다. 되돌린 뒤 "이 변경은 하지 않기로 했다"고 정하는 것이
+  // 롤백의 흔한 결말인데, 닫을 길이 없으면 목록에 영원히 "롤백됨"으로 남아 아직
+  // 할 일인지 끝난 일인지 구분되지 않는다. 적용됨은 여전히 닫지 않는다 — 그것은
+  // 지금 DB에 들어 있는 변경이라서 이력 그 자체다.
+  if (m.status !== 'applied' && m.status !== 'closed') {
     buttons.push(h('button.btn', {
       type: 'button',
       onclick: () => changeStatus(m.id, 'closed', reload),

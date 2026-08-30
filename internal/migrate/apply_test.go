@@ -966,6 +966,10 @@ func TestStatusTransitions(t *testing.T) {
 		// 롤백된 계획은 다시 실행할 수 있다. 승인 기록은 그대로 남아 있으므로
 		// 승인됨으로 곧장 돌아간다 — 되돌리기가 비싸면 아무도 되돌리지 않는다.
 		{store.MigrationRolledBack, store.MigrationApproved, true},
+		// 되돌린 뒤 "하지 않기로 했다"고 접을 수도 있어야 한다.
+		{store.MigrationRolledBack, store.MigrationClosed, true},
+		// 적용된 계획은 여전히 닫을 수 없다 — 지금 DB에 들어 있는 변경이다.
+		{store.MigrationApplied, store.MigrationClosed, false},
 		{store.MigrationFailed, store.MigrationDraft, true},
 		{store.MigrationFailed, store.MigrationApplied, false},
 	}
