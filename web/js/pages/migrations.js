@@ -155,6 +155,7 @@ export async function renderMigrationDetail(outlet, params) {
     sqlPanel(m),
     reviewsPanel(m, res, reload),
     executionPanel(m),
+    activityPanel(m),
     pushPanel(m),
   );
 }
@@ -417,9 +418,13 @@ function actionBar(m, res, precheckBox, reload) {
   if (m.status === 'closed') {
     // 닫혀 있는 동안 대상 DB가 바뀌었을 수 있으므로 초안으로 돌아간다.
     // 그때의 승인은 지금 구조를 본 것이 아니다.
+    //
+    // 먼저 묻는 이유: 이 버튼은 남아 있는 리뷰를 지운다. "다시 열기"라는 이름만
+    // 보면 되돌리는 일 같지만, 실제로는 승인 기록이 사라지는 일이다. 무엇이
+    // 사라지는지 말하지 않고 지우면, 사라진 것을 나중에야 알게 된다.
     buttons.push(h('button.btn.btn-primary', {
       type: 'button',
-      onclick: () => changeStatus(m.id, 'draft', reload),
+      onclick: () => reopen(m, reload),
     }, icon('refresh'), '다시 열기'));
   }
 
@@ -507,14 +512,37 @@ function pendingList(m) {
     .map((r) => r.name || r.userId);
 }
 
-async function changeStatus(id, status, reload) {
+async function changeStatus(id, status, reload, message = '상태를 변경했습니다') {
   try {
     await api.post(`/migrations/${encodeURIComponent(id)}/status`, { status });
-    toast('상태를 변경했습니다', 'success');
+    toast(message, 'success');
     reload();
   } catch (err) {
     toastError(err);
   }
+}
+
+// reopen은 닫은 계획을 초안으로 되돌린다.
+//
+// 승인을 그대로 두고 열 수는 없다. 닫혀 있는 동안 대상 DB가 바뀌었을 수 있고,
+// 그때의 승인은 지금 구조를 본 것이 아니다 — 그것을 인정하면 아무도 지금 상태를
+// 보지 않은 채 실행할 수 있다. 서버도 draft 전이에서 리뷰를 지운다.
+async function reopen(m, reload) {
+  const left = (m.reviews ?? []).length;
+  const ok = await confirmDialog({
+    title: '계획 다시 열기',
+    message: '초안으로 돌아갑니다. 닫혀 있는 동안 대상 DB가 바뀌었을 수 있어 '
+      + '그때의 승인은 인정하지 않습니다 — 리뷰어를 다시 지정해 승인을 새로 받아야 합니다.',
+    confirmLabel: '다시 열기',
+    details: left
+      ? h('p.notice.notice-warn', {}, icon('alert'),
+        h('span', {},
+          '남아 있는 리뷰 ', h('b', {}, `${left}건`), ' 이 지워집니다. ',
+          '누가 무엇을 결정했는지는 아래 ', h('b', {}, '활동 기록'), ' 에 남습니다.'))
+      : null,
+  });
+  if (!ok) return;
+  changeStatus(m.id, 'draft', reload, '계획을 다시 열었습니다. 승인을 다시 받아야 합니다');
 }
 
 async function runPrecheck(m, box) {
@@ -818,6 +846,162 @@ function reviewBadge(decision) {
   };
   const [label, kind] = map[decision] ?? [decision, 'neutral'];
   return badge(label, kind);
+}
+
+// activityPanel은 이 계획에 일어난 일을 시간 순으로 모두 보여준다.
+//
+// 예전에는 Git 푸시 이력만 칸으로 있었다. 그래서 "누가 언제 등록했고 누가 승인했고
+// 누가 닫았는가"는 화면 어디에도 없었다 — 리뷰 칸은 지금 남아 있는 결정만 보여주고,
+// 초안으로 되돌리면 그 결정마저 지워진다. 그러면 나중에 "이거 누가 승인했었죠?"에
+// 아무도 답할 수 없다. 감사 로그에는 남아 있었지만 그것은 슈퍼 어드민만 볼 수 있다.
+//
+// 늦게 불러오는 이유: 이력이 없다고 계획을 못 보는 것은 아니다. 본문이 먼저 뜨고
+// 이 칸만 나중에 채워진다.
+function activityPanel(m) {
+  const list = h('p.muted', {}, '불러오는 중…');
+  const card = h('section.card.mig-activity', {},
+    h('h2', {}, icon('list'), '활동 기록'),
+    h('p.field-help', {},
+      '등록·지정·승인·반려·의견·실행·롤백·닫기·다시 열기·Git 푸시를 모두 남깁니다. ',
+      '리뷰 칸의 결정이 지워진 뒤에도 여기에는 남습니다.'),
+    list);
+
+  (async () => {
+    try {
+      const res = await api.get(`/migrations/${encodeURIComponent(m.id)}/activity`);
+      const items = res.activity ?? [];
+      if (items.length === 0) {
+        mount(list, h('p.muted', {}, '기록이 없습니다'));
+        return;
+      }
+      mount(list, activityList(items, res.total ?? items.length));
+    } catch (err) {
+      mount(list, h('p.muted', {}, `이력을 불러오지 못했습니다: ${err.message ?? err}`));
+    }
+  })();
+
+  return card;
+}
+
+// activityList는 줄이 많을 때 오래된 것을 접어 둔다.
+//
+// 최근 것부터 눈에 들어와야 한다. 오래 살아 있는 계획은 수십 줄이 되는데, 그 전부를
+// 펼쳐 두면 정작 방금 무슨 일이 있었는지가 화면 밖으로 밀려난다. 접되 감추지는
+// 않는다 — 몇 건이 접혀 있는지 적고, 한 번 누르면 모두 펼쳐진다.
+const ACTIVITY_HEAD = 25;
+
+function activityList(items, total) {
+  const hidden = Math.max(0, items.length - ACTIVITY_HEAD);
+  const rows = h('div.act-list', {}, items.slice(hidden).map(activityRow));
+  const more = hidden
+    ? h('button.btn.btn-small', {
+      type: 'button',
+      onclick: (ev) => {
+        ev.currentTarget.remove();
+        mount(rows, items.map(activityRow));
+      },
+    }, icon('list'), `이전 기록 ${hidden}건 더 보기`)
+    : null;
+  // 서버가 잘라 온 경우까지 말해 준다. 잘린 줄 모르면 "이게 전부"로 읽힌다.
+  const cut = total > items.length
+    ? h('p.muted', {}, `오래된 기록 ${total - items.length}건은 담지 않았습니다. 전체는 감사 로그에 있습니다.`)
+    : null;
+  return h('div', {}, cut, more, rows);
+}
+
+function activityRow(e) {
+  const d = e.detail ?? {};
+  return h('div.act-row', {},
+    h('span.act-dot', {}),
+    h('div.act-body', {},
+      h('div.act-head', {},
+        h('strong', {}, e.actorName || '알 수 없음'),
+        h('span.act-what', {}, activityText(e, d)),
+        e.result && e.result !== 'ok' ? badge(RESULT_WORD[e.result] ?? e.result, 'danger') : null,
+        d.via === 'ai' ? badge('AI', 'info') : null,
+      ),
+      h('span.act-time', { title: formatDate(e.at) }, relativeTime(e.at)),
+    ),
+  );
+}
+
+const RESULT_WORD = { denied: '막힘', error: '실패' };
+
+const DECISION_WORD = { approved: '승인', rejected: '반려', comment: '의견' };
+
+// activityText는 기록 한 줄을 사람 말로 옮긴다.
+//
+// 모르는 동작도 줄을 남긴다(동작 이름을 그대로 적는다). 옮길 말이 없다고 감추면
+// 이력에 구멍이 생기는데, 이력의 값어치는 "빠진 것이 없다"에서 나온다.
+function activityText(e, d) {
+  switch (e.action) {
+    case 'migration.create':
+      return '계획을 등록했습니다' + countTail(d);
+    case 'schema.comments.plan':
+      return '설명을 고쳐 계획을 만들었습니다' + countTail(d);
+    case 'migration.assigned':
+      return `담당자·리뷰어를 지정했습니다 (담당자 ${d.assignee || '없음'}, 리뷰어 ${d.reviewers ?? 0}명)`;
+    case 'migration.status':
+      return statusText(d);
+    case 'migration.review': {
+      const word = DECISION_WORD[d.decision] ?? d.decision;
+      if (d.decision === 'comment') return '의견을 남겼습니다';
+      return `${word}했습니다 (승인 ${d.approvals ?? '?'}/${d.required ?? '?'})`;
+    }
+    case 'migration.review.update':
+      return '남긴 리뷰의 내용을 고쳤습니다';
+    case 'migration.review.delete': {
+      const word = DECISION_WORD[d.decision] ?? d.decision;
+      const who = d.author ? `${d.author} 님이 남긴 ` : '';
+      return `${who}${word} 기록을 지웠습니다`;
+    }
+    case 'migration.apply':
+      if (e.result && e.result !== 'ok') {
+        return `실행하지 못했습니다${d.error ? ` — ${d.error}` : ''}`;
+      }
+      return `실행했습니다 (문장 ${d.applied ?? d.statements ?? '?'}개)`;
+    case 'migration.rollback':
+      return `롤백했습니다 (문장 ${d.applied ?? '?'}개)`;
+    case 'vcs.push':
+      return `Git에 올렸습니다${pushTail(d)}`;
+    case 'migration.delete':
+      return '계획을 지웠습니다';
+    default:
+      return e.action;
+  }
+}
+
+function countTail(d) {
+  const parts = [];
+  if (d.changes != null) parts.push(`변경 ${d.changes}건`);
+  if (d.destructive) parts.push(`파괴적 ${d.destructive}건`);
+  if (d.statements != null) parts.push(`SQL ${d.statements}문장`);
+  return parts.length ? ` (${parts.join(' · ')})` : '';
+}
+
+function pushTail(d) {
+  const parts = [];
+  if (d.branch) parts.push(d.branch);
+  if (d.commit) parts.push(String(d.commit).slice(0, 7));
+  if (d.files != null) parts.push(`파일 ${d.files}개`);
+  return parts.length ? ` (${parts.join(' · ')})` : '';
+}
+
+// statusText는 상태가 어디서 어디로 갔는지를 사람 말로 옮긴다.
+//
+// "draft → in_review" 를 그대로 보여주지 않는 이유: 이 줄을 읽는 사람이 알고 싶은
+// 것은 상태 이름이 아니라 무슨 일이 있었는가다. 되돌아간 경우에는 그 대가(승인이
+// 지워졌다)까지 적는다 — 그것이 나중에 "승인 기록이 왜 없지?"의 답이다.
+function statusText(d) {
+  const from = STATUS[d.from]?.[0] ?? d.from;
+  const to = STATUS[d.to]?.[0] ?? d.to;
+  if (d.to === 'closed') return '계획을 닫았습니다';
+  if (d.from === 'closed' && d.to === 'draft') {
+    return '닫은 계획을 다시 열었습니다 (초안으로 돌아가 승인을 다시 받아야 합니다)';
+  }
+  if (d.to === 'draft') return '초안으로 되돌렸습니다 (그때까지의 승인·반려가 지워졌습니다)';
+  if (d.to === 'in_review') return '리뷰를 시작했습니다';
+  return `상태를 ${from} 에서 ${to} 로 바꿨습니다`;
 }
 
 function executionPanel(m) {

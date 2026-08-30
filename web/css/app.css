@@ -2395,7 +2395,7 @@ tr.is-destructive td { background: hsl(var(--h-danger) / 0.08); }
 /* 실행 버튼이 없는 까닭을 적는 한 줄. 할 일이 있으면 오른쪽에 붙는다. */
 .mig-gate { margin: 12px 0 0; font-size: 13px; align-items: center; }
 .mig-gate .btn { margin-left: auto; flex: 0 0 auto; }
-.mig-precheck h2, .mig-head h2 { display: flex; align-items: center; gap: 8px; }
+.mig-precheck h2, .mig-head h2, .mig-activity h2 { display: flex; align-items: center; gap: 8px; }
 
 .mig-sql-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .mig-sql-col { min-width: 0; }
@@ -2415,6 +2415,44 @@ tr.is-destructive td { background: hsl(var(--h-danger) / 0.08); }
 }
 .mig-review-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; }
 .mig-review-comment { margin: 6px 0 0; font-size: 13px; white-space: pre-wrap; }
+
+/* ---------- 활동 기록 ---------- */
+
+.mig-activity .field-help { margin-bottom: 14px; }
+.mig-activity .btn-small { margin-bottom: 12px; }
+.act-list { display: flex; flex-direction: column; }
+.act-row { display: flex; gap: 10px; position: relative; padding-bottom: 12px; }
+.act-row:last-child { padding-bottom: 0; }
+/* 점을 잇는 선. 마지막 줄에는 그리지 않는다 — 아래로 더 있는 것처럼 보인다. */
+.act-row::before {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 13px;
+  bottom: 0;
+  width: 1px;
+  background: var(--border-soft);
+}
+.act-row:last-child::before { display: none; }
+.act-dot {
+  width: 9px;
+  height: 9px;
+  margin-top: 5px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--border);
+}
+.act-body {
+  display: flex;
+  align-items: baseline;
+  gap: 4px 10px;
+  flex-wrap: wrap;
+  flex: 1;
+  min-width: 0;
+}
+.act-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px; }
+.act-what { color: var(--text-dim); }
+.act-time { margin-left: auto; font-size: 12px; color: var(--text-mute); white-space: nowrap; }
 
 /* 누를 수 있는 리뷰 줄. 겉모습으로 구분하지 않으면 눌러도 안 되는 줄을
    계속 누르게 되고, 그 다음부터는 아무 줄도 누르지 않게 된다. */
