@@ -10,6 +10,7 @@ import { navigate } from '../core/router.js';
 import { serverDbPicker } from '../core/connpick.js';
 import { peoplePicker } from '../core/searchpick.js';
 import { codeBlock } from '../core/highlight.js';
+import { runDryRun } from '../core/dryrun.js';
 import { errorPanel } from './users.js';
 import { openPushDialog } from './vcs.js';
 
@@ -393,11 +394,27 @@ function actionBar(m, res, precheckBox, reload) {
       onclick: () => openReviewDialog(m, res, reload),
     }, icon('check'), mine ? '검토 바꾸기' : '검토하기'));
   }
+  // 미리 검사는 승인 전에도 쓸 수 있어야 한다. SQL이 깨진 것을 승인이 끝난 뒤에
+  // 알면 리뷰를 처음부터 다시 받아야 하고, 그 한 바퀴가 이 기능이 없애려던 것이다.
+  //
+  // 사전 검사와 다른 일을 한다. 사전 검사는 "지금 실행해도 되는 조건인가"(승인 수,
+  // 드리프트)를 보고, 미리 검사는 "이 SQL이 이 DB에서 도는가"를 본다. 둘 다 필요해서
+  // 둘 다 둔다 — 조건은 맞는데 SQL이 깨진 경우가 바로 이 기능이 생긴 까닭이다.
+  if (m.status !== 'applied' && m.status !== 'rolled_back' && m.status !== 'failed') {
+    buttons.push(h('button.btn', {
+      type: 'button',
+      onclick: (e) => runDryRun({
+        path: `/migrations/${encodeURIComponent(m.id)}/dryrun`,
+        box: precheckBox,
+        button: e.currentTarget,
+      }),
+    }, icon('shield'), '미리 검사'));
+  }
   if (m.status === 'approved') {
     buttons.push(h('button.btn', {
       type: 'button',
       onclick: () => runPrecheck(m, precheckBox),
-    }, icon('shield'), '사전 검사'));
+    }, icon('activity'), '사전 검사'));
     buttons.push(h('button.btn.btn-danger', {
       type: 'button',
       onclick: () => openApplyDialog(m, res, reload),
@@ -999,6 +1016,11 @@ function activityText(e, d) {
       if (d.decision === 'comment') return '의견을 남겼습니다';
       return `${word}했습니다 (승인 ${d.approvals ?? '?'}/${d.required ?? '?'})`;
     }
+    case 'migration.dryrun':
+      if (d.skipped) return '미리 검사를 하지 못했습니다';
+      return d.ok
+        ? `미리 검사를 통과했습니다 (${d.statements ?? '?'}문장)`
+        : '미리 검사에서 SQL이 막혔습니다';
     case 'migration.review.update':
       return '남긴 리뷰의 내용을 고쳤습니다';
     case 'migration.review.delete': {
