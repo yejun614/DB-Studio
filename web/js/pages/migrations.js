@@ -291,12 +291,22 @@ function openAssignDialog(m, reload) {
     // 자기가 끌고 가는 계획을 자기가 검토하는 것은 검토가 아니다. 저장할 때 막을
     // 수도 있지만, 그러면 사람이 고르고 나서야 안 된다는 말을 듣는다. 담당자를
     // 고르는 순간 후보에서 빼고, 이미 골라 두었다면 그 자리에서 빠진다.
+    //
+    // 슈퍼 어드민은 예외다(서버도 같은 예외를 둔다). 슈퍼 어드민은 자기가 맡은
+    // 계획도 승인할 수 있으므로, 여기서만 막으면 "승인은 되는데 리뷰어로는 못 넣는"
+    // 어긋난 상태가 된다. 대신 그것이 예외라는 것을 문장으로 말해 둔다.
     const syncExclusion = () => {
-      const dropped = reviewers.setExcluded(assignee.value ? [assignee.value] : []);
       const who = people.find((p) => p.id === assignee.value);
-      selfNote.textContent = assignee.value
-        ? `담당자(${who ? label(who) : assignee.value})는 리뷰어로 고를 수 없습니다.`
-        : '';
+      const superadmin = who?.role === 'superadmin';
+      const dropped = reviewers.setExcluded(
+        assignee.value && !superadmin ? [assignee.value] : []);
+      selfNote.textContent = '';
+      if (assignee.value) {
+        selfNote.textContent = superadmin
+          ? `담당자(${who ? label(who) : assignee.value})는 슈퍼 어드민이라 리뷰어로도 고를 수 있습니다.`
+            + ' 자기 계획을 자기가 승인한 기록은 활동 기록에 남습니다.'
+          : `담당자(${who ? label(who) : assignee.value})는 리뷰어로 고를 수 없습니다.`;
+      }
       if (dropped) toast('담당자는 리뷰어에서 뺐습니다', 'info');
     };
     assignee.addEventListener('change', syncExclusion);
@@ -671,7 +681,7 @@ function reviewsPanel(m, res, reload) {
     h('p.field-help', {},
       '승인·반려는 ', h('b', {}, '리뷰어로 지정된 사람'), '만 남길 수 있습니다. ',
       '의견은 누구나 남길 수 있습니다.',
-      ' 담당자는 자기가 맡은 계획을 승인할 수 없습니다.',
+      ' 담당자는 자기가 맡은 계획을 승인할 수 없습니다(슈퍼 어드민은 예외).',
       ' 실행 전이라면 결정을 바꿀 수 있고, 남긴 기록을 눌러 고치거나 지울 수 있습니다.',
       res.requiredApprovals > 1
         ? ` 이 계획은 승인 ${res.requiredApprovals}명이 필요합니다.`
