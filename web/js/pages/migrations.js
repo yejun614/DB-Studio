@@ -1436,6 +1436,14 @@ export async function renderVersions(outlet, params, query) {
   }
 }
 
+// versionSourceLabel은 버전이 어디서 왔는지를 한 낱말로 말한다.
+//
+// ERD 설계의 기준 고르개도 같은 이름을 쓴다. 두 곳에 따로 적어 두면 한쪽이 값을
+// 놓쳐 화면에 'initial_import' 같은 날것이 뜬다 — 실제로 그럴 뻔했다.
+export function versionSourceLabel(source) {
+  return (VERSION_SOURCE[source] ?? [source])[0];
+}
+
 const VERSION_SOURCE = {
   initial_import: ['최초 등록', 'neutral'],
   migration: ['마이그레이션', 'accent'],

@@ -12,13 +12,14 @@ import { api } from '../core/api.js';
 import { state, kindLabel } from '../core/store.js';
 import {
   h, mount, icon, input, select, checkbox, field, spinner, badge, envBadge,
-  toast, toastError, relativeTime, openModal, confirmDialog, copyToClipboard,
+  toast, toastError, relativeTime, formatDate, openModal, confirmDialog, copyToClipboard,
 } from '../core/ui.js';
 import { ErdSession, throttle } from '../core/erdsocket.js';
 import { roomChatView } from '../core/roomchat.js';
 import { searchPicker, suggestInput } from '../core/searchpick.js';
 import { COLUMN_ICONS, columnIcon, autoColumnIcon, chosenIconFor } from '../core/colicon.js';
 import { codeBlock, codeEditor } from '../core/highlight.js';
+import { versionSourceLabel } from './migrations.js';
 import {
   ErdCanvas, CARD_W, tableKey, tableDisplay, refKey, newLocalID, truncate, NOTE_W, noteHeight,
 } from '../core/erdcanvas.js';
@@ -3311,15 +3312,17 @@ class Editor {
     const titleInput = input({ value: this.doc.name });
     const box = h('div');
     let migration = null;
+    const picker = basePicker({ connectionId: this.connection?.id });
 
     openModal({
       title: '마이그레이션 만들기',
       width: 720,
       body: () => [
         h('p.modal-message', {},
-          '이 초안과 대상 DB의 차이로 마이그레이션 계획을 만듭니다. ' +
+          '고른 기준과 이 초안의 차이로 마이그레이션 계획을 만듭니다. ' +
           '만든 뒤 리뷰와 승인을 거쳐야 실행할 수 있습니다.'),
         h('label.field', {}, h('span.field-label', {}, '제목'), titleInput),
+        picker.node,
         box,
       ],
       footer: (close) => {
@@ -3327,10 +3330,10 @@ class Editor {
         const makeBtn = h('button.btn.btn-primary', { type: 'button' }, '만들기');
         makeBtn.addEventListener('click', async () => {
           makeBtn.disabled = true;
-          mount(box, spinner('대상 DB와 비교하는 중…'));
+          mount(box, spinner('기준과 비교하는 중…'));
           try {
             const res = await api.post('/migrations/', {
-              docId: this.docID, title: titleInput.value,
+              docId: this.docID, title: titleInput.value, base: picker.value,
             });
             migration = res.migration;
             toast('마이그레이션 계획을 만들었습니다', 'success');
@@ -3492,13 +3495,17 @@ class Editor {
       try {
         const res = await api.get(
           `/erd/documents/${encodeURIComponent(this.docID)}/ddl?dialect=`
-          + encodeURIComponent(dialectSelect.value));
+          + encodeURIComponent(dialectSelect.value)
+          + '&base=' + encodeURIComponent(picker.value));
         mount(box, exportView(res, this.doc.name));
       } catch (err) {
         mount(box, errorPanel(err));
       }
     };
     dialectSelect.addEventListener('change', load);
+    // 기준을 바꾸면 그 자리에서 다시 만든다. 고르고 나서 또 눌러야 하면,
+    // 무엇을 보고 있는지가 한 박자씩 어긋난다.
+    const picker = basePicker({ connectionId: this.connection?.id, includeEmpty: true, onChange: load });
 
     openModal({
       title: 'SQL 내보내기',
@@ -3508,6 +3515,7 @@ class Editor {
           h('label.field.field-inline', {},
             h('span.field-label', {}, '대상 DB'), dialectSelect),
           h('span.muted.small', {}, '다른 종류를 고르면 타입을 변환해 만듭니다')),
+        picker.node,
         box,
       ],
     });
@@ -3749,10 +3757,78 @@ function migrationCreatedView(mig) {
 }
 
 // exportView는 내보낼 스크립트와 그것을 가져가는 두 가지 방법을 보여준다.
+// basePicker는 "무엇으로부터의 변경인가"를 고르는 칸이다.
+//
+// 초안은 대개 지금 DB에서 출발하지만, "v3에서 이 설계로 가는 SQL"이 필요한 때가
+// 있다 — 다른 환경이 아직 v3에 있거나, 지난 버전과의 차이를 보고 싶을 때다.
+// 기준이 지금 DB로 고정되어 있으면 그 SQL을 얻을 길이 없어 사람이 손으로 만든다.
+//
+// 목록은 나중에 채운다. 버전 이력을 못 불러와도 "지금 DB"는 고를 수 있어야 하기
+// 때문이다 — 고르개 하나 때문에 대화상자 전체가 열리지 않는 것이 더 나쁘다.
+function basePicker({ connectionId, includeEmpty = false, onChange }) {
+  const base = [];
+  if (includeEmpty) {
+    base.push({ value: '', label: '처음부터 (빈 데이터베이스)' });
+  }
+  if (connectionId) {
+    base.push({ value: 'live', label: '지금 DB' });
+  }
+  const sel = select(base, { value: includeEmpty ? '' : 'live' });
+  const note = h('span.field-help');
+  const fire = () => onChange?.(sel.value);
+  sel.addEventListener('change', () => { syncNote(); fire(); });
+
+  function syncNote() {
+    // 지금 DB가 아닌 기준을 고르면 실행이 막힐 수 있다는 것을 미리 말한다.
+    // 사전 검사가 어차피 막지만, 만들고 나서 듣는 것과 고르기 전에 아는 것은 다르다.
+    if (sel.value === '' || sel.value === 'live') {
+      note.textContent = sel.value === ''
+        ? '초안 전체를 처음부터 만드는 스크립트입니다.'
+        : '지금 대상 DB의 구조와 비교합니다.';
+      return;
+    }
+    note.textContent = '고른 버전에서 이 초안으로 가는 SQL을 만듭니다. '
+      + '지금 DB가 그 버전과 다르면 실행은 사전 검사에서 막힙니다 — SQL을 뽑는 데는 쓸 수 있습니다.';
+  }
+  syncNote();
+
+  const node = h('div.field', {},
+    h('span.field-label', {}, '기준'),
+    sel,
+    note);
+
+  (async () => {
+    if (!connectionId) return;
+    let versions = [];
+    try {
+      const res = await api.get(`/connections/${encodeURIComponent(connectionId)}/versions?limit=50`);
+      versions = res.versions ?? [];
+    } catch {
+      // 버전을 못 읽어도 지금 DB 기준은 그대로 쓸 수 있다.
+      return;
+    }
+    if (versions.length === 0) return;
+    const [newest, ...older] = versions;
+    const label = (v) => `v${v.versionNo} · ${versionSourceLabel(v.source)} · ${formatDate(v.createdAt)}`;
+    // 최신 버전은 이름을 따로 준다. "최신"을 고른다는 것과 "지금 v12"를 고른다는
+    // 것은 사람에게 다른 뜻이다.
+    sel.appendChild(h('option', { value: 'latest' }, `최신 버전 · ${label(newest)}`));
+    for (const v of older) {
+      sel.appendChild(h('option', { value: String(v.id) }, label(v)));
+    }
+  })();
+
+  return { node, get value() { return sel.value; } };
+}
+
 function exportView(res, docName) {
   const sql = res.upSql ?? '';
   if (!sql.trim()) {
-    return emptyStateNotice('내보낼 것이 없습니다. 초안에 테이블을 먼저 만드세요.');
+    // 기준과 같으면 "만들 것이 없다"이고, 처음부터라면 "초안이 비었다"이다.
+    // 같은 빈 화면이지만 사람이 할 일은 정반대다.
+    return emptyStateNotice(res.fromEmpty
+      ? '내보낼 것이 없습니다. 초안에 테이블을 먼저 만드세요.'
+      : `${res.base ?? '기준'} 과 초안의 구조가 같아 만들 SQL이 없습니다.`);
   }
   const stats = res.stats ?? {};
   return h('div', {},
@@ -3763,7 +3839,9 @@ function exportView(res, docName) {
         h('ul.note-list', {}, res.plan.warnings.map((w) => h('li', {}, w))))
       : null,
     h('div.panel-head', {},
-      h('span.muted', {}, '이 스크립트는 빈 데이터베이스를 기준으로 만들어졌습니다'),
+      h('span.muted', {}, res.fromEmpty
+        ? '이 스크립트는 빈 데이터베이스를 기준으로 만들어졌습니다'
+        : `${res.base ?? '기준'} 에서 이 초안으로 가는 변경 ${res.changes ?? 0}건입니다`),
       h('div.erd-export-actions', {},
         h('button.btn.btn-small', {
           type: 'button', onclick: () => copyToClipboard(sql),
