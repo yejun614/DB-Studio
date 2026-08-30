@@ -1014,24 +1014,39 @@ function statusText(d) {
   return `상태를 ${from} 에서 ${to} 로 바꿨습니다`;
 }
 
+// execRow는 실행 기록 한 줄이다.
+//
+// 오류 메시지를 SQL **아래**에 둔다. 예전에는 오른쪽 칸에 넣었는데, 그 칸은 표에서
+// 가장 좁은 자리라 긴 메시지가 세로로 길게 눌러 담기고(한 줄에 서너 글자), 정작
+// 읽어야 할 SQL은 그 옆에서 잘려 있었다. 실패한 줄에서 사람이 하는 일은 문장과
+// 메시지를 나란히 읽는 것이므로, 둘을 위아래로 놓아야 한다.
+//
+// 오른쪽 칸에는 성공·실패만 남긴다. 표를 훑을 때 필요한 것은 어느 줄이 실패했는가
+// 하나이고, 무엇이 잘못됐는지는 그 줄을 찾은 다음의 일이다.
+function execRow(s, okMark) {
+  return h('tr', { class: s.error ? 'is-destructive' : '' },
+    h('td.nowrap', {}, String(s.index + 1)),
+    h('td', {},
+      codeBlock(s.sql, 'sql', { className: 'mig-exec-sql' }),
+      s.error ? h('p.mig-exec-error', {}, icon('alert'), h('span', {}, s.error)) : null),
+    h('td.nowrap', {}, `${s.durationMs}ms`),
+    h('td.nowrap', {}, s.error ? badge('실패', 'danger') : okMark),
+  );
+}
+
 function executionPanel(m) {
   const log = m.executionLog ?? [];
   if (log.length === 0) return null;
   const failed = log.filter((s) => s.error).length;
-  return h('section.card', {},
+  return h('section.card.mig-execlog', {},
     h('h2', {}, '실행 기록',
       h('span.muted', {}, `${m.appliedStatements}문장 적용`),
       failed ? badge(`실패 ${failed}`, 'danger') : null),
     h('div.table-wrap', {},
       h('table.table.mig-exec', {},
         h('thead', {}, h('tr', {},
-          h('th', {}, '#'), h('th', {}, 'SQL'), h('th', {}, '소요'), h('th', {}, '결과'))),
-        h('tbody', {}, log.map((s) => h('tr', { class: s.error ? 'is-destructive' : '' },
-          h('td.nowrap', {}, String(s.index + 1)),
-          h('td', {}, codeBlock(s.sql, 'sql', { className: 'mig-exec-sql' })),
-          h('td.nowrap', {}, `${s.durationMs}ms`),
-          h('td', {}, s.error ? h('span.text-danger', {}, s.error) : badge('성공', 'success')),
-        ))))),
+          h('th', {}, '#'), h('th', {}, 'SQL'), h('th.nowrap', {}, '소요'), h('th.nowrap', {}, '결과'))),
+        h('tbody', {}, log.map((s) => execRow(s, badge('성공', 'success')))))),
   );
 }
 
@@ -1298,12 +1313,7 @@ function showResult(title, result) {
       result.report?.steps?.length
         ? h('details', {}, h('summary', {}, `실행 기록 ${result.report.steps.length}건`),
           h('table.table.mig-exec', {},
-            h('tbody', {}, result.report.steps.map((s) => h('tr', { class: s.error ? 'is-destructive' : '' },
-              h('td.nowrap', {}, String(s.index + 1)),
-              h('td', {}, codeBlock(s.sql, 'sql', { className: 'mig-exec-sql' })),
-              h('td.nowrap', {}, `${s.durationMs}ms`),
-              h('td', {}, s.error ? h('span.text-danger', {}, s.error) : '✓'),
-            )))))
+            h('tbody', {}, result.report.steps.map((s) => execRow(s, '✓')))))
         : null,
     ],
   });
