@@ -834,6 +834,111 @@ func TestMigrationActivityNeedsAccess(t *testing.T) {
 	}
 }
 
+// 롤백한 계획은 승인 기록을 지니고 다시 실행할 수 있어야 한다.
+//
+// 롤백은 "이 변경을 물린다"이지 "이 계획을 버린다"가 아니다. 원인을 고친 뒤 같은
+// 변경을 다시 넣는 일이 흔한데, 그때마다 계획을 새로 만들고 승인을 다시 받아야
+// 한다면 사람들은 롤백을 누르기를 망설이게 된다 — 되돌리기가 비싸지면 아무도
+// 되돌리지 않는다.
+func TestRerunAfterRollback(t *testing.T) {
+	e, conn, mig := assignEnv(t)
+	ctx := context.Background()
+	dana := member(t, e, "dana", conn.ID, model.LevelMigrate)
+
+	alice := loginAs(t, e, "alice")
+	if code, body := alice.do("PUT", "/api/v1/migrations/"+mig.ID+"/assignment",
+		map[string]any{"assigneeId": "", "reviewerIds": []string{dana.ID}}); code != 200 {
+		t.Fatalf("지정 = %d: %v", code, body)
+	}
+	danaC := loginAs(t, e, "dana")
+	if code, body := danaC.do("POST", "/api/v1/migrations/"+mig.ID+"/review",
+		map[string]any{"decision": "approved", "comment": "확인했습니다"}); code != 200 {
+		t.Fatalf("승인 = %d: %v", code, body)
+	}
+
+	// 승인된 계획은 이 엔드포인트로 승인됨이 될 수 없다. 리뷰를 거치지 않은 승인이
+	// 생기는 구멍이므로, 롤백된 경우로만 열려 있어야 한다.
+	if code, _ := alice.do("POST", "/api/v1/migrations/"+mig.ID+"/status",
+		map[string]any{"status": "approved"}); code != 400 {
+		t.Errorf("승인됨 상태에서 승인됨으로 = %d, 400이어야 합니다", code)
+	}
+
+	// 실행·롤백은 실제 DB가 필요하므로 상태만 옮겨 흉내 낸다.
+	for _, st := range []string{store.MigrationApplied, store.MigrationRolledBack} {
+		if err := e.st.SetMigrationStatus(ctx, mig.ID, st); err != nil {
+			t.Fatalf("%s: %v", st, err)
+		}
+	}
+
+	// 롤백된 계획을 다시 실행 대기로 되돌린다.
+	if code, body := alice.do("POST", "/api/v1/migrations/"+mig.ID+"/status",
+		map[string]any{"status": "approved"}); code != 200 {
+		t.Fatalf("다시 실행 = %d: %v", code, body)
+	}
+	got, err := e.st.GetMigration(ctx, mig.ID, true)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Status != store.MigrationApproved {
+		t.Errorf("다시 실행 뒤 상태 = %q, 기대 approved", got.Status)
+	}
+	// 닫기 후 다시 열기와 다른 점: 승인 기록이 남는다.
+	if len(got.Reviews) != 1 {
+		t.Errorf("승인 기록 = %d건, 기대 1건 (롤백은 승인을 지우지 않습니다)", len(got.Reviews))
+	}
+	if store.ApprovalCount(got.Reviews) != 1 {
+		t.Errorf("승인 수 = %d, 기대 1", store.ApprovalCount(got.Reviews))
+	}
+}
+
+// 승인이 남아 있지 않으면 롤백된 계획도 다시 실행할 수 없다.
+//
+// "예전에 승인됐다"는 사실만으로 실행을 열어 주면, 그 뒤 승인을 거둔 사람의 뜻이
+// 사라진다. 상태는 지금 남아 있는 결정에서 따진다.
+func TestRerunAfterRollbackNeedsApprovalsStillStanding(t *testing.T) {
+	e, conn, mig := assignEnv(t)
+	ctx := context.Background()
+	dana := member(t, e, "dana", conn.ID, model.LevelMigrate)
+
+	alice := loginAs(t, e, "alice")
+	if code, body := alice.do("PUT", "/api/v1/migrations/"+mig.ID+"/assignment",
+		map[string]any{"assigneeId": "", "reviewerIds": []string{dana.ID}}); code != 200 {
+		t.Fatalf("지정 = %d: %v", code, body)
+	}
+	danaC := loginAs(t, e, "dana")
+	if code, body := danaC.do("POST", "/api/v1/migrations/"+mig.ID+"/review",
+		map[string]any{"decision": "approved"}); code != 200 {
+		t.Fatalf("승인 = %d: %v", code, body)
+	}
+	for _, st := range []string{store.MigrationApplied, store.MigrationRolledBack} {
+		if err := e.st.SetMigrationStatus(ctx, mig.ID, st); err != nil {
+			t.Fatalf("%s: %v", st, err)
+		}
+	}
+
+	// 그 사이에 승인을 거뒀다.
+	reviews, err := e.st.ListMigrationReviews(ctx, mig.ID)
+	if err != nil || len(reviews) != 1 {
+		t.Fatalf("리뷰 목록 = %v, %v", reviews, err)
+	}
+	if err := e.st.DeleteMigrationReview(ctx, mig.ID, reviews[0].ID); err != nil {
+		t.Fatalf("delete review: %v", err)
+	}
+
+	code, body := alice.do("POST", "/api/v1/migrations/"+mig.ID+"/status",
+		map[string]any{"status": "approved"})
+	if code != 409 {
+		t.Fatalf("승인 없이 다시 실행 = %d: %v", code, body)
+	}
+	after, err := e.st.GetMigration(ctx, mig.ID, false)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if after.Status != store.MigrationRolledBack {
+		t.Errorf("거절됐는데 상태가 %q 로 바뀌었습니다", after.Status)
+	}
+}
+
 // aliceID는 시험 환경의 슈퍼 어드민 id다.
 func aliceID(t *testing.T, e *testEnv) string {
 	t.Helper()

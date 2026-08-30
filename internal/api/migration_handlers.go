@@ -517,9 +517,35 @@ func (s *Server) handleMigrationStatus(c *fiber.Ctx) error {
 	// 만들 수 있으면 실행 기록 없는 적용이 생긴다.
 	switch next {
 	case store.MigrationInReview, store.MigrationDraft, store.MigrationClosed:
+	case store.MigrationApproved:
+		// 승인됨으로 가는 길은 원래 리뷰뿐이다. 여기서 열어 주면 리뷰 중인 계획을
+		// 승인 없이 승인됨으로 밀어 올릴 수 있으므로, **롤백된 계획을 다시 실행
+		// 대기로 되돌리는 경우**로만 좁힌다.
+		if mig.Status != store.MigrationRolledBack {
+			return fail(c, fiber.StatusBadRequest, "bad_request",
+				"승인됨으로는 롤백된 계획을 다시 실행할 때만 바꿀 수 있습니다")
+		}
+		// 그 사이에 리뷰가 지워졌거나 반려가 남았을 수 있다. 지금 남아 있는 결정으로
+		// 다시 따진다 — 예전에 승인됐다는 사실만으로 실행을 열어 주면, 승인을
+		// 거둔 사람의 뜻이 사라진다.
+		reviews, rerr := s.st.ListMigrationReviews(c.Context(), mig.ID)
+		if rerr != nil {
+			return rerr
+		}
+		required := migrate.RequiredApprovals(conn, mig.DestructiveCount)
+		if store.HasRejection(reviews) {
+			return fail(c, fiber.StatusConflict, "invalid_state",
+				"반려가 남아 있어 다시 실행할 수 없습니다. 검토를 먼저 정리하세요")
+		}
+		if store.ApprovalCount(reviews) < required {
+			return fail(c, fiber.StatusConflict, "invalid_state",
+				fmt.Sprintf("승인 %d명이 필요합니다 (현재 %d명). 리뷰어를 다시 지정해 승인을 받으세요",
+					required, store.ApprovalCount(reviews)))
+		}
 	default:
 		return fail(c, fiber.StatusBadRequest, "bad_request",
-			"이 엔드포인트로는 리뷰 요청(in_review)·초안(draft)·닫기(closed)로만 바꿀 수 있습니다")
+			"이 엔드포인트로는 리뷰 요청(in_review)·초안(draft)·닫기(closed)·"+
+				"다시 실행(approved)으로만 바꿀 수 있습니다")
 	}
 
 	if err := s.st.SetMigrationStatus(c.Context(), mig.ID, next); err != nil {
