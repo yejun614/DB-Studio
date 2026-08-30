@@ -409,6 +409,15 @@ function actionBar(m, res, precheckBox, reload) {
       onclick: () => openRollbackDialog(m, res, reload),
     }, icon('refresh'), '롤백'));
   }
+  // 롤백은 "이 변경을 물린다"이지 "이 계획을 버린다"가 아니다. 원인을 고친 뒤 같은
+  // 변경을 다시 넣는 일이 흔한데, 그때마다 계획을 새로 만들어야 한다면 사람들은
+  // 롤백을 누르기를 망설이게 된다 — 되돌리기가 비싸지면 아무도 되돌리지 않는다.
+  if (m.status === 'rolled_back') {
+    buttons.push(h('button.btn.btn-primary', {
+      type: 'button',
+      onclick: () => reopenForRerun(m, reload),
+    }, icon('play'), '다시 실행'));
+  }
   // Git 푸시는 어느 상태에서든 할 수 있다. 리뷰를 저장소에서 받는 팀도 있고,
   // 적용 후 기록으로 남기는 팀도 있다 — 워크플로를 앱이 강제할 이유가 없다.
   buttons.push(h('button.btn', {
@@ -501,7 +510,13 @@ function applyGate(m, res, reload) {
       h('span', {},
         h('b', {}, '닫힌'), ' 계획입니다. 다시 열면 초안으로 돌아가고, 승인을 다시 받아야 합니다.'));
   }
-  // 적용됨·롤백됨·실패는 실행이 이미 지나간 일이다. 실행 이력 칸이 그것을 말한다.
+  if (m.status === 'rolled_back') {
+    return gateNote('info',
+      h('span', {},
+        '롤백해서 이 변경은 물러 있습니다. ', h('b', {}, '다시 실행'),
+        ' 을 누르면 같은 계획을 다시 실행할 수 있습니다 — 승인 기록은 그대로 유지됩니다.'));
+  }
+  // 적용됨·실패는 실행이 이미 지나간 일이다. 실행 이력 칸이 그것을 말한다.
   return null;
 }
 
@@ -530,6 +545,27 @@ async function changeStatus(id, status, reload, message = '상태를 변경했�
   } catch (err) {
     toastError(err);
   }
+}
+
+// reopenForRerun은 롤백된 계획을 다시 실행 대기(승인됨)로 되돌린다.
+//
+// 닫기 후 다시 열기와 다른 점: 승인 기록을 지우지 않는다. 계획의 내용이 바뀌지
+// 않았고 롤백으로 DB가 실행 전 구조로 돌아왔으므로, 그때의 승인은 여전히 "지금 이
+// 구조에 이 변경을 해도 좋다"는 뜻이다. 구조가 실제로 그런지는 사전 검사가 기준
+// 지문으로 다시 확인한다.
+async function reopenForRerun(m, reload) {
+  const ok = await confirmDialog({
+    title: '다시 실행',
+    message: '이 계획을 다시 실행할 수 있는 상태(승인됨)로 되돌립니다. '
+      + '승인 기록은 그대로 두므로 다시 승인받을 필요가 없습니다.',
+    confirmLabel: '다시 실행 준비',
+    details: h('p.notice.notice-info', {}, icon('activity'),
+      h('span', {},
+        '롤백된 뒤 DB가 다른 곳에서 또 바뀌었을 수 있습니다. 실행 전에 ',
+        h('b', {}, '사전 검사'), ' 로 지금 구조가 계획의 기준과 같은지 확인하세요.')),
+  });
+  if (!ok) return;
+  changeStatus(m.id, 'approved', reload, '다시 실행할 수 있습니다. 사전 검사 후 실행하세요');
 }
 
 // reopen은 닫은 계획을 초안으로 되돌린다.
