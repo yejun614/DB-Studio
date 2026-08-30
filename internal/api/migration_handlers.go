@@ -9,6 +9,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
+	"dbstudio/internal/dbx"
 	"dbstudio/internal/migrate"
 	"dbstudio/internal/model"
 	"dbstudio/internal/schema"
@@ -16,6 +17,87 @@ import (
 )
 
 // ---------- 스키마 버전 ----------
+
+// basePick은 계획의 기준(무엇으로부터의 변경인가)이다.
+type basePick struct {
+	// Schema는 기준 구조다.
+	Schema *schema.Schema
+	// Version은 버전을 기준으로 삼았을 때 그 버전이다(지금 DB면 nil).
+	Version *store.SchemaVersion
+	// Live는 지금 DB를 그대로 읽었는지다.
+	Live bool
+	// Label은 화면과 감사 로그에 남길 짧은 이름이다.
+	Label string
+}
+
+// resolveBase는 기준 지정("", "live", "latest", 버전 id)을 실제 구조로 바꾼다.
+//
+// 기준을 고를 수 있어야 하는 까닭: 초안은 대개 지금 DB에서 출발하지만, "v3에서
+// 이 설계로 가는 SQL"이 필요한 때가 있다 — 다른 환경이 아직 v3에 있거나, 지난
+// 버전과의 차이를 보고 싶을 때다. 기준이 지금 DB로 고정되어 있으면 그 SQL을 얻을
+// 길이 없어 사람이 손으로 만들게 된다.
+//
+// 고른 기준은 계획의 base_fingerprint가 된다. 지금 DB와 다른 버전을 골랐다면 사전
+// 검사가 실행을 막는다(그것이 드리프트 검사의 일이다) — 막는 것이 옳다. 그런 계획은
+// SQL을 뽑기 위한 것이지 지금 이 DB에 넣기 위한 것이 아니다.
+//
+// 거절할 때 fail()을 쓰지 않는다. fail()은 응답을 쓰고 **nil**을 돌려주므로, 그것을
+// 그대로 error로 넘기면 부르는 쪽에서 "성공했는데 결과가 nil"이 되어 그 다음 줄에서
+// 터진다. 실제로 그렇게 터졌다. 도우미는 진짜 error를 돌려줘야 한다.
+func (s *Server) resolveBase(c *fiber.Ctx, conn *model.Connection, adapter dbx.Adapter,
+	spec string) (*basePick, error) {
+
+	spec = strings.TrimSpace(spec)
+	switch spec {
+	case "", "live":
+		if conn == nil {
+			return nil, fiber.NewError(fiber.StatusBadRequest,
+				"대상 DB가 없는 문서에서는 지금 DB를 기준으로 삼을 수 없습니다")
+		}
+		current, ierr := s.introspectConnection(c, conn, adapter)
+		if ierr != nil {
+			return nil, fiber.NewError(fiber.StatusBadGateway,
+				"대상 DB의 스키마를 읽지 못했습니다: "+ierr.Error())
+		}
+		return &basePick{Schema: current, Live: true, Label: "지금 DB"}, nil
+	case "latest":
+		if conn == nil {
+			return nil, fiber.NewError(fiber.StatusBadRequest,
+				"대상 DB가 없는 문서에는 버전 이력이 없습니다")
+		}
+		v, err := s.st.LatestSchemaVersion(c.Context(), conn.ID, true)
+		if err != nil {
+			return nil, err
+		}
+		if v == nil || v.Schema == nil {
+			return nil, fiber.NewError(fiber.StatusBadRequest,
+				"이 커넥션에는 아직 등록된 버전이 없습니다")
+		}
+		return &basePick{Schema: v.Schema, Version: v, Label: fmt.Sprintf("v%d (최신)", v.VersionNo)}, nil
+	}
+
+	id, perr := strconv.ParseInt(spec, 10, 64)
+	if perr != nil {
+		return nil, fiber.NewError(fiber.StatusBadRequest,
+			"기준은 live, latest 또는 버전 id 여야 합니다")
+	}
+	v, err := s.st.GetSchemaVersion(c.Context(), id, true)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, fiber.NewError(fiber.StatusNotFound, "버전을 찾을 수 없습니다")
+	}
+	if err != nil {
+		return nil, err
+	}
+	// 버전은 커넥션에 속한다. 소속을 보지 않으면 남의 커넥션 버전을 기준으로
+	// 삼을 수 있고, 그것은 권한 검사를 우회하는 길이 된다.
+	if conn == nil || v.ConnectionID != conn.ID {
+		return nil, fiber.NewError(fiber.StatusNotFound, "이 커넥션의 버전이 아닙니다")
+	}
+	if v.Schema == nil {
+		return nil, fiber.NewError(fiber.StatusBadRequest, "이 버전에는 구조가 없습니다")
+	}
+	return &basePick{Schema: v.Schema, Version: v, Label: fmt.Sprintf("v%d", v.VersionNo)}, nil
+}
 
 // handleListVersions는 커넥션의 버전 이력을 반환한다.
 func (s *Server) handleListVersions(c *fiber.Ctx) error {
@@ -248,6 +330,9 @@ func (s *Server) handleCreateMigration(c *fiber.Ctx) error {
 	var body struct {
 		DocID string `json:"docId"`
 		Title string `json:"title"`
+		// Base는 "무엇으로부터의 변경인가"다: "" 또는 "live"(지금 DB), "latest",
+		// 버전 id. 비워 두면 예전처럼 지금 DB에서 출발한다.
+		Base string `json:"base"`
 	}
 	if err := c.BodyParser(&body); err != nil {
 		return fail(c, fiber.StatusBadRequest, "bad_request", "요청 본문을 해석할 수 없습니다")
@@ -273,16 +358,16 @@ func (s *Server) handleCreateMigration(c *fiber.Ctx) error {
 		return err
 	}
 
-	current, ierr := s.introspectConnection(c, conn, adapter)
-	if ierr != nil {
-		return failDetail(c, fiber.StatusBadGateway, "introspect_failed",
-			"대상 DB의 스키마를 읽지 못했습니다", ierr.Error())
+	base, err := s.resolveBase(c, conn, adapter, body.Base)
+	if err != nil {
+		return err
 	}
+	current := base.Schema
 
 	diff := schema.Diff(current, doc.Schema)
 	if diff.IsEmpty() {
 		return fail(c, fiber.StatusBadRequest, "no_changes",
-			"초안과 대상 DB의 구조가 같아 만들 마이그레이션이 없습니다")
+			fmt.Sprintf("초안과 %s 의 구조가 같아 만들 마이그레이션이 없습니다", base.Label))
 	}
 	plan := schema.BuildPlan(string(conn.Kind), diff)
 	if len(plan.Up) == 0 {
@@ -301,13 +386,18 @@ func (s *Server) handleCreateMigration(c *fiber.Ctx) error {
 	// 적어 두면 이력에 없는 상태를 있는 것처럼 말하게 된다. "무엇으로부터의 변경인가"는
 	// base_fingerprint와 diff에 남고, 실행 직전 사전 검사도 그 지문을 본다.
 	u := currentUser(c)
-	latest, err := s.st.LatestSchemaVersion(c.Context(), conn.ID, false)
-	if err != nil {
-		return err
-	}
 	var fromID *int64
-	if latest != nil && latest.Fingerprint == current.Fingerprint() {
-		fromID = &latest.ID
+	if base.Version != nil {
+		// 버전을 기준으로 골랐다면 그 버전이 곧 출발점이다.
+		fromID = &base.Version.ID
+	} else {
+		latest, lerr := s.st.LatestSchemaVersion(c.Context(), conn.ID, false)
+		if lerr != nil {
+			return lerr
+		}
+		if latest != nil && latest.Fingerprint == current.Fingerprint() {
+			fromID = &latest.ID
+		}
 	}
 
 	title := strings.TrimSpace(body.Title)
@@ -325,6 +415,7 @@ func (s *Server) handleCreateMigration(c *fiber.Ctx) error {
 	s.audit(c, store.AuditParams{
 		Action: "migration.create", TargetType: "migration", TargetID: mig.ID,
 		Detail: map[string]any{
+			"base":       base.Label,
 			"connection": conn.Name, "title": title, "document": doc.Name,
 			"changes": len(diff.Changes), "destructive": diff.DestructiveCount,
 			"statements": len(plan.Up),

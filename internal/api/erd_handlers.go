@@ -500,8 +500,31 @@ func (s *Server) handleERDDDL(c *fiber.Ctx) error {
 		return fail(c, fiber.StatusBadRequest, "invalid_dialect", "알 수 없는 DB 종류입니다")
 	}
 
-	empty := &schema.Schema{Dialect: dialect, Shape: schema.ShapeRelational}
-	diff := schema.Diff(empty, doc.Schema)
+	// 기준을 고를 수 있다. 비워 두면 빈 스키마에서 출발하는 "처음부터 만드는"
+	// 스크립트이고(대상이 없는 초안에서 유일하게 얻을 수 있는 결과물이다),
+	// 지금 DB나 특정 버전을 고르면 거기서 이 설계로 가는 변경 SQL이 나온다.
+	baseSpec := strings.TrimSpace(c.Query("base"))
+	from := &schema.Schema{Dialect: dialect, Shape: schema.ShapeRelational}
+	baseLabel := "빈 스키마"
+	if baseSpec != "" {
+		// 대상 DB가 없는 초안에는 기준으로 삼을 것이 없다. erdAdapterFor는 커넥션이
+		// 있다고 보고 conn.Kind 를 읽으므로, 여기서 먼저 막지 않으면 nil 로 터진다.
+		if conn == nil {
+			return fail(c, fiber.StatusBadRequest, "no_connection",
+				"대상 DB가 없는 문서는 처음부터 만드는 스크립트만 뽑을 수 있습니다")
+		}
+		adapter, aerr := s.erdAdapterFor(conn)
+		if aerr != nil {
+			return aerr
+		}
+		base, berr := s.resolveBase(c, conn, adapter, baseSpec)
+		if berr != nil {
+			return berr
+		}
+		from = base.Schema
+		baseLabel = base.Label
+	}
+	diff := schema.Diff(from, doc.Schema)
 	plan := schema.BuildPlan(dialect, diff)
 	if dialect != doc.Schema.Dialect && doc.Schema.Dialect != "" {
 		plan.Warnings = append(plan.Warnings,
@@ -512,16 +535,20 @@ func (s *Server) handleERDDDL(c *fiber.Ctx) error {
 		Action: "erd.export", TargetType: "erd_document", TargetID: doc.ID,
 		Detail: map[string]any{
 			"name": doc.Name, "connection": connName(conn),
-			"dialect": dialect, "statements": len(plan.Up),
+			"dialect": dialect, "statements": len(plan.Up), "base": baseLabel,
 		},
 	})
 
 	return c.JSON(fiber.Map{
-		"document": fiber.Map{"id": doc.ID, "name": doc.Name, "dialect": doc.Schema.Dialect},
-		"dialect":  dialect,
-		"plan":     plan,
-		"upSql":    plan.UpSQL(),
-		"stats":    doc.Schema.Stats(),
+		"document":  fiber.Map{"id": doc.ID, "name": doc.Name, "dialect": doc.Schema.Dialect},
+		"dialect":   dialect,
+		"plan":      plan,
+		"upSql":     plan.UpSQL(),
+		"downSql":   plan.DownSQL(),
+		"base":      baseLabel,
+		"changes":   len(diff.Changes),
+		"stats":     doc.Schema.Stats(),
+		"fromEmpty": baseSpec == "",
 	})
 }
 
