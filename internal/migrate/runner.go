@@ -169,7 +169,9 @@ func (r *Runner) Check(ctx context.Context, conn *model.Connection, secret *mode
 	if !pc.TransactionalDDL {
 		pc.Warnings = append(pc.Warnings,
 			fmt.Sprintf("%s는 DDL을 트랜잭션으로 되돌릴 수 없습니다. "+
-				"중간에 실패하면 앞의 문장은 적용된 상태로 남습니다", conn.Kind))
+				"중간에 실패하면 이미 적용된 문장을 반대로 실행해 되돌립니다 — "+
+				"다만 데이터가 사라지는 변경이 이미 적용됐다면 그대로 두고 알립니다",
+				conn.Kind))
 	}
 	if conn.Environment == model.EnvProd && !r.BackupConfigured() {
 		pc.Warnings = append(pc.Warnings,
@@ -190,6 +192,127 @@ func (r *Runner) Check(ctx context.Context, conn *model.Connection, secret *mode
 
 	pc.OK = len(pc.Blockers) == 0
 	return pc, nil
+}
+
+// undoApplied는 적용된 앞부분을 되돌린다.
+//
+// 되돌리기 자체는 ContinueOnError로 실행한다. 중간에 하나가 실패해도 나머지는
+// 되돌리는 편이 남는 것이 적기 때문이다 — 여기서 멈추면 "절반의 절반"이 남는다.
+// 무엇이 실패했는지는 문장 단위로 기록되어 화면에 그대로 나온다.
+func (r *Runner) undoApplied(ctx context.Context, p ApplyParams, adapter dbx.Adapter,
+	report *dbx.ExecReport) (*dbx.ExecReport, string) {
+
+	stmts, skip := undoPlan(p.Mig.Plan, report.Steps, report.Applied)
+	if skip != "" || len(stmts) == 0 {
+		return nil, skip
+	}
+	undo, err := adapter.ExecDDL(ctx, dbx.Target{Conn: p.Conn, Secret: p.Secret}, stmts,
+		dbx.ExecOptions{StatementTimeout: statementTimeout, ContinueOnError: true})
+	if err != nil {
+		// 되돌리기를 시작조차 못 했다(접속이 끊겼다). 부분 적용이 그대로 남는다.
+		return nil, "되돌리기를 실행하지 못했습니다: " + err.Error()
+	}
+	return undo, ""
+}
+
+// markUndo는 되돌리기 문장임을 기록에 표시하고 번호를 이어 붙인다.
+//
+// 같은 표에 섞여 들어가므로 구분이 없으면 "적용된 문장"으로 읽힌다 — 실제로는
+// 그 반대를 한 문장이다. 번호를 이어 붙이지 않으면 1번이 두 번 나와, 표만 보고는
+// 어느 것이 먼저 일어난 일인지 알 수 없다.
+func markUndo(steps []store.ExecutionStep, start int) []store.ExecutionStep {
+	for i := range steps {
+		steps[i].Undo = true
+		steps[i].Index = start + i
+	}
+	return steps
+}
+
+func skipTail(skip string) string {
+	if skip == "" {
+		return ""
+	}
+	return skip + ". "
+}
+
+// undoPlan은 "적용된 앞부분만 되돌리는" 문장 목록을 만든다.
+//
+// 트랜잭션이 없는 DB(MySQL·Oracle)는 DDL이 암묵적 커밋을 일으켜서, 중간에 실패하면
+// 앞 문장이 적용된 채 남는다. 그 상태를 그대로 두면 DB는 계획에도 없고 이력에도 없는
+// 모습이 된다 — 다음 사람이 무엇을 마주할지 아무도 모른다. 그래서 성공한 문장들의
+// 되돌리기를 반대 순서로 실행해 실행 전 상태로 돌린다.
+//
+// 되돌리지 않는 경우가 셋 있고, 셋 다 "짐작으로 DDL을 실행하지 않는다"는 한 가지
+// 이유에서 나온다. 이유는 문자열로 돌려주어 화면이 사람에게 그대로 전한다.
+//
+//  1. 이미 적용된 문장에 파괴적인 것이 있다. 구조는 되살릴 수 있어도 데이터는 아니다.
+//     자동으로 되돌리면 "복구됐다"고 보이는 빈 컬럼이 남는데, 그것은 사람이 알고
+//     골라야 하는 일이다(롤백 버튼이 확인 창을 띄우는 이유와 같다).
+//  2. 되돌릴 SQL이 없는 변경이 섞여 있다. 반쪽만 되돌리면 상태가 더 헝클어진다.
+//  3. 계획이 문장과 되돌리기를 짝지을 수 없다(Seq가 없는 예전 계획).
+func undoPlan(plan *schema.Plan, steps []dbx.ExecStep, applied int) (stmts []string, skip string) {
+	if plan == nil || applied <= 0 {
+		return nil, ""
+	}
+	// 성공한 문장이 어느 변경에서 나왔는지 모은다.
+	done := map[int]bool{}
+	for _, s := range steps {
+		if s.Error != "" {
+			continue
+		}
+		up := statementAt(plan.Up, s.Index)
+		if up == nil {
+			return nil, "실행한 문장을 계획에서 찾지 못했습니다"
+		}
+		if up.Seq == 0 {
+			return nil, "이 계획은 문장과 되돌리기를 짝지을 수 없는 예전 형식입니다"
+		}
+		if up.Destructive {
+			return nil, fmt.Sprintf("이미 적용된 변경(%s)은 데이터가 사라지는 것이라 "+
+				"자동으로 되돌리지 않았습니다", stmtLabel(up))
+		}
+		done[up.Seq] = true
+	}
+	if len(done) == 0 {
+		return nil, ""
+	}
+	// down은 이미 up의 역순으로 정렬되어 있다. 그 순서를 그대로 따라간다 —
+	// 되돌리기끼리도 순서가 의미를 가진다(FK를 먼저 풀어야 컬럼을 되돌린다).
+	seen := map[int]bool{}
+	for _, d := range plan.Down {
+		if !done[d.Seq] {
+			continue
+		}
+		seen[d.Seq] = true
+		stmts = append(stmts, d.SQL)
+	}
+	for seq := range done {
+		if !seen[seq] {
+			return nil, "적용된 변경 중 되돌릴 SQL이 없는 것이 있습니다"
+		}
+	}
+	return stmts, ""
+}
+
+// stmtLabel은 문장을 사람이 알아볼 짧은 이름으로 만든다.
+func stmtLabel(s *schema.Statement) string {
+	switch {
+	case s.Table != "" && s.Object != "":
+		return s.Table + "." + s.Object
+	case s.Table != "":
+		return s.Table
+	}
+	return string(s.Kind)
+}
+
+// statementAt은 실행 순서(index)에 해당하는 계획 문장을 찾는다.
+//
+// ExecDDL은 빈 문장을 건너뛰지만 index는 원래 자리를 유지하므로 그대로 색인한다.
+func statementAt(list []schema.Statement, i int) *schema.Statement {
+	if i < 0 || i >= len(list) {
+		return nil
+	}
+	return &list[i]
 }
 
 // ApplyParams는 실행 입력이다.
@@ -213,6 +336,10 @@ type Result struct {
 	Error    string   `json:"error,omitempty"`
 	// BackupOutput은 백업 훅의 출력이다 (성공 시에도 남긴다).
 	BackupOutput string `json:"backupOutput,omitempty"`
+	// Undo는 실패 뒤 적용된 앞부분을 되돌린 결과다(트랜잭션이 없는 DB에서만 생긴다).
+	Undo *dbx.ExecReport `json:"undo,omitempty"`
+	// UndoSkipped는 되돌리지 않은 까닭이다. 비어 있지 않으면 부분 적용이 남아 있다.
+	UndoSkipped string `json:"undoSkipped,omitempty"`
 }
 
 // Apply는 마이그레이션을 실행하고 결과를 기록한다.
@@ -265,14 +392,37 @@ func (r *Runner) Apply(ctx context.Context, p ApplyParams) (*Result, error) {
 	if report.Error != "" {
 		res.Status = store.MigrationFailed
 		res.Error = report.Error
+		left := report.Applied
+		// 트랜잭션이 없는 DB는 여기서 절반만 적용된 채로 끝난다. 그 상태를 그대로
+		// 두면 DB는 계획에도 이력에도 없는 모습이 되므로, 성공한 문장들을 반대로
+		// 되돌려 실행 전으로 돌린다. 되돌릴 수 없는 경우는 까닭을 그대로 전한다.
 		if !report.TransactionUsed && report.Applied > 0 {
-			res.Warnings = append(res.Warnings, fmt.Sprintf(
-				"%d번째 문장에서 실패했고 앞의 %d개 문장은 적용된 상태로 남아 있습니다. "+
-					"실행 기록을 확인한 뒤 롤백하거나 직접 정리해야 합니다",
-				report.FailedIndex+1, report.Applied))
+			undoSteps, skip := r.undoApplied(ctx, p, adapter, report)
+			res.Undo = undoSteps
+			res.UndoSkipped = skip
+			switch {
+			case undoSteps != nil && undoSteps.Error == "":
+				left = 0
+				steps = append(steps, markUndo(toStoreSteps(undoSteps.Steps), len(steps))...)
+				res.Warnings = append(res.Warnings, fmt.Sprintf(
+					"%d번째 문장에서 실패해, 먼저 적용된 %d개 문장을 되돌렸습니다. "+
+						"DB는 실행 전 상태입니다",
+					report.FailedIndex+1, report.Applied))
+			case undoSteps != nil:
+				steps = append(steps, markUndo(toStoreSteps(undoSteps.Steps), len(steps))...)
+				res.Warnings = append(res.Warnings, fmt.Sprintf(
+					"%d번째 문장에서 실패했고, 되돌리기도 실패했습니다(%s). "+
+						"DB에 무엇이 남았는지 실행 기록을 보고 직접 정리해야 합니다",
+					report.FailedIndex+1, undoSteps.Error))
+			default:
+				res.Warnings = append(res.Warnings, fmt.Sprintf(
+					"%d번째 문장에서 실패했고 앞의 %d개 문장은 적용된 상태로 남아 있습니다. "+
+						"%s실행 기록을 확인한 뒤 롤백하거나 직접 정리해야 합니다",
+					report.FailedIndex+1, report.Applied, skipTail(skip)))
+			}
 		}
 		if err := r.st.RecordMigrationRun(ctx, p.Mig.ID, store.RunResult{
-			Status: store.MigrationFailed, Steps: steps, Applied: report.Applied,
+			Status: store.MigrationFailed, Steps: steps, Applied: left,
 			Error: report.Error, ActorID: actorID(p.Actor),
 		}); err != nil {
 			return nil, err

@@ -679,35 +679,43 @@ func TestFailureBehaviorPerDialect(t *testing.T) {
 					t.Errorf("되돌린 뒤 적용 수 = %d, 기대값 0", res.Report.Applied)
 				}
 			} else {
-				// 부분 적용이 남고, 그 사실이 기록되어야 한다.
+				// 트랜잭션이 없으므로 앞 문장은 일단 적용된다. 그 뒤 앱이 되돌려
+				// 실행 전 상태로 돌려놓아야 한다 — 사람이 손댈 것이 남으면 안 된다.
 				if res.Report.Applied == 0 {
 					t.Error("실패 전 문장이 하나도 적용되지 않았습니다 (설정 확인)")
+				}
+				if res.Undo == nil {
+					t.Fatalf("되돌리지 않았습니다 (까닭: %q, 경고: %v)", res.UndoSkipped, res.Warnings)
+				}
+				if res.Undo.Error != "" {
+					t.Fatalf("되돌리기가 실패했습니다: %s", res.Undo.Error)
+				}
+				if got := h.introspect(t).Fingerprint(); got != beforeFinger {
+					t.Errorf("되돌렸는데 구조가 원래와 다릅니다: %v",
+						summaries(schema.Diff(h.introspect(t), after)))
 				}
 				stored, err := h.st.GetMigration(h.ctx, mig.ID, true)
 				if err != nil {
 					t.Fatalf("reload: %v", err)
 				}
-				if stored.AppliedStatements != res.Report.Applied {
-					t.Errorf("기록된 적용 수 = %d, 실제 = %d",
-						stored.AppliedStatements, res.Report.Applied)
+				// 되돌렸으므로 "적용된 문장 수"는 0이다. 이 숫자가 남아 있으면
+				// 다음 사람이 DB에 무언가 남아 있다고 읽는다.
+				if stored.AppliedStatements != 0 {
+					t.Errorf("되돌린 뒤 기록된 적용 수 = %d, 기대값 0", stored.AppliedStatements)
 				}
-				if !containsSubstring(res.Warnings, "적용된 상태로 남아") {
-					t.Errorf("부분 적용 경고가 없습니다: %v", res.Warnings)
+				if !containsSubstring(res.Warnings, "되돌렸습니다") {
+					t.Errorf("되돌렸다는 안내가 없습니다: %v", res.Warnings)
 				}
-				// 부분 적용은 오류 무시 롤백으로 정리할 수 있어야 한다.
-				stored.Plan.Down = mig.Plan.Down
-				rb, err := h.runner.Rollback(h.ctx, ApplyParams{
-					Conn: h.conn, Secret: h.secret, Mig: stored, Actor: h.author,
-				}, true)
-				if err != nil {
-					t.Fatalf("rollback: %v", err)
+				// 되돌리기 문장도 기록에 남아야 한다. 무엇을 되돌렸는지 모르면
+				// 기록은 "실패했다"까지만 말한다.
+				undoSteps := 0
+				for _, st := range stored.ExecutionLog {
+					if st.Undo {
+						undoSteps++
+					}
 				}
-				if rb.Status != store.MigrationRolledBack {
-					t.Errorf("정리 롤백 상태 = %s", rb.Status)
-				}
-				if got := h.introspect(t).Fingerprint(); got != beforeFinger {
-					t.Errorf("정리 후에도 구조가 원래와 다릅니다: %v",
-						summaries(schema.Diff(after, h.introspect(t))))
+				if undoSteps == 0 {
+					t.Errorf("되돌리기 문장이 기록에 없습니다: %+v", stored.ExecutionLog)
 				}
 			}
 		})
@@ -881,6 +889,167 @@ func TestStatusTransitions(t *testing.T) {
 				t.Errorf("CanTransition(%s, %s) = %t, 기대값 %t", tc.from, tc.to, got, tc.want)
 			}
 		})
+	}
+}
+
+// 실패했을 때 되돌릴 문장을 고르는 규칙.
+//
+// 트랜잭션이 없는 DB(MySQL·Oracle)에서 이것이 유일한 안전장치다. 여기서 잘못 고르면
+// 되돌린다면서 남의 것을 지우게 되므로, 짐작이 섞이는 모든 경우에 손을 떼야 한다.
+func TestUndoPlanPicksAppliedInverses(t *testing.T) {
+	// 변경 3개짜리 계획. down은 up의 역순이다(BuildPlan이 그렇게 만든다).
+	plan := &schema.Plan{
+		Up: []schema.Statement{
+			{SQL: "CREATE TABLE a", Seq: 1},
+			{SQL: "CREATE TABLE b", Seq: 2},
+			{SQL: "CREATE TABLE c", Seq: 3},
+		},
+		Down: []schema.Statement{
+			{SQL: "DROP TABLE c", Seq: 3},
+			{SQL: "DROP TABLE b", Seq: 2},
+			{SQL: "DROP TABLE a", Seq: 1},
+		},
+	}
+	// 1·2번은 성공, 3번에서 실패했다.
+	steps := []dbx.ExecStep{
+		{Index: 0, SQL: "CREATE TABLE a"},
+		{Index: 1, SQL: "CREATE TABLE b"},
+		{Index: 2, SQL: "CREATE TABLE c", Error: "boom"},
+	}
+	got, skip := undoPlan(plan, steps, 2)
+	if skip != "" {
+		t.Fatalf("되돌리기를 건너뛰었습니다: %s", skip)
+	}
+	// 되돌리기끼리도 순서가 있다. 나중에 만든 것을 먼저 지운다.
+	want := []string{"DROP TABLE b", "DROP TABLE a"}
+	if len(got) != len(want) {
+		t.Fatalf("되돌릴 문장 = %v, 기대 %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("%d번째 = %q, 기대 %q", i, got[i], want[i])
+		}
+	}
+}
+
+// 한 변경이 문장 여러 개를 낳아도 짝이 맞아야 한다(SQLite의 테이블 재작성 같은 것).
+func TestUndoPlanHandlesMultiStatementChange(t *testing.T) {
+	plan := &schema.Plan{
+		Up: []schema.Statement{
+			{SQL: "CREATE TABLE a_new", Seq: 1},
+			{SQL: "INSERT INTO a_new SELECT * FROM a", Seq: 1},
+			{SQL: "CREATE TABLE b", Seq: 2},
+		},
+		Down: []schema.Statement{
+			{SQL: "DROP TABLE b", Seq: 2},
+			{SQL: "DROP TABLE a_new", Seq: 1},
+		},
+	}
+	steps := []dbx.ExecStep{
+		{Index: 0}, {Index: 1}, {Index: 2, Error: "boom"},
+	}
+	got, skip := undoPlan(plan, steps, 2)
+	if skip != "" {
+		t.Fatalf("건너뜀: %s", skip)
+	}
+	if len(got) != 1 || got[0] != "DROP TABLE a_new" {
+		t.Errorf("되돌릴 문장 = %v, 기대 [DROP TABLE a_new]", got)
+	}
+}
+
+// 이미 적용된 문장이 파괴적이면 손대지 않는다.
+//
+// 구조는 되살릴 수 있어도 데이터는 아니다. 자동으로 되돌리면 "복구됐다"고 보이는 빈
+// 컬럼이 남는데, 그것은 사람이 알고 골라야 하는 일이다.
+func TestUndoPlanRefusesAfterDestructive(t *testing.T) {
+	plan := &schema.Plan{
+		Up: []schema.Statement{
+			{SQL: "ALTER TABLE users DROP COLUMN memo", Seq: 1, Destructive: true,
+				Table: "users", Object: "memo"},
+			{SQL: "CREATE TABLE b", Seq: 2},
+		},
+		Down: []schema.Statement{
+			{SQL: "DROP TABLE b", Seq: 2},
+			{SQL: "ALTER TABLE users ADD COLUMN memo TEXT", Seq: 1},
+		},
+	}
+	steps := []dbx.ExecStep{{Index: 0}, {Index: 1, Error: "boom"}}
+	got, skip := undoPlan(plan, steps, 1)
+	if got != nil {
+		t.Errorf("파괴적 변경을 자동으로 되돌렸습니다: %v", got)
+	}
+	if !strings.Contains(skip, "users.memo") {
+		t.Errorf("까닭에 무엇이 남았는지가 없습니다: %q", skip)
+	}
+}
+
+// 되돌릴 SQL이 없는 변경이 섞여 있으면 손대지 않는다.
+// 반쪽만 되돌리면 상태가 더 헝클어진다.
+func TestUndoPlanRefusesWhenInverseMissing(t *testing.T) {
+	plan := &schema.Plan{
+		Up: []schema.Statement{
+			{SQL: "CREATE TABLE a", Seq: 1},
+			{SQL: "CREATE VIEW v AS SELECT 1", Seq: 2},
+			{SQL: "CREATE TABLE c", Seq: 3},
+		},
+		// 2번 변경의 되돌리기가 없다.
+		Down: []schema.Statement{
+			{SQL: "DROP TABLE c", Seq: 3},
+			{SQL: "DROP TABLE a", Seq: 1},
+		},
+	}
+	steps := []dbx.ExecStep{{Index: 0}, {Index: 1}, {Index: 2, Error: "boom"}}
+	if got, skip := undoPlan(plan, steps, 2); got != nil || skip == "" {
+		t.Errorf("되돌릴 SQL이 없는데 되돌렸습니다: %v (%q)", got, skip)
+	}
+}
+
+// Seq가 없는 예전 계획은 짝을 지을 수 없으므로 손대지 않는다.
+func TestUndoPlanRefusesLegacyPlan(t *testing.T) {
+	plan := &schema.Plan{
+		Up:   []schema.Statement{{SQL: "CREATE TABLE a"}, {SQL: "CREATE TABLE b"}},
+		Down: []schema.Statement{{SQL: "DROP TABLE b"}, {SQL: "DROP TABLE a"}},
+	}
+	steps := []dbx.ExecStep{{Index: 0}, {Index: 1, Error: "boom"}}
+	if got, skip := undoPlan(plan, steps, 1); got != nil || skip == "" {
+		t.Errorf("짝지을 수 없는 계획을 되돌렸습니다: %v (%q)", got, skip)
+	}
+}
+
+// BuildPlan은 up과 down에 같은 번호를 찍어야 한다. 이 끈이 끊기면 위의 모든 규칙이
+// 조용히 "되돌릴 수 없음"으로 떨어진다.
+func TestBuildPlanPairsUpAndDownBySeq(t *testing.T) {
+	before := &schema.Schema{Dialect: "mysql", Shape: schema.ShapeRelational, Tables: []*schema.Table{{
+		Name:    "keep",
+		Columns: []*schema.Column{{Name: "id", Type: schema.LogicalType{Base: schema.TypeInt}}},
+	}}}
+	after := &schema.Schema{Dialect: "mysql", Shape: schema.ShapeRelational, Tables: []*schema.Table{
+		before.Tables[0],
+		{
+			Name: "added",
+			Columns: []*schema.Column{
+				{Name: "id", Type: schema.LogicalType{Base: schema.TypeInt}},
+			},
+		},
+	}}
+	plan := schema.BuildPlan("mysql", schema.Diff(before, after))
+	if len(plan.Up) == 0 {
+		t.Fatalf("계획이 비었습니다")
+	}
+	seqs := map[int]bool{}
+	for _, up := range plan.Up {
+		if up.Seq == 0 {
+			t.Fatalf("up 문장에 번호가 없습니다: %q", up.SQL)
+		}
+		seqs[up.Seq] = true
+	}
+	for _, down := range plan.Down {
+		if down.Seq == 0 {
+			t.Fatalf("down 문장에 번호가 없습니다: %q", down.SQL)
+		}
+		if !seqs[down.Seq] {
+			t.Errorf("down 문장의 번호 %d 가 up 에 없습니다: %q", down.Seq, down.SQL)
+		}
 	}
 }
 

@@ -150,6 +150,11 @@ type ExecutionStep struct {
 	Error      string `json:"error,omitempty"`
 	// RowsAffected는 DDL에서는 대개 0이지만, 데이터 이동을 포함한 문장에서는 의미가 있다.
 	RowsAffected int64 `json:"rowsAffected,omitempty"`
+	// Undo는 이 문장이 "적용"이 아니라 "되돌리기"였음을 뜻한다.
+	//
+	// 실패 뒤 앞부분을 되돌린 문장이 같은 기록에 이어 붙기 때문에, 구분이 없으면
+	// 되돌린 것까지 적용된 것으로 읽힌다.
+	Undo bool `json:"undo,omitempty"`
 }
 
 // MigrationReview는 리뷰 한 건이다.
