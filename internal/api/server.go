@@ -14,6 +14,7 @@ import (
 	"github.com/gofiber/contrib/websocket"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/compress"
+	"github.com/gofiber/fiber/v2/middleware/etag"
 	"github.com/gofiber/fiber/v2/middleware/filesystem"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 
@@ -577,6 +578,26 @@ var assetExtensions = map[string]bool{
 	".json": true, ".webmanifest": true, ".txt": true, ".xml": true,
 }
 
+// codeExtensions는 "옛것과 새것이 섞이면 오작동하는" 자산이다.
+//
+// 모듈 하나만 옛것이어도 화면은 새것처럼 보이면서 다르게 움직인다. 그런 것은
+// 캐시에서 꺼내기 전에 반드시 서버에 물어야 한다.
+var codeExtensions = map[string]bool{
+	".js": true, ".mjs": true, ".css": true, ".html": true,
+	".map": true, ".json": true, ".webmanifest": true,
+}
+
+func isCodePath(path string) bool {
+	dot := strings.LastIndexByte(path, '.')
+	if dot < 0 {
+		return false
+	}
+	if slash := strings.LastIndexByte(path, '/'); slash > dot {
+		return false
+	}
+	return codeExtensions[strings.ToLower(path[dot:])]
+}
+
 func isAssetPath(path string) bool {
 	dot := strings.LastIndexByte(path, '.')
 	if dot < 0 {
@@ -609,11 +630,35 @@ func (s *Server) mountFrontend() {
 			return fsHandler(c)
 		}
 	} else {
+		// 코드(js·css·html)는 **캐시하되 반드시 되물어야** 한다.
+		//
+		// 예전에는 모든 자산에 max-age=3600 을 걸었다. 그런데 embed.FS 는 수정 시각이
+		// 0이라 Last-Modified 도 ETag 도 함께 나가지 않았고, 그래서 브라우저는 한
+		// 시간 동안 **되묻지 않았다**. 새 버전을 올리고 새로고침해도 옛 모듈이 그대로
+		// 그려진다는 뜻이다 — 셸(index.html)만 no-cache 로 두었지만 모듈 주소는
+		// 그대로여서 아무 소용이 없었다.
+		//
+		// 그 상태는 "새 기능이 보이는데 동작이 이상하다"로 나타난다. 고친 사람도 쓰는
+		// 사람도 무엇이 틀렸는지 알 수 없다 — 실제로 그런 신고를 받았다.
+		//
+		// no-cache 는 "쓰지 말라"가 아니라 "쓰기 전에 물어보라"다. 내용이 그대로면
+		// ETag 가 같아 304 한 줄로 끝나고, 값은 캐시에서 나온다.
+		//
+		// 글꼴·그림은 하루 캐시한다. 그것들은 바뀌어도 화면이 조금 다를 뿐, 코드처럼
+		// 옛것과 새것이 섞여 오작동하지 않는다.
+		tagged := etag.New()
+		s.app.Use("/", func(c *fiber.Ctx) error {
+			if isCodePath(c.Path()) {
+				c.Set(fiber.HeaderCacheControl, "no-cache")
+				return tagged(c)
+			}
+			c.Set(fiber.HeaderCacheControl, "public, max-age=86400")
+			return c.Next()
+		})
 		handler = filesystem.New(filesystem.Config{
 			Root:   http.FS(s.web),
 			Index:  "index.html",
 			Browse: false,
-			MaxAge: 3600,
 		})
 	}
 	s.app.Use("/", handler)
