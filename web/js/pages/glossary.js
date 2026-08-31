@@ -173,12 +173,18 @@ function openTermDialog(existing, reload, cats = []) {
   openModal({
     title: existing ? '용어 고치기' : '용어 추가',
     width: 520,
+    // 분류를 맨 위에 둔다. 어느 덩어리에 넣을지를 먼저 정하면 그 안에서 쓰이던
+    // 말투가 눈에 들어오고, 용어와 물리명이 그 결을 따라간다. 아래에 두면 이름을
+    // 다 적은 뒤에 묻게 되는데, 그때는 이미 다 적었으니 그냥 비우고 저장한다.
+    //
+    // 첫 칸이지만 커서는 용어에 둔다(autofocus) — 분류는 비워도 되는 칸이고,
+    // 반드시 적어야 하는 것은 용어다.
     body: () => [
+      cat.node,
       field('용어', termInput, '사람이 쓰는 말입니다. 논리명에 그대로 적습니다.'),
       field('물리명', physicalInput, 'DB에 적을 이름입니다. 테이블·컬럼 이름에 이 말을 씁니다.'),
       field('설명', noteInput,
         '뜻이 겹치는 말이 있을 때 그 자리를 가릅니다("주문 일시는 결제 완료 시각이 아니다").'),
-      cat.node,
     ],
     footer: (close) => [
       h('button.btn', { type: 'button', onclick: close }, '취소'),
