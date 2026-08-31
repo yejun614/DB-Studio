@@ -609,6 +609,14 @@ func (s *Server) handleMigrationStatus(c *fiber.Ctx) error {
 	// 만들 수 있으면 실행 기록 없는 적용이 생긴다.
 	switch next {
 	case store.MigrationInReview, store.MigrationDraft, store.MigrationClosed:
+	case store.MigrationApplied:
+		// 적용됨으로 가는 길은 실행뿐이다(실행 기록 없는 적용을 만들 수 없어야 한다).
+		// 여기서 여는 것은 **적용된 상태에서 닫은 계획을 도로 여는 경우** 하나뿐이고,
+		// 그 사실은 closed_from이 증언한다. store가 한 번 더 확인한다.
+		if mig.Status != store.MigrationClosed || mig.ClosedFrom != store.MigrationApplied {
+			return fail(c, fiber.StatusBadRequest, "bad_request",
+				"적용됨으로는 적용된 뒤 닫은 계획을 다시 열 때만 바꿀 수 있습니다")
+		}
 	case store.MigrationApproved:
 		// 승인됨으로 가는 길은 원래 리뷰뿐이다. 여기서 열어 주면 리뷰 중인 계획을
 		// 승인 없이 승인됨으로 밀어 올릴 수 있으므로, **롤백된 계획을 다시 실행

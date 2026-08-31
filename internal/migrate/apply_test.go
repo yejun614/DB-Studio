@@ -1127,8 +1127,10 @@ func TestStatusTransitions(t *testing.T) {
 		{store.MigrationRolledBack, store.MigrationApproved, true},
 		// 되돌린 뒤 "하지 않기로 했다"고 접을 수도 있어야 한다.
 		{store.MigrationRolledBack, store.MigrationClosed, true},
-		// 적용된 계획은 여전히 닫을 수 없다 — 지금 DB에 들어 있는 변경이다.
-		{store.MigrationApplied, store.MigrationClosed, false},
+		// 적용된 계획도 닫을 수 있다. 목록에 영원히 남으면 "지금 볼 것"과 "끝난 것"이
+		// 섞이기 때문이다. 다시 열면 적용됨으로 돌아간다(store가 닫기 전 상태를 본다).
+		{store.MigrationApplied, store.MigrationClosed, true},
+		{store.MigrationClosed, store.MigrationApplied, true},
 		{store.MigrationFailed, store.MigrationDraft, true},
 		{store.MigrationFailed, store.MigrationApplied, false},
 	}

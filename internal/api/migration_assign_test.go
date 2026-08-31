@@ -939,6 +939,63 @@ func TestRerunAfterRollbackNeedsApprovalsStillStanding(t *testing.T) {
 	}
 }
 
+// 적용된 계획을 닫았다가 다시 열면 적용됨으로 돌아온다.
+//
+// 초안으로 보내면 DB에 들어가 있는 변경이 "아직 실행하지 않은 초안"으로 보이고,
+// 롤백 버튼도 사라져 되돌릴 방법이 화면에서 없어진다.
+func TestCloseAndReopenAppliedMigration(t *testing.T) {
+	e, _, mig := assignEnv(t)
+	ctx := context.Background()
+	alice := loginAs(t, e, "alice")
+
+	// 실행은 실제 DB가 필요하므로 상태만 옮겨 흉내 낸다.
+	for _, st := range []string{store.MigrationInReview, store.MigrationApproved, store.MigrationApplied} {
+		if err := e.st.SetMigrationStatus(ctx, mig.ID, st); err != nil {
+			t.Fatalf("%s: %v", st, err)
+		}
+	}
+	if code, body := alice.do("POST", "/api/v1/migrations/"+mig.ID+"/status",
+		map[string]any{"status": "closed"}); code != 200 {
+		t.Fatalf("적용된 계획 닫기 = %d: %v", code, body)
+	}
+	if code, body := alice.do("POST", "/api/v1/migrations/"+mig.ID+"/status",
+		map[string]any{"status": "applied"}); code != 200 {
+		t.Fatalf("다시 열기 = %d: %v", code, body)
+	}
+	got, err := e.st.GetMigration(ctx, mig.ID, false)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Status != store.MigrationApplied {
+		t.Errorf("다시 연 뒤 상태 = %q, 기대 applied", got.Status)
+	}
+}
+
+// 적용된 적이 없는 계획은 적용됨으로 열 수 없다.
+//
+// 여기서 막지 않으면 상태 엔드포인트가 "실행 기록 없는 적용"을 만드는 통로가 된다.
+func TestReopenAsAppliedNeedsPriorApply(t *testing.T) {
+	e, _, mig := assignEnv(t)
+	ctx := context.Background()
+	alice := loginAs(t, e, "alice")
+
+	if code, body := alice.do("POST", "/api/v1/migrations/"+mig.ID+"/status",
+		map[string]any{"status": "closed"}); code != 200 {
+		t.Fatalf("닫기 = %d: %v", code, body)
+	}
+	if code, _ := alice.do("POST", "/api/v1/migrations/"+mig.ID+"/status",
+		map[string]any{"status": "applied"}); code != 400 {
+		t.Errorf("초안에서 닫은 계획을 적용됨으로 = %d, 400이어야 합니다", code)
+	}
+	got, err := e.st.GetMigration(ctx, mig.ID, false)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Status != store.MigrationClosed {
+		t.Errorf("거절됐는데 상태가 %q 로 바뀌었습니다", got.Status)
+	}
+}
+
 // aliceID는 시험 환경의 슈퍼 어드민 id다.
 func aliceID(t *testing.T, e *testEnv) string {
 	t.Helper()
