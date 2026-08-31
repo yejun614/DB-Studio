@@ -247,6 +247,19 @@ export function closeFloatPanel(id) {
   open.get(id)?.close();
 }
 
+// closeAllFloatPanels는 떠 있는 창을 모두 닫는다.
+//
+// 이 창들은 document.body 에 붙어 있어서 앱 셸(#app)을 갈아 끼워도 그대로 남는다.
+// 로그아웃 화면에 어시스턴트가 떠 있던 것이 그 때문이다 — 로그인 화면 위에 남의
+// 대화가 그대로 보이고, 그 안의 요청은 401로 죽는다.
+//
+// 세션이 끊기는 길은 여럿이다(로그아웃·만료·비밀번호 강제 변경·2단계 인증 등록).
+// 그 모두가 셸을 내리는 한 곳을 지나므로, 닫는 일도 그 한 곳에서 한다.
+export function closeAllFloatPanels() {
+  // close()가 registry를 지우므로 복사해 돌린다.
+  for (const handle of [...open.values()]) handle.close();
+}
+
 // panelModal은 **패널 안에서만** 덮는 작은 대화상자다.
 //
 // 화면 전체를 덮는 모달(core/ui.js의 openModal)을 쓰지 않는 이유: 이 패널은

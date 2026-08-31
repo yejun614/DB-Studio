@@ -12,6 +12,7 @@ import {
   loadProjects, projects, currentProjectID, setCurrentProject, onProjectChange,
 } from './core/project.js';
 import { bindPalette, openPalette } from './core/palette.js';
+import { closeAllFloatPanels } from './core/floatpanel.js';
 import { renderLogin, renderPasswordChange, renderChangePasswordPage } from './pages/login.js';
 import { renderDashboard } from './pages/dashboard.js';
 import { renderUsers } from './pages/users.js';
@@ -478,15 +479,24 @@ async function logout() {
 
 // ---------- 화면 전환 ----------
 
-function showLogin() {
+// leaveShell은 앱 셸을 내리고 인증 화면으로 바꿀 준비를 한다.
+//
+// 세 화면(로그인·비밀번호 강제 변경·2단계 인증 등록)이 같은 자리를 쓴다. 셋 다
+// **셸 밖**이므로, 셸에 매이지 않은 것들을 여기서 함께 치운다 — 떠 있는 창은
+// document.body 에 붙어 있어서 #app 을 갈아 끼워도 살아남는다.
+function leaveShell() {
   appRoot.classList.remove('app-loading');
   router.setOutlet(null);
+  closeAllFloatPanels();
+}
+
+function showLogin() {
+  leaveShell();
   renderLogin(appRoot, { onSuccess: enterApp });
 }
 
 function showPasswordChange() {
-  appRoot.classList.remove('app-loading');
-  router.setOutlet(null);
+  leaveShell();
   renderPasswordChange(appRoot, {
     onSuccess: enterApp,
     // 이 화면은 앱 전체를 가리고 서 있다. 나갈 문이 없으면 임시 비밀번호를 받아 든
@@ -500,8 +510,7 @@ function showPasswordChange() {
 // showTOTPSetup은 2단계 인증 의무화 상태에서 등록을 마칠 때까지 다른 화면을 막는다.
 // 비밀번호 강제 변경과 같은 자리, 같은 처리다.
 function showTOTPSetup() {
-  appRoot.classList.remove('app-loading');
-  router.setOutlet(null);
+  leaveShell();
   renderTOTPSetupPage(appRoot, {
     onSuccess: enterApp,
     username: state.user?.username,
