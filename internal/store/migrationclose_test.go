@@ -3,10 +3,13 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 
 	"dbstudio/internal/crypto"
 	"dbstudio/internal/model"
@@ -41,18 +44,18 @@ func TestMigrationCloseMigrationIsLossless(t *testing.T) {
 	owner := mkUser(t, ctx, st, "maker")
 	srv := mkServer(t, ctx, st, "pg")
 	conn := addDB(t, ctx, st, srv, "appdb")
-	mig := mkMigrationFor(t, ctx, st, conn.ID, owner.ID, "주문 표 추가")
+	migID := mkMigrationRow(t, ctx, st, conn.ID, owner.ID, "주문 표 추가")
 
 	if err := st.AddMigrationReview(ctx, &MigrationReview{
-		MigrationID: mig.ID, ReviewerID: owner.ID, ReviewerName: "maker",
+		MigrationID: migID, ReviewerID: owner.ID, ReviewerName: "maker",
 		Decision: ReviewApproved, Comment: "좋습니다",
 	}); err != nil {
 		t.Fatalf("리뷰: %v", err)
 	}
-	if err := st.SetMigrationAssignment(ctx, mig.ID, "", []string{owner.ID}, owner.ID); err != nil {
+	if err := st.SetMigrationAssignment(ctx, migID, "", []string{owner.ID}, owner.ID); err != nil {
 		t.Fatalf("리뷰어 지정: %v", err)
 	}
-	if err := st.SetMigrationStatus(ctx, mig.ID, MigrationInReview); err != nil {
+	if err := st.SetMigrationStatus(ctx, migID, MigrationInReview); err != nil {
 		t.Fatalf("리뷰 중: %v", err)
 	}
 	// 0030 이전에 만들어진 행처럼 담당자를 비운다. 0031의 백필이 이것을 채워야 한다.
@@ -64,7 +67,7 @@ func TestMigrationCloseMigrationIsLossless(t *testing.T) {
 		t.Fatalf("migrate rest: %v", err)
 	}
 
-	got, err := st.GetMigration(ctx, mig.ID, true)
+	got, err := st.GetMigration(ctx, migID, true)
 	if err != nil {
 		t.Fatalf("get after migrate: %v", err)
 	}
@@ -87,20 +90,20 @@ func TestMigrationCloseMigrationIsLossless(t *testing.T) {
 	}
 
 	// 새 상태를 실제로 저장할 수 있어야 한다(CHECK 제약이 바뀌었는지).
-	if err := st.SetMigrationStatus(ctx, mig.ID, MigrationClosed); err != nil {
+	if err := st.SetMigrationStatus(ctx, migID, MigrationClosed); err != nil {
 		t.Fatalf("닫기: %v", err)
 	}
-	if got, err = st.GetMigration(ctx, mig.ID, false); err != nil {
+	if got, err = st.GetMigration(ctx, migID, false); err != nil {
 		t.Fatalf("get: %v", err)
 	} else if got.Status != MigrationClosed {
 		t.Errorf("상태 = %q, 기대 closed", got.Status)
 	}
 
 	// 닫은 계획은 다시 열 수 있고, 그때 승인은 무효가 된다(지정은 남는다).
-	if err := st.SetMigrationStatus(ctx, mig.ID, MigrationDraft); err != nil {
+	if err := st.SetMigrationStatus(ctx, migID, MigrationDraft); err != nil {
 		t.Fatalf("다시 열기: %v", err)
 	}
-	got, err = st.GetMigration(ctx, mig.ID, false)
+	got, err = st.GetMigration(ctx, migID, false)
 	if err != nil {
 		t.Fatalf("get 2: %v", err)
 	}
@@ -115,8 +118,12 @@ func TestMigrationCloseMigrationIsLossless(t *testing.T) {
 	}
 }
 
-// 실행된 마이그레이션은 닫을 수 없다 — 이력이기 때문이다.
-func TestAppliedMigrationCannotBeClosed(t *testing.T) {
+// 적용된 계획도 닫을 수 있고, 다시 열면 적용됨으로 돌아온다.
+//
+// 목록에 영원히 남으면 "지금 볼 것"과 "끝난 것"이 섞인다. 그렇다고 다시 열 때
+// 초안으로 보내면, DB에 들어가 있는 변경이 "아직 실행하지 않은 초안"으로 보이고
+// 롤백 버튼도 사라진다 — 되돌릴 방법이 화면에서 없어지는 것이다.
+func TestAppliedMigrationClosesAndReopensAsApplied(t *testing.T) {
 	ctx, st := assignFixture(t)
 	mig := mkMigration(t, ctx, st)
 
@@ -125,10 +132,50 @@ func TestAppliedMigrationCannotBeClosed(t *testing.T) {
 			t.Fatalf("%s: %v", next, err)
 		}
 	}
-	err := st.SetMigrationStatus(ctx, mig.ID, MigrationClosed)
+	if err := st.SetMigrationStatus(ctx, mig.ID, MigrationClosed); err != nil {
+		t.Fatalf("적용된 계획 닫기: %v", err)
+	}
+	closed, err := st.GetMigration(ctx, mig.ID, false)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if closed.ClosedFrom != MigrationApplied {
+		t.Errorf("닫기 전 상태 = %q, 기대 applied", closed.ClosedFrom)
+	}
+
+	if err := st.SetMigrationStatus(ctx, mig.ID, MigrationApplied); err != nil {
+		t.Fatalf("다시 열기: %v", err)
+	}
+	got, err := st.GetMigration(ctx, mig.ID, false)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Status != MigrationApplied {
+		t.Errorf("다시 연 뒤 상태 = %q, 기대 applied", got.Status)
+	}
+	// 다시 열었으니 "닫기 전 상태"는 지워져야 한다. 남아 있으면 다음에 초안에서
+	// 닫았을 때도 적용됨으로 돌아갈 수 있게 된다.
+	if got.ClosedFrom != "" {
+		t.Errorf("다시 연 뒤에도 닫기 전 상태가 남았습니다: %q", got.ClosedFrom)
+	}
+}
+
+// 초안에서 닫은 계획은 적용됨으로 열 수 없다 — 실행 기록 없는 적용이 되기 때문이다.
+func TestClosedDraftCannotReopenAsApplied(t *testing.T) {
+	ctx, st := assignFixture(t)
+	mig := mkMigration(t, ctx, st)
+
+	if err := st.SetMigrationStatus(ctx, mig.ID, MigrationClosed); err != nil {
+		t.Fatalf("닫기: %v", err)
+	}
+	err := st.SetMigrationStatus(ctx, mig.ID, MigrationApplied)
 	var ite *InvalidTransitionError
 	if !errors.As(err, &ite) {
-		t.Fatalf("적용된 마이그레이션을 닫을 수 있었다: %v", err)
+		t.Fatalf("초안에서 닫은 계획을 적용됨으로 열 수 있었다: %v", err)
+	}
+	// 초안으로는 열린다.
+	if err := st.SetMigrationStatus(ctx, mig.ID, MigrationDraft); err != nil {
+		t.Fatalf("초안으로 열기: %v", err)
 	}
 }
 
@@ -143,6 +190,39 @@ func TestNewMigrationAssigneeIsCreator(t *testing.T) {
 	if mig.AssigneeID != owner.ID || mig.AssigneeName != "owner" {
 		t.Errorf("담당자 = %q/%q, 기대 %q/owner", mig.AssigneeID, mig.AssigneeName, owner.ID)
 	}
+}
+
+// mkMigrationRow는 옛 스키마 위에 계획 행 하나를 넣는다(다시 읽지 않는다).
+//
+// CreateMigration은 넣은 뒤 GetMigration으로 되읽는데, 그 SELECT는 언제나 **지금**
+// 스키마를 가리킨다. 옛 상태(30번까지만 적용)를 만들어 놓고 시험하는 이 파일에서는
+// 그것을 쓸 수 없다 — 나중에 컬럼이 하나 늘 때마다 이 시험이 엉뚱하게 깨진다.
+func mkMigrationRow(t *testing.T, ctx context.Context, st *Store, connID, createdBy, title string) string {
+	t.Helper()
+	before := &schema.Schema{Dialect: "postgres", Shape: schema.ShapeRelational}
+	after := &schema.Schema{Dialect: "postgres", Shape: schema.ShapeRelational, Tables: []*schema.Table{{
+		Name:    "orders",
+		Columns: []*schema.Column{{Name: "id", Type: schema.LogicalType{Base: schema.TypeInt}}},
+	}}}
+	diff := schema.Diff(before, after)
+	plan := schema.BuildPlan(string(model.KindPostgres), diff)
+	planJSON, _ := json.Marshal(plan)
+	diffJSON, _ := json.Marshal(diff)
+	targetJSON, _ := json.Marshal(after)
+
+	id := uuid.NewString()
+	now := nowString()
+	if _, err := st.db.ExecContext(ctx, `INSERT INTO migrations
+		(id, connection_id, title, base_fingerprint, target_schema_json,
+		 up_sql, down_sql, plan_json, diff_json, destructive_count, irreversible,
+		 status, created_by, assignee_id, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?)`,
+		id, connID, title, before.Fingerprint(), string(targetJSON),
+		plan.UpSQL(), plan.DownSQL(), string(planJSON), string(diffJSON),
+		diff.DestructiveCount, MigrationDraft, createdBy, createdBy, now, now); err != nil {
+		t.Fatalf("insert migration: %v", err)
+	}
+	return id
 }
 
 func mkMigrationFor(t *testing.T, ctx context.Context, st *Store, connID, createdBy, title string) *Migration {

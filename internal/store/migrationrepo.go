@@ -59,12 +59,22 @@ var allowedTransitions = map[string][]string{
 	// 실패한 마이그레이션은 부분 적용 상태일 수 있다. 사람이 상태를 확인한 뒤
 	// 다시 계획을 세우도록 draft로만 돌린다. 닫을 수는 있다 — 부분 적용을 손으로
 	// 정리하고 이 계획은 더 쓰지 않기로 하는 경우가 있다.
-	MigrationFailed:  {MigrationDraft, MigrationClosed},
-	MigrationApplied: {MigrationRolledBack},
+	MigrationFailed: {MigrationDraft, MigrationClosed},
+	// 적용된 계획도 닫을 수 있다. 목록에 영원히 남아 있으면 "지금 볼 것"과 "끝난 것"이
+	// 섞여, 목록은 훑을수록 무거워진다.
+	//
+	// 닫아도 사실이 사라지지는 않는다. 닫기 전 상태를 적어 두었다가 다시 열 때 그
+	// 자리(적용됨)로 돌려보내므로, 롤백할 길도 그대로 남는다(SetMigrationStatus).
+	MigrationApplied: {MigrationRolledBack, MigrationClosed},
 	// 닫은 계획은 다시 열 수 있다. 초안으로 돌아가는 이유: 닫혀 있는 동안 대상
 	// DB가 바뀌었을 수 있고, 그때의 승인을 그대로 인정하면 지금 구조를 아무도
 	// 보지 않은 채 실행할 수 있다(draft 전이가 리뷰 기록을 지운다).
-	MigrationClosed: {MigrationDraft},
+	//
+	// 적용됨으로도 돌아갈 수 있다 — 다만 **적용된 상태에서 닫은 계획만** 그렇다.
+	// 그 검사는 표가 아니라 SetMigrationStatus가 한다(closed_from을 봐야 한다).
+	// 그러지 않으면 초안에서 닫은 계획을 "적용됨"으로 만들 수 있고, 그것은 실행
+	// 기록 없는 적용이다.
+	MigrationClosed: {MigrationDraft, MigrationApplied},
 	// 롤백된 계획은 **다시 실행할 수 있다**(승인됨으로 되돌린다).
 	//
 	// 롤백은 "이 변경을 물린다"이지 "이 계획을 버린다"가 아니다. 실행 중 문제가
@@ -120,7 +130,10 @@ type Migration struct {
 	DestructiveCount int                `json:"destructiveCount"`
 	Irreversible     []string           `json:"irreversible"`
 
-	Status            string          `json:"status"`
+	Status string `json:"status"`
+	// ClosedFrom은 닫기 전의 상태다. 다시 열 때 어디로 돌아갈지가 여기에 있다.
+	// 빈 값은 "닫힌 적이 없거나, 이 항목이 생기기 전에 닫혔다"는 뜻이다.
+	ClosedFrom        string          `json:"closedFrom,omitempty"`
 	AppliedStatements int             `json:"appliedStatements"`
 	ExecutionLog      []ExecutionStep `json:"executionLog"`
 	Error             string          `json:"error,omitempty"`
@@ -269,7 +282,7 @@ const migrationSelect = `SELECT
 	m.from_version, m.to_version, fv.version_no, tv.version_no,
 	m.rollback_to_version, rv.version_no,
 	m.base_fingerprint, m.up_sql, m.down_sql, m.plan_json, m.diff_json, m.target_schema_json,
-	m.destructive_count, m.irreversible, m.status, m.applied_statements, m.execution_log,
+	m.destructive_count, m.irreversible, m.status, m.closed_from, m.applied_statements, m.execution_log,
 	m.error, COALESCE(m.created_by, ''), m.created_at, m.updated_at,
 	m.applied_at, COALESCE(m.applied_by, ''), m.rolled_back_at,
 	COALESCE(m.assignee_id, ''), COALESCE(au.display_name, au.username, '')
@@ -344,7 +357,7 @@ func scanMigration(row interface{ Scan(...any) error }, withBody bool) (*Migrati
 	if err := row.Scan(&m.ID, &m.ConnectionID, &m.DocID, &m.Title,
 		&fromVersion, &toVersion, &fromNo, &toNo, &rollbackTo, &rollbackNo,
 		&m.BaseFinger, &m.UpSQL, &m.DownSQL, &planJSON, &diffJSON, &targetJSON,
-		&m.DestructiveCount, &irrJSON, &m.Status, &m.AppliedStatements, &execJSON,
+		&m.DestructiveCount, &irrJSON, &m.Status, &m.ClosedFrom, &m.AppliedStatements, &execJSON,
 		&m.Error, &m.CreatedBy, &createdAt, &updatedAt,
 		&appliedAt, &m.AppliedBy, &rolledBackAt,
 		&m.AssigneeID, &m.AssigneeName); err != nil {
@@ -430,10 +443,37 @@ func (s *Store) SetMigrationStatus(ctx context.Context, id, next string) error {
 	if !CanTransition(current, next) {
 		return &InvalidTransitionError{From: current, To: next}
 	}
+	// 닫힌 계획을 적용됨으로 되돌리는 것은 "닫기 전에 적용돼 있었다"는 사실이
+	// 있을 때만이다. 그 사실이 없으면 실행 기록 없는 적용이 된다.
+	if current == MigrationClosed && next == MigrationApplied {
+		var from string
+		if err := tx.QueryRowContext(ctx,
+			`SELECT closed_from FROM migrations WHERE id = ?`, id).Scan(&from); err != nil {
+			return fmt.Errorf("read closed_from: %w", err)
+		}
+		if from != MigrationApplied {
+			return &InvalidTransitionError{From: current, To: next}
+		}
+	}
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE migrations SET status = ?, updated_at = ? WHERE id = ?`,
 		next, nowString(), id); err != nil {
 		return fmt.Errorf("update status: %w", err)
+	}
+	// 닫을 때는 어디서 닫았는지를 적어 두고, 열 때는 지운다. 다시 열 때 그 자리로
+	// 돌려보내야 "적용된 계획"이 "실행하지 않은 초안"으로 둔갑하지 않는다.
+	//
+	// 닫기와 무관한 전이에서는 이 컬럼을 건드리지 않는다. 늘 쓰면 이 컬럼이 없던
+	// 시절의 DB(옛 마이그레이션을 시험하는 자리)에서 상태 변경 자체가 깨진다.
+	if next == MigrationClosed || current == MigrationClosed {
+		closedFrom := ""
+		if next == MigrationClosed {
+			closedFrom = current
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE migrations SET closed_from = ? WHERE id = ?`, closedFrom, id); err != nil {
+			return fmt.Errorf("update closed_from: %w", err)
+		}
 	}
 	// 초안으로 되돌리면 그동안의 리뷰는 더 이상 유효하지 않다.
 	// 승인을 남겨두면 계획을 바꾼 뒤에도 승인된 것으로 보인다.
