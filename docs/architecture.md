@@ -11,11 +11,14 @@ internal/
   config/            플래그·환경변수 설정
   crypto/            argon2id 비밀번호 해싱, AES-GCM 시크릿 봉인, 랜덤 생성
   store/             메타 SQLite: 마이그레이션 러너 + 리포지토리
+                     projects.go = 자원의 울타리(커넥션·ERD·용어가 여기 속한다),
                      servers.go = DB 서버(접속 정보·자격증명), connections.go = 그 아래 DB
     migrations/      embed된 스키마 SQL
   model/             엔티티와 열거형 (역할, 접근 모드, 능력 등급, DB 종류)
                      perm.go = 데이터 능력·전역 권한 (등급과 독립적인 두 번째 축)
   auth/              세션 서비스 + RBAC 판정(Authorizer.Can / CanCap)
+                     rbac.go의 resolveWithPolicy가 유일한 관문이다: 프로젝트 참여 →
+                     접근 범위 → 등급·능력 순으로 좁힌다(HTTP·WS·AI 툴이 모두 통과)
                      totp.go = 2단계 인증(로그인 2단계·등록·복구 코드·시계 재동기화)
   totp/              RFC 4226/6238 구현과 QR 인코더 (외부 의존성 없음)
   clock/             앱이 스스로 관리하는 시계. 단조 시계에 고정하고 인증 앱에게서 보정값을 배운다
