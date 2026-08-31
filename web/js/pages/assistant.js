@@ -238,9 +238,17 @@ function buildLayout(data, conns, canManageKeys, activeId, nav, opts = {}) {
       ),
       list,
     h('div.ai-sidebar-foot', {},
-      h('button.btn.btn-small.btn-block', {
-        type: 'button', onclick: () => openProviderDialog(canManageKeys, nav),
-      }, icon('key'), 'AI 키 관리'),
+      // 키 관리는 커넥션 관리자만 보인다. 그 창에서 할 수 있는 일(추가·수정·삭제·
+      // 연결 확인)이 전부 그 권한을 요구해서, 없는 사람에게는 열어 봐야 읽을 것만
+      // 남는다 — 게다가 그 읽을 것은 남의 API 키 설정(주소·키 유무)이다.
+      //
+      // 툴 목록은 그대로 둔다. 그것은 "이 어시스턴트가 무엇을 할 수 있는가"이고,
+      // 쓰는 사람 모두가 알아야 하는 것이다.
+      canManageKeys
+        ? h('button.btn.btn-small.btn-block', {
+          type: 'button', onclick: () => openProviderDialog(canManageKeys, nav),
+        }, icon('key'), 'AI 키 관리')
+        : null,
       h('button.btn.btn-small.btn-block', {
         type: 'button', onclick: () => openToolsDialog(data),
       }, icon('list'), `툴 ${data.tools.length}개`),
