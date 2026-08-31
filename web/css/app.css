@@ -2457,6 +2457,10 @@ tr.is-destructive td { background: hsl(var(--h-danger) / 0.08); }
 
 /* ---------- 용어 사전 ---------- */
 
+/* 찾기 칸과 단추를 벌리고, 단추끼리도 붙지 않게 한다. 붙어 있으면 두 단추가 한
+   덩어리로 보여서 어디를 누르는지 손이 먼저 헷갈린다. */
+.filter-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+
 .table.glossary td { vertical-align: top; }
 /* 물리명은 눌러서 복사한다. 사전에서 얻어 가는 것이 결국 이 한 낱말이라,
    눈으로 읽고 손으로 옮겨 적게 하면 그 자리에서 오타가 난다. */
