@@ -417,6 +417,15 @@ func (s *Server) routes() {
 	conns.Get("/:id/versions/:versionId/rollback", s.handleVersionRollbackPreview)
 	conns.Post("/:id/versions/:versionId/rollback", s.handleVersionRollback)
 
+	// 용어 사전. 읽기는 누구나, 고치기는 커넥션 관리자만이다 — 팀의 약속이라
+	// 아무나 바꾸면 약속이 아니게 되지만, 아무나 볼 수 없으면 지킬 수도 없다.
+	glossary := authed.Group("/glossary")
+	glossary.Get("/", s.handleListGlossary)
+	glossary.Post("/", s.requireConnManager, s.handleCreateGlossaryTerm)
+	glossary.Post("/bulk", s.requireConnManager, s.handleBulkGlossary)
+	glossary.Put("/:termId", s.requireConnManager, s.handleUpdateGlossaryTerm)
+	glossary.Delete("/:termId", s.requireConnManager, s.handleDeleteGlossaryTerm)
+
 	// 마이그레이션: 여러 커넥션에 걸친 목록이 필요하므로 별도 그룹이다.
 	migs := authed.Group("/migrations")
 	migs.Get("/", s.handleListMigrations)
