@@ -439,13 +439,22 @@ func applyTableDuplicate(doc *Document, op *Op) error {
 	}
 	next := &Box{X: x, Y: y}
 	if box != nil {
-		// 표시 정보(색·아이콘)는 함께 베낀다. 사본이 원본과 나란히 있을 때
+		// 표시 정보(색·아이콘·논리명)는 함께 베낀다. 사본이 원본과 나란히 있을 때
 		// 같은 묶음으로 보이는 편이 맞다.
 		next.Collapsed, next.Color, next.Icon = box.Collapsed, box.Color, box.Icon
+		// 테이블 논리명은 베끼지 않는다. 물리명이 users_copy 가 된 사본에 "회원"이
+		// 그대로 붙어 있으면 화면에 같은 이름이 둘 생긴다 — 사본을 만든 사람이
+		// 무엇을 만들었는지 알 수 없게 된다. 컬럼 논리명은 그대로 쓸모가 있다.
 		if len(box.ColumnIcons) > 0 {
 			next.ColumnIcons = make(map[string]string, len(box.ColumnIcons))
 			for k, v := range box.ColumnIcons {
 				next.ColumnIcons[k] = v
+			}
+		}
+		if len(box.ColumnLogical) > 0 {
+			next.ColumnLogical = make(map[string]string, len(box.ColumnLogical))
+			for k, v := range box.ColumnLogical {
+				next.ColumnLogical[k] = v
 			}
 		}
 	}
@@ -645,6 +654,10 @@ type tableMovePayload struct {
 	Icon *string `json:"icon,omitempty"`
 	// ColumnIcons는 컬럼 이름 → 아이콘의 **부분** 지도다. 보낸 것만 바뀐다.
 	ColumnIcons map[string]string `json:"columnIcons,omitempty"`
+	// Logical은 테이블 논리명이다. 아이콘과 같은 이유로 여기에 함께 온다.
+	Logical *string `json:"logical,omitempty"`
+	// ColumnLogical은 컬럼 이름 → 논리명의 **부분** 지도다. 보낸 것만 바뀐다.
+	ColumnLogical map[string]string `json:"columnLogical,omitempty"`
 }
 
 func applyTableMove(doc *Document, op *Op) error {
@@ -688,6 +701,25 @@ func applyTableMove(doc *Document, op *Op) error {
 			box.ColumnIcons = map[string]string{}
 		}
 		box.ColumnIcons[key] = ic
+	}
+	if p.Logical != nil {
+		box.Logical = strings.TrimSpace(*p.Logical)
+	}
+	// 컬럼 논리명도 부분 갱신이다(아이콘과 같은 이유). 빈 값은 지우는 것이다.
+	for name, label := range p.ColumnLogical {
+		key := strings.ToLower(strings.TrimSpace(name))
+		if key == "" {
+			continue
+		}
+		label = strings.TrimSpace(label)
+		if label == "" {
+			delete(box.ColumnLogical, key)
+			continue
+		}
+		if box.ColumnLogical == nil {
+			box.ColumnLogical = map[string]string{}
+		}
+		box.ColumnLogical[key] = label
 	}
 	return nil
 }
@@ -939,12 +971,14 @@ func applyColumnUpdate(doc *Document, op *Op) error {
 	return nil
 }
 
-// renameColumnIcon은 컬럼 아이콘을 새 이름으로 옮긴다.
+// renameColumnIcon은 컬럼의 표시 정보(아이콘·논리명)를 새 이름으로 옮긴다.
 //
-// 레이아웃은 이름을 열쇠로 쓰므로 이름이 바뀌면 연결이 끊긴다. 아이콘이 사라지는
-// 것은 조용한 손실이라 — 아무도 지우지 않았는데 없어진다 — 여기서 따라가게 한다.
+// 레이아웃은 이름을 열쇠로 쓰므로 이름이 바뀌면 연결이 끊긴다. 아이콘이나 논리명이
+// 사라지는 것은 조용한 손실이라 — 아무도 지우지 않았는데 없어진다 — 여기서 따라가게
+// 한다. 물리명을 고치는 일은 흔하고(오타, 규칙 통일), 그때마다 논리명을 다시 적게
+// 하면 아무도 논리명을 적지 않게 된다.
 func renameColumnIcon(box *Box, oldName, newName string) {
-	if box == nil || len(box.ColumnIcons) == 0 {
+	if box == nil {
 		return
 	}
 	from, to := strings.ToLower(oldName), strings.ToLower(newName)
@@ -954,6 +988,10 @@ func renameColumnIcon(box *Box, oldName, newName string) {
 	if ic, ok := box.ColumnIcons[from]; ok {
 		delete(box.ColumnIcons, from)
 		box.ColumnIcons[to] = ic
+	}
+	if label, ok := box.ColumnLogical[from]; ok {
+		delete(box.ColumnLogical, from)
+		box.ColumnLogical[to] = label
 	}
 }
 

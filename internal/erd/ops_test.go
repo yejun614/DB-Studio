@@ -1042,3 +1042,86 @@ func TestTableIconPatch(t *testing.T) {
 		t.Errorf("아이콘이 지워지지 않았습니다: %q", doc.Layout["users"].Icon)
 	}
 }
+
+// 논리명은 레이아웃에 담기고, 구조 지문을 건드리지 않는다.
+//
+// 지문에 들어가면 이름을 한국어로 적는 순간 대상 DB와 다르다고(드리프트) 잡힌다.
+// 논리명은 DB에 만들어지는 무엇이 아니라 설계용 이름이므로, 그것이 구조를 바꾼
+// 것으로 읽혀서는 안 된다.
+func TestLogicalNamesStayOutOfFingerprint(t *testing.T) {
+	doc := newDoc(t)
+	apply(t, doc, OpTableAdd, `{"name":"users","withId":true}`)
+	before := doc.Schema.Fingerprint()
+
+	apply(t, doc, OpTableMove,
+		`{"key":"users","x":0,"y":0,"logical":"회원","columnLogical":{"id":"회원 번호"}}`)
+	if got := doc.Schema.Fingerprint(); got != before {
+		t.Errorf("논리명이 구조 지문을 바꿨습니다: %s → %s", before, got)
+	}
+	box := doc.Layout["users"]
+	if box == nil || box.Logical != "회원" {
+		t.Fatalf("테이블 논리명이 저장되지 않았습니다: %+v", box)
+	}
+	if box.ColumnLogical["id"] != "회원 번호" {
+		t.Errorf("컬럼 논리명 = %q", box.ColumnLogical["id"])
+	}
+
+	// 부분 갱신이어야 한다. 통째로 받으면 같은 표를 함께 보는 두 사람이 서로의
+	// 논리명을 지우게 된다.
+	apply(t, doc, OpColumnAdd, `{"table":"users","name":"email","type":"varchar(255)"}`)
+	apply(t, doc, OpTableMove, `{"key":"users","x":0,"y":0,"columnLogical":{"email":"이메일"}}`)
+	if doc.Layout["users"].ColumnLogical["id"] != "회원 번호" {
+		t.Error("다른 컬럼의 논리명이 사라졌습니다")
+	}
+
+	// 빈 값은 지우는 것이다.
+	apply(t, doc, OpTableMove, `{"key":"users","x":0,"y":0,"columnLogical":{"email":""}}`)
+	if _, ok := doc.Layout["users"].ColumnLogical["email"]; ok {
+		t.Error("빈 값을 보냈는데 논리명이 남았습니다")
+	}
+}
+
+// 컬럼 이름을 바꾸면 논리명이 따라간다.
+//
+// 레이아웃은 이름을 열쇠로 쓰므로, 따라가지 않으면 물리명을 고치는 순간 논리명이
+// 조용히 사라진다 — 아무도 지우지 않았는데 없어지는 것이 가장 나쁘다.
+func TestColumnRenameKeepsLogicalName(t *testing.T) {
+	doc := newDoc(t)
+	apply(t, doc, OpTableAdd, `{"name":"users"}`)
+	apply(t, doc, OpColumnAdd, `{"table":"users","name":"usr_id","type":"bigint"}`)
+	apply(t, doc, OpTableMove, `{"key":"users","x":0,"y":0,"columnLogical":{"usr_id":"회원 번호"}}`)
+
+	apply(t, doc, OpColumnUpdate, `{"table":"users","name":"usr_id","newName":"user_id"}`)
+
+	box := doc.Layout["users"]
+	if box.ColumnLogical["user_id"] != "회원 번호" {
+		t.Errorf("이름을 바꾸자 논리명이 사라졌습니다: %+v", box.ColumnLogical)
+	}
+	if _, ok := box.ColumnLogical["usr_id"]; ok {
+		t.Error("옛 이름의 논리명이 남았습니다")
+	}
+}
+
+// 테이블을 복제하면 컬럼 논리명은 따라오고 테이블 논리명은 오지 않는다.
+//
+// 물리명이 users_copy 가 된 사본에 "회원"이 그대로 붙어 있으면 화면에 같은 이름이
+// 둘 생긴다 — 사본을 만든 사람이 무엇을 만들었는지 알 수 없게 된다.
+func TestTableDuplicateLogicalNames(t *testing.T) {
+	doc := newDoc(t)
+	apply(t, doc, OpTableAdd, `{"name":"users","withId":true}`)
+	apply(t, doc, OpTableMove,
+		`{"key":"users","x":0,"y":0,"logical":"회원","columnLogical":{"id":"회원 번호"}}`)
+
+	apply(t, doc, OpTableDuplicate, `{"key":"users","name":"users_copy"}`)
+
+	box := doc.Layout["users_copy"]
+	if box == nil {
+		t.Fatal("사본 레이아웃이 없습니다")
+	}
+	if box.Logical != "" {
+		t.Errorf("사본에 테이블 논리명이 따라왔습니다: %q", box.Logical)
+	}
+	if box.ColumnLogical["id"] != "회원 번호" {
+		t.Errorf("사본에 컬럼 논리명이 오지 않았습니다: %+v", box.ColumnLogical)
+	}
+}

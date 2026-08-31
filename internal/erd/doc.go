@@ -86,6 +86,19 @@ type Box struct {
 	// 사람의 메모이지 DB에 만들어질 무엇이 아니다. 구조 지문에 들어가면 아이콘만
 	// 바꿔도 드리프트로 잡힌다.
 	ColumnIcons map[string]string `json:"columnIcons,omitempty"`
+	// Logical은 이 테이블의 논리명이다("회원", "주문 상세").
+	//
+	// 물리명(schema.Table.Name)은 DB에 실제로 만들어지는 이름이고, 논리명은 그것이
+	// 무엇을 뜻하는지를 사람 말로 적은 것이다. 설계 회의에서는 논리명으로 이야기하고
+	// 코드에서는 물리명으로 쓴다 — 둘 다 있어야 그 사이를 오갈 수 있다.
+	//
+	// 레이아웃에 두는 이유는 Icon과 같다. 논리명은 DB에 만들어지는 무엇이 아니므로
+	// 구조 지문에 들어가서는 안 된다 — 들어가면 이름을 한국어로 적는 순간 대상 DB와
+	// 다르다고(드리프트) 잡힌다. 주석(Comment)과도 다르다: 주석은 DB에 COMMENT로
+	// 실려 가는 설명이고, 논리명은 그 이름 자체다.
+	Logical string `json:"logical,omitempty"`
+	// ColumnLogical은 컬럼 이름(소문자) → 논리명이다.
+	ColumnLogical map[string]string `json:"columnLogical,omitempty"`
 }
 
 // Group은 캔버스에 놓는 반투명 사각형이다. 테이블 몇 개를 묶어 보이게 한다.
