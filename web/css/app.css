@@ -1995,6 +1995,9 @@ option { background: var(--surface); color: var(--text); }
 .erd-col { fill: var(--text-dim); font: 11.5px var(--mono); }
 .erd-col.is-pk { fill: var(--warn); font-weight: 600; }
 .erd-col-type { fill: var(--text-mute); font: 10.5px var(--mono); }
+/* 도메인 이름은 타입 자리에 오지만 타입이 아니다. 색으로 갈라 두지 않으면
+   VARCHAR 옆의 "이메일"이 그 DB의 타입 이름처럼 읽힌다. */
+.erd-col-type.is-domain { fill: var(--accent); font-family: var(--sans); }
 .erd-col-more { fill: var(--text-mute); font: italic 11px var(--sans); }
 
 .erd-card-icon { color: var(--text-dim); }

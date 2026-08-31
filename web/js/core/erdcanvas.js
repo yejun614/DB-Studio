@@ -362,9 +362,20 @@ export class ErdCanvas {
           }, truncate(label.sub, 12)));
         }
         g.appendChild(nameText);
+        // 도메인이 걸린 컬럼은 도메인 이름을 보여준다.
+        //
+        // 도메인을 쓴다는 것은 "이 컬럼은 이메일이다"라고 말한 것이고, 도면에서
+        // 알고 싶은 것도 그것이다 — VARCHAR(255) 는 그 이메일이 지금 어떻게
+        // 구현돼 있는가일 뿐이고, 그 값은 속성 창에 그대로 있다. 도메인을 정리해
+        // 놓고도 도면에는 원시 타입만 보이면, 도메인은 아무도 보지 않는 목록이 된다.
+        //
+        // 실제 타입과 헷갈리지 않게 다른 색으로 그린다(erd-col-domain).
+        const domain = (col.domain ?? '').trim();
+        const typeText = domain || (col.rawType || col.type?.base || '');
         g.appendChild(svgEl('text', {
-          class: 'erd-col-type', x: geom.w - 10, y, 'text-anchor': 'end',
-        }, `${truncate(col.rawType || col.type?.base || '', 16)}${col.nullable ? '' : ' *'}`));
+          class: `erd-col-type${domain ? ' is-domain' : ''}`,
+          x: geom.w - 10, y, 'text-anchor': 'end',
+        }, `${truncate(typeText, 16)}${col.nullable ? '' : ' *'}`));
       });
       if (geom.extra) {
         g.appendChild(svgEl('text', {
