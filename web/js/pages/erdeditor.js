@@ -21,6 +21,7 @@ import { COLUMN_ICONS, columnIcon, autoColumnIcon, chosenIconFor } from '../core
 import { codeBlock, codeEditor } from '../core/highlight.js';
 import { versionSourceLabel } from './migrations.js';
 import { runDryRun } from '../core/dryrun.js';
+import { NAME_MODES, logicalOf } from '../core/logical.js';
 import {
   ErdCanvas, CARD_W, tableKey, tableDisplay, refKey, newLocalID, truncate, NOTE_W, noteHeight,
 } from '../core/erdcanvas.js';
@@ -179,6 +180,10 @@ class Editor {
     // tool은 마우스 도구다: 'select'면 빈 곳을 끌어 범위로 고르고, 'pan'이면 화면을
     // 옮긴다. 고른 도구는 사람마다 기억한다 — 한 번 정하면 다음에도 그 손버릇이다.
     this.tool = readTool();
+    // nameMode는 카드에 어느 이름을 보일지다(물리명·논리명·둘 다). 문서가 아니라
+    // 보는 사람의 설정이므로 사람마다 기억한다 — 같은 문서를 여는 두 사람이 서로
+    // 다른 이름으로 볼 수 있어야 한다(설계자는 논리명, 개발자는 물리명).
+    this.nameMode = readNameMode();
     // renamedSel은 이름 미리보기 때문에 선택 키를 옮겨 둔 기록이다({from, to}).
     // 이름이 거부되면 from으로 되돌린다(previewTableName의 주석 참고).
     this.renamedSel = null;
@@ -608,6 +613,14 @@ class Editor {
         this.toolBtn('edit', '메모 추가', () => this.addNote(), { needsEdit: true }),
         this.toolBtn('list', '그룹 추가', () => this.addGroup(), { needsEdit: true }),
       ),
+      // 이름 보기. 물리명·논리명·둘 다.
+      //
+      // 도구 줄에 두는 이유: 설계 회의에서는 논리명으로 이야기하고 코드에서는
+      // 물리명으로 쓴다. 그 둘 사이를 자주 오가므로 속성 창 안쪽이 아니라 손이
+      // 바로 닿는 곳에 있어야 한다.
+      h('div.erd-tool-group', {},
+        ...NAME_MODES.map((m) => this.nameModeBtn(m)),
+      ),
       h('div.erd-tool-group', {},
         this.toolBtn('minus', '축소', () => this.zoom(1.25)),
         this.toolBtn('plus', '확대', () => this.zoom(0.8)),
@@ -670,6 +683,27 @@ class Editor {
   // 대신 이름은 popover로 뜬다(CSS ::after) — 브라우저 기본 툴팁은 1초 가까이
   // 기다려야 하고, 도구 막대에서는 그 사이에 이미 다른 버튼을 찾고 있다.
   // mouseToolBtn은 지금 켜진 마우스 도구를 보여주는 토글 단추다.
+  nameModeBtn(mode) {
+    const on = this.nameMode === mode.value;
+    return h('button.btn.btn-small.erd-name-mode', {
+      type: 'button',
+      class: on ? 'btn btn-small erd-name-mode is-on' : 'btn btn-small erd-name-mode',
+      'aria-pressed': String(on),
+      title: '카드에 보일 이름',
+      onclick: () => this.setNameMode(mode.value),
+    }, mode.label);
+  }
+
+  // setNameMode는 카드에 보일 이름을 바꾼다. 문서는 건드리지 않는 보기 설정이라
+  // 다른 참여자에게 보내지 않는다.
+  setNameMode(mode) {
+    if (this.nameMode === mode) return;
+    this.nameMode = mode;
+    writeNameMode(mode);
+    this.renderToolbar();
+    this.renderCanvas();
+  }
+
   mouseToolBtn(iconName, tool, label) {
     return h('button.icon-btn.btn-tip', {
       type: 'button',
@@ -901,6 +935,7 @@ class Editor {
   // 캔버스 다시 그리기. 데이터 갱신과 그리기를 한 곳에 묶어, 이 메서드만 부르면
   // 화면이 항상 현재 문서와 같아지게 한다.
   renderCanvas() {
+    this.canvas.setNameMode(this.nameMode);
     this.canvas.setDoc(this.doc);
     this.canvas.setMarks(this.marks);
     this.canvas.setParticipants(this.participants, this.you?.clientId);
@@ -1390,10 +1425,20 @@ class Editor {
       this.send('table.update', { key: ref.serverKey, comment: commentInput.value });
     });
 
+    // 논리명. 물리명 바로 아래에 둔다 — 둘은 같은 것의 두 이름이라, 떨어뜨려 놓으면
+    // 하나를 고치고 다른 하나를 잊는다.
+    const box = this.doc.layout?.[ref.serverKey] ?? {};
+    const logicalInput = input({
+      value: box.logical ?? '', disabled: ro, placeholder: '예: 회원',
+    });
+    commitOn(logicalInput, () => this.sendBox(ref, { logical: logicalInput.value }));
+
     return [
       this.panelHead(tbl.name),
       h('div.erd-panel-body', {},
-        h('label.field', {}, h('span.field-label', {}, '테이블 이름'), nameInput),
+        h('label.field', {}, h('span.field-label', {}, '테이블 이름 (물리명)'), nameInput),
+        field('논리명', logicalInput,
+          'DB에는 만들어지지 않는 설계용 이름입니다. 도구 줄에서 어느 이름을 보일지 고릅니다.'),
         h('label.field', {}, h('span.field-label', {}, '주석'), commentInput),
         ro ? null : this.appearanceEditor(ref),
 
@@ -1742,6 +1787,17 @@ class Editor {
       table: ref.serverKey, name: serverName, comment: commentInput.value,
     }));
 
+    // 논리명. 이름 칸 바로 옆이 아니라 아래 줄에 두는 이유: 위 줄은 이미 이름·타입·
+    // 타입 고르개로 꽉 차 있고, 거기에 하나를 더 끼우면 좁은 인스펙터에서 넷이
+    // 모두 좁아진다. 적는 것들끼리(기본값·설명) 모아 두는 편이 손도 덜 움직인다.
+    const logicalInput = input({
+      value: logicalOf(this.doc.layout?.[ref.serverKey], col.name),
+      placeholder: '논리명', class: 'input erd-col-logical-input',
+    });
+    commitOn(logicalInput, () => this.sendBox(ref, {
+      columnLogical: { [serverName]: logicalInput.value },
+    }));
+
     // 끌어서 순서를 바꾸는 손잡이.
     //
     // 줄 전체를 끌게 하지 않는 이유: 줄 안에 입력 칸이 셋이라, 글자를 고르려고
@@ -1774,9 +1830,12 @@ class Editor {
       ),
       ro
         ? h('div.erd-col-row-fields', {},
+          logicalOf(this.doc.layout?.[ref.serverKey], col.name)
+            ? h('p.erd-col-note', {}, `논리명 ${logicalOf(this.doc.layout?.[ref.serverKey], col.name)}`)
+            : null,
           col.default ? h('p.erd-col-note', {}, `기본값 ${col.default}`) : null,
           col.comment ? h('p.erd-col-comment', {}, col.comment) : null)
-        : h('div.erd-col-row-fields', {}, defInput, commentInput),
+        : h('div.erd-col-row-fields', {}, logicalInput, defInput, commentInput),
     );
     if (!ro) this.bindColumnDrag(row, grip, ref, col, index);
     return row;
@@ -1933,18 +1992,22 @@ class Editor {
   //
   // 스키마가 아니라 주석에 가까운 정보다. 테이블이 서른 개를 넘어가면 이름을 읽기
   // 전에 "이건 사용자 쪽, 저건 주문 쪽"이 눈에 들어와야 전체 구조가 보인다.
+  // sendBox는 카드의 표시 정보(색·아이콘·논리명)를 고친다.
+  //
+  // 좌표를 함께 보내야 한다 — table.move는 위치가 필수인 레이아웃 패치다. 그리고
+  // 좌표는 **보내는 순간** 다시 읽는다. 패널이 그려진 뒤에 누군가(또는 내가) 카드를
+  // 옮겼다면, 그릴 때 읽어 둔 좌표를 보내는 순간 카드가 옛 자리로 되돌아간다 —
+  // 논리명을 적었을 뿐인데 카드가 움직인다.
+  sendBox(ref, extra) {
+    const now = this.doc.layout?.[ref.serverKey] ?? {};
+    return this.send('table.move', {
+      key: ref.serverKey, x: now.x ?? 0, y: now.y ?? 0, ...extra,
+    });
+  }
+
   appearanceEditor(ref) {
     const box = this.doc.layout?.[ref.serverKey] ?? {};
-    // 좌표는 함께 보내야 한다 — table.move는 위치가 필수인 레이아웃 패치다.
-    // 그리고 좌표는 **누르는 순간** 다시 읽는다. 패널이 그려진 뒤에 누군가
-    // (또는 내가) 카드를 옮겼다면, 그릴 때 읽어 둔 좌표를 보내는 순간 카드가
-    // 옛 자리로 되돌아간다 — 색을 골랐을 뿐인데 카드가 움직인다.
-    const patch = (extra) => {
-      const now = this.doc.layout?.[ref.serverKey] ?? box;
-      return this.send('table.move', {
-        key: ref.serverKey, x: now.x ?? 0, y: now.y ?? 0, ...extra,
-      });
-    };
+    const patch = (extra) => this.sendBox(ref, extra);
 
     const icons = h('div.erd-icon-picker', {}, TABLE_ICONS.map((name) => h('button.erd-icon-btn', {
       type: 'button',
@@ -3657,7 +3720,7 @@ export function applyLightOp(doc, op) {
       // 아이콘을 골라도 아무 일이 없던 이유가 이것이었다.
       const prev = doc.layout[p.key] ?? {};
       const next = { ...prev, x: p.x, y: p.y };
-      for (const k of ['collapsed', 'color', 'icon', 'width']) {
+      for (const k of ['collapsed', 'color', 'icon', 'width', 'logical']) {
         if (p[k] !== undefined) next[k] = p[k];
       }
       // 컬럼 아이콘은 **보낸 것만** 덮어쓴다(서버의 applyTableMove와 같다).
@@ -3669,6 +3732,16 @@ export function applyLightOp(doc, op) {
           else delete icons[name.toLowerCase()];
         }
         next.columnIcons = icons;
+      }
+      // 컬럼 논리명도 같다. 부분 갱신이 아니면 같은 표를 함께 보는 두 사람이
+      // 서로가 적은 논리명을 지우게 된다.
+      if (p.columnLogical) {
+        const labels = { ...(prev.columnLogical ?? {}) };
+        for (const [name, label] of Object.entries(p.columnLogical)) {
+          if (label) labels[name.toLowerCase()] = label;
+          else delete labels[name.toLowerCase()];
+        }
+        next.columnLogical = labels;
       }
       doc.layout[p.key] = next;
       break;
@@ -4011,6 +4084,25 @@ function singleColumnIndex(table, name, unique) {
 // 마우스 도구는 브라우저에 기억한다. 서버에 둘 값이 아니다 — 문서의 성질이 아니라
 // 그 사람의 손버릇이고, 같은 문서를 보는 두 사람이 다른 도구를 쓸 수 있어야 한다.
 const TOOL_KEY = 'dbstudio.erd.tool';
+const NAME_MODE_KEY = 'dbstudio.erd.nameMode';
+
+function readNameMode() {
+  try {
+    const saved = localStorage.getItem(NAME_MODE_KEY);
+    return NAME_MODES.some((m) => m.value === saved) ? saved : 'physical';
+  } catch {
+    // 저장소를 못 쓰는 브라우저에서도 보기는 되어야 한다.
+    return 'physical';
+  }
+}
+
+function writeNameMode(mode) {
+  try {
+    localStorage.setItem(NAME_MODE_KEY, mode);
+  } catch {
+    // 기억하지 못할 뿐이다.
+  }
+}
 
 function readTool() {
   try {

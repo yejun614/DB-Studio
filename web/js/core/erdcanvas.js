@@ -12,6 +12,7 @@
 // 예외는 드래그 중 좌표뿐이다 — 왕복이나 재렌더를 기다리면 카드가 마우스를 못 따라온다.
 import { h, mount, icon } from './dom.js';
 import { columnIcon, chosenIconFor } from './colicon.js';
+import { NAME_MODES, tableLabel, columnLabel } from './logical.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -47,6 +48,9 @@ export class ErdCanvas {
     // 화면 이동이다 — 그림 도구들의 공통 관례이고, 도구를 바꾸고 되돌리는 두 번의
     // 클릭보다 손이 덜 움직인다.
     this.spaceHeld = false;
+    // nameMode는 카드에 어느 이름을 보일지다: 'physical' | 'logical' | 'both'.
+    // 기본은 물리명 — 논리명을 적지 않은 문서가 지금까지와 똑같이 보인다.
+    this.nameMode = 'physical';
 
     this.svg = document.createElementNS(SVG_NS, 'svg');
     this.svg.classList.add('erd-canvas');
@@ -96,6 +100,11 @@ export class ErdCanvas {
   //
   // 도구를 캔버스가 기억하지 않고 화면이 정해 주는 이유: 어느 도구가 켜져 있는지를
   // 도구 막대가 보여줘야 하고, 그 선택은 사람마다 저장된다(localStorage).
+  // setNameMode는 카드에 보일 이름을 바꾼다. 문서를 고치지 않는 **보기** 설정이다.
+  setNameMode(mode) {
+    this.nameMode = NAME_MODES.some((m) => m.value === mode) ? mode : 'physical';
+  }
+
   setTool(tool) {
     // 이 함수를 부른다는 것은 화면에 도구 단추가 있다는 뜻이다.
     this.hasToolPicker = true;
@@ -297,9 +306,17 @@ export class ErdCanvas {
       g.appendChild(mark);
       titleX = 28;
     }
+    const { main, sub } = tableLabel(tbl, geom.layout, this.nameMode);
     g.appendChild(svgEl('text', {
-      class: 'erd-card-name', x: titleX, y: 20,
-    }, truncate(tbl.namespace ? `${tbl.namespace}.${tbl.name}` : tbl.name, iconName ? 27 : 30)));
+      class: 'erd-card-name', x: titleX, y: sub ? 17 : 20,
+    }, truncate(main, iconName ? 27 : 30)));
+    // 둘 다 보기에서는 물리명을 작은 글씨로 아래에 둔다. 나란히 쓰면 어느 쪽이
+    // 진짜 이름인지 알 수 없고, 긴 한국어 이름에서 물리명이 먼저 잘린다.
+    if (sub) {
+      g.appendChild(svgEl('text', {
+        class: 'erd-card-sub', x: titleX, y: 28,
+      }, truncate(sub, iconName ? 30 : 33)));
+    }
 
     const count = tbl.columns?.length ?? 0;
     g.appendChild(svgEl('text', {
@@ -325,9 +342,22 @@ export class ErdCanvas {
           else if (isFK) mark.classList.add('is-fk');
           g.appendChild(mark);
         }
-        g.appendChild(svgEl('text', {
+        const label = columnLabel(col, geom.layout, this.nameMode);
+        const nameText = svgEl('text', {
           class: `erd-col${isPK ? ' is-pk' : ''}`, x: 26, y,
-        }, truncate(col.name, 20)));
+        });
+        nameText.appendChild(svgEl('tspan', {}, truncate(label.main, label.sub ? 12 : 20)));
+        // 컬럼 줄은 좁아 위아래로 나눌 수 없다. 물리명을 옆에 옅게 이어 붙인다.
+        //
+        // 같은 <text> 안의 tspan 으로 잇는다. 글자 폭을 계산해 x를 따로 주면
+        // 한글에서 어긋난다 — 한글 한 자는 영문 한 자보다 넓어서, 추정한 자리에
+        // 물리명을 놓으면 논리명 위에 겹쳐 찍힌다(실제로 그랬다).
+        if (label.sub) {
+          nameText.appendChild(svgEl('tspan', {
+            class: 'erd-col-sub', dx: 6,
+          }, truncate(label.sub, 12)));
+        }
+        g.appendChild(nameText);
         g.appendChild(svgEl('text', {
           class: 'erd-col-type', x: geom.w - 10, y, 'text-anchor': 'end',
         }, `${truncate(col.rawType || col.type?.base || '', 16)}${col.nullable ? '' : ' *'}`));

@@ -2418,6 +2418,29 @@ tr.is-destructive td { background: hsl(var(--h-danger) / 0.08); }
 .mig-review-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; }
 .mig-review-comment { margin: 6px 0 0; font-size: 13px; white-space: pre-wrap; }
 
+/* ---------- 논리명 ---------- */
+
+/* 카드 제목 아래의 물리명. 논리명보다 작고 옅게 — 어느 쪽이 지금 보고 있는 이름인지
+   한눈에 갈려야 한다. */
+.erd-card-sub {
+  font-size: 8.5px;
+  fill: var(--text-mute);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+/* 컬럼 줄은 좁아 위아래로 나눌 수 없다. 물리명을 옆에 옅게 이어 붙인다. */
+.erd-col-sub {
+  font-size: 8.5px;
+  fill: var(--text-mute);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+/* 도구 줄의 이름 보기 고르개. 고른 것이 눌린 채로 보여야 지금 무엇을 보고 있는지 안다. */
+.erd-name-mode.is-on {
+  background: var(--surface-2);
+  border-color: var(--border);
+  color: var(--text);
+}
+.erd-col-logical-input { flex: 1 1 90px; min-width: 0; }
+
 /* ---------- API 토큰 ---------- */
 
 /* 토큰 줄에는 스타일이 아예 없었다. 그래서 줄과 줄이 붙어 흐르고, 아래에 놓인
