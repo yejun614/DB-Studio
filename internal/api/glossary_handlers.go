@@ -21,6 +21,9 @@ type glossaryRequest struct {
 	Term     string `json:"term"`
 	Physical string `json:"physical"`
 	Note     string `json:"note"`
+	Cat1     string `json:"cat1"`
+	Cat2     string `json:"cat2"`
+	Cat3     string `json:"cat3"`
 }
 
 func (s *Server) handleListGlossary(c *fiber.Ctx) error {
@@ -28,8 +31,16 @@ func (s *Server) handleListGlossary(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	// 분류 목록은 검색어와 무관하게 사전 전체에서 모은다. 새 용어를 넣는 사람은
+	// "이미 쓰이던 분류"를 골라야 하는데, 그것이 지금 화면에 걸린 검색 결과에만
+	// 있으라는 법이 없다.
+	cats, err := s.st.GlossaryCategories(c.Context())
+	if err != nil {
+		return err
+	}
 	return c.JSON(fiber.Map{
-		"terms": terms,
+		"terms":      terms,
+		"categories": cats,
 		// 고칠 수 있는 사람인지 화면이 알아야 한다. 눌러 보고서야 거부되는 버튼은
 		// "왜 안 되지"를 남기고, 그 답은 화면 어디에도 없다.
 		"canManage": currentUser(c).Role.CanManageConnections(),
@@ -149,7 +160,9 @@ func (s *Server) handleBulkGlossary(c *fiber.Ctx) error {
 		if strings.Contains(line, "\t") {
 			sep = "\t"
 		}
-		parts := strings.SplitN(line, sep, 3)
+		// 칸은 용어, 물리명, 설명, 대·중·소 여섯이다. 설명에 쉼표가 들어가면 그
+		// 뒤가 분류로 잘리므로, 그런 목록은 탭 구분(엑셀 복사)으로 넣게 안내한다.
+		parts := strings.SplitN(line, sep, 6)
 		if len(parts) < 2 {
 			invalid = append(invalid, line)
 			continue
@@ -159,11 +172,12 @@ func (s *Server) handleBulkGlossary(c *fiber.Ctx) error {
 			Physical:  strings.TrimSpace(parts[1]),
 			CreatedBy: u.ID,
 		}
-		if len(parts) > 2 {
-			p.Note = strings.TrimSpace(parts[2])
+		for i, into := range []*string{&p.Note, &p.Cat1, &p.Cat2, &p.Cat3} {
+			if len(parts) > i+2 {
+				*into = strings.TrimSpace(parts[i+2])
+			}
 		}
-		if p.Term == "" || p.Physical == "" ||
-			len([]rune(p.Term)) > maxTermLen || len([]rune(p.Physical)) > maxTermLen {
+		if p.Term == "" || p.Physical == "" || !lengthsOK(p) {
 			invalid = append(invalid, line)
 			continue
 		}
@@ -204,6 +218,11 @@ func glossaryParams(c *fiber.Ctx) (store.SaveGlossaryParams, bool) {
 		Term:     strings.TrimSpace(req.Term),
 		Physical: strings.TrimSpace(req.Physical),
 		Note:     strings.TrimSpace(req.Note),
+		// 분류는 셋 다 비어 있을 수 있다. 처음부터 분류 체계를 세우고 시작하는
+		// 팀은 없고, 필수로 만들면 아무 말이나 넣게 된다.
+		Cat1: strings.TrimSpace(req.Cat1),
+		Cat2: strings.TrimSpace(req.Cat2),
+		Cat3: strings.TrimSpace(req.Cat3),
 	}
 	if p.Term == "" {
 		fail(c, fiber.StatusBadRequest, "invalid_term", "용어를 입력하세요")
@@ -214,9 +233,22 @@ func glossaryParams(c *fiber.Ctx) (store.SaveGlossaryParams, bool) {
 			"물리명을 입력하세요. 그것이 없으면 사전이 답하지 못합니다")
 		return p, false
 	}
-	if len([]rune(p.Term)) > maxTermLen || len([]rune(p.Physical)) > maxTermLen {
-		fail(c, fiber.StatusBadRequest, "too_long", "용어와 물리명은 80자 이내입니다")
+	if !lengthsOK(p) {
+		fail(c, fiber.StatusBadRequest, "too_long", "용어·물리명·분류는 80자 이내입니다")
 		return p, false
 	}
 	return p, true
+}
+
+// lengthsOK는 이름 칸의 길이를 함께 본다.
+//
+// 설명은 재지 않는다 — 그것은 문장이고, 길다고 해서 사전이 망가지지 않는다. 나머지는
+// 이름이라, 화면의 한 칸에 들어가지 않으면 표가 읽히지 않는다.
+func lengthsOK(p store.SaveGlossaryParams) bool {
+	for _, v := range []string{p.Term, p.Physical, p.Cat1, p.Cat2, p.Cat3} {
+		if len([]rune(v)) > maxTermLen {
+			return false
+		}
+	}
+	return true
 }
