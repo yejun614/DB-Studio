@@ -26,6 +26,12 @@ func (s *Server) handleListConnections(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	// 프로젝트로 먼저 좁힌다. ?project= 가 있으면 그 하나로, 없으면 볼 수 있는
+	// 전체로. nil은 제한 없음(슈퍼 어드민)이다.
+	scope, err := s.projectFilter(c)
+	if err != nil {
+		return err
+	}
 
 	effective, err := s.authz.EffectiveAccessList(c.Context(), u, all)
 	if err != nil {
@@ -45,6 +51,12 @@ func (s *Server) handleListConnections(c *fiber.Ctx) error {
 	canManage := u.Role.CanManageConnections()
 	items := make([]fiber.Map, 0, len(all))
 	for _, conn := range all {
+		// 관리자 예외도 프로젝트 밖으로는 나가지 않는다. 이 관문이 없으면 참여하지
+		// 않은 프로젝트의 DB 이름이 관리자 화면에 그대로 뜬다 — 프로젝트를 나눈
+		// 이유가 목록 한 곳에서 무너진다.
+		if !inProjects(scope, conn.ProjectID) {
+			continue
+		}
 		level, accessible := levels[conn.ID]
 		if !accessible && !canManage {
 			continue
@@ -101,6 +113,8 @@ func (s *Server) handleGetConnection(c *fiber.Ctx) error {
 // ServerID 없이 오면 "서버 + DB 하나"를 한 번에 만든다. 서버를 먼저 만들고 DB를 고르는
 // 흐름이 정식이지만, DB 하나만 등록하려는 사람에게 두 단계를 강요할 이유는 없다.
 type connectionRequest struct {
+	// ProjectID는 이 DB가 속할 프로젝트다. 새로 만들 때는 반드시 있어야 한다.
+	ProjectID    string            `json:"projectId"`
 	ServerID     string            `json:"serverId"`
 	Name         string            `json:"name"`
 	Kind         model.DBKind      `json:"kind"`
@@ -133,6 +147,7 @@ func (r *connectionRequest) dbParams(actorID string) (store.SaveConnectionParams
 		r.Tags = []string{}
 	}
 	return store.SaveConnectionParams{
+		ProjectID:    strings.TrimSpace(r.ProjectID),
 		ServerID:     strings.TrimSpace(r.ServerID),
 		Name:         name,
 		Environment:  r.Environment,
@@ -164,6 +179,14 @@ func (s *Server) handleCreateConnection(c *fiber.Ctx) error {
 	params, err := req.dbParams(actor.ID)
 	if err != nil {
 		return fail(c, fiber.StatusBadRequest, "invalid_connection", err.Error())
+	}
+	// 프로젝트는 반드시 있고, 자기가 볼 수 있는 곳이어야 한다.
+	//
+	// 어디에도 속하지 않은 커넥션은 목록에도 권한 판정에도 나타나지 않는다 — 만들
+	// 수는 있는데 아무도 볼 수 없는 유령이 된다. 참여하지 않은 프로젝트에 넣는 것도
+	// 막는다: 그렇게 만든 DB는 만든 사람 자신에게도 보이지 않는다.
+	if _, perr := s.requireProject(c, params.ProjectID); perr != nil {
+		return perr
 	}
 
 	// 서버를 지정했으면 그 아래에 DB만 더한다. 접속 정보는 서버의 것을 쓴다.

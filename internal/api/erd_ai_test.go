@@ -16,7 +16,7 @@ import (
 func TestERDAISessionIsScopedToDocument(t *testing.T) {
 	e := newTestEnv(t)
 	c := login(t, e, "alice")
-	docID := createStandalone(t, c, "AI 초안", "postgres")
+	docID := createStandalone(t, e, c, "AI 초안", "postgres")
 
 	key := "sk-test"
 	if _, err := e.st.CreateAIProvider(context.Background(), store.SaveAIProviderParams{
@@ -115,7 +115,7 @@ func TestERDToolsAreSeparateFromAppTools(t *testing.T) {
 func TestERDToolAppliesToDocument(t *testing.T) {
 	e := newTestEnv(t)
 	c := login(t, e, "alice")
-	docID := createStandalone(t, c, "툴 적용", "postgres")
+	docID := createStandalone(t, e, c, "툴 적용", "postgres")
 
 	_, impls := erdAITools()
 	ec := &erdToolContext{
@@ -173,7 +173,7 @@ func TestERDToolAppliesToDocument(t *testing.T) {
 func TestERDAIEditIsUndoable(t *testing.T) {
 	e := newTestEnv(t)
 	c := login(t, e, "alice")
-	docID := createStandalone(t, c, "되돌리기", "postgres")
+	docID := createStandalone(t, e, c, "되돌리기", "postgres")
 
 	_, impls := erdAITools()
 	ec := &erdToolContext{

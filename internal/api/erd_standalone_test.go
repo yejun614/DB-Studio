@@ -24,7 +24,10 @@ func login(t *testing.T, e *testEnv, username string) *client {
 	return c
 }
 
-// addMember는 멤버 계정을 하나 더 만든다. "남의 초안"을 만들려면 두 사람이 필요하다.
+// addMember는 멤버 계정을 하나 더 만들고 같은 프로젝트에 넣는다.
+//
+// "남의 초안"을 만들려면 두 사람이 필요하고, 두 사람이 같은 것을 보려면 같은
+// 프로젝트에 있어야 한다 — 프로젝트가 등급보다 앞선 관문이다(0037).
 func addMember(t *testing.T, e *testEnv, username string) *model.User {
 	t.Helper()
 	hash, err := crypto.HashPassword(testPassword)
@@ -37,13 +40,16 @@ func addMember(t *testing.T, e *testEnv, username string) *model.User {
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
+	e.join(t, u.ID)
 	return u
 }
 
-func createStandalone(t *testing.T, c *client, name, dialect string) string {
+// 독립 초안에는 대상 DB가 없어 프로젝트가 유일한 울타리다. 그래서 만들 때 반드시
+// 프로젝트를 골라야 한다.
+func createStandalone(t *testing.T, e *testEnv, c *client, name, dialect string) string {
 	t.Helper()
 	status, body := c.do("POST", "/api/v1/erd/documents/", map[string]any{
-		"name": name, "dialect": dialect,
+		"name": name, "dialect": dialect, "projectId": e.project.ID,
 	})
 	if status != 201 {
 		t.Fatalf("create = %d: %v", status, body)
@@ -63,12 +69,13 @@ func TestStandaloneERDNeedsDialect(t *testing.T) {
 	e := newTestEnv(t)
 	c := login(t, e, "alice")
 
-	status, body := c.do("POST", "/api/v1/erd/documents/", map[string]any{"name": "초안"})
+	status, body := c.do("POST", "/api/v1/erd/documents/",
+		map[string]any{"name": "초안", "projectId": e.project.ID})
 	if status != 400 {
 		t.Fatalf("dialect 없이 만들 수 있으면 안 됩니다: %d %v", status, body)
 	}
 	status, body = c.do("POST", "/api/v1/erd/documents/",
-		map[string]any{"name": "초안", "dialect": "mongodb"})
+		map[string]any{"name": "초안", "dialect": "mongodb", "projectId": e.project.ID})
 	if status != 400 {
 		t.Fatalf("관계형이 아닌 종류가 통과했습니다: %d %v", status, body)
 	}
@@ -82,7 +89,7 @@ func TestStandaloneERDPermissions(t *testing.T) {
 	addMember(t, e, "bob")
 	other := login(t, e, "bob")
 
-	docID := createStandalone(t, owner, "공용 초안", "postgres")
+	docID := createStandalone(t, e, owner, "공용 초안", "postgres")
 
 	// 다른 사람도 열 수 있고 편집 권한을 받는다.
 	status, body := other.do("GET", "/api/v1/erd/documents/"+docID, nil)
@@ -126,7 +133,7 @@ func TestStandaloneERDPermissions(t *testing.T) {
 func TestStandaloneERDHasNoMigrationTarget(t *testing.T) {
 	e := newTestEnv(t)
 	c := login(t, e, "alice")
-	docID := createStandalone(t, c, "초안", "mysql")
+	docID := createStandalone(t, e, c, "초안", "mysql")
 
 	status, body := c.do("POST", "/api/v1/erd/documents/"+docID+"/diff", nil)
 	if status != 400 {
@@ -143,7 +150,7 @@ func TestStandaloneERDHasNoMigrationTarget(t *testing.T) {
 func TestERDImportSQL(t *testing.T) {
 	e := newTestEnv(t)
 	c := login(t, e, "alice")
-	docID := createStandalone(t, c, "초안", "postgres")
+	docID := createStandalone(t, e, c, "초안", "postgres")
 
 	script := `
 CREATE TABLE users (
@@ -235,7 +242,7 @@ CREATE TABLE orders (
 func TestERDExportDDL(t *testing.T) {
 	e := newTestEnv(t)
 	c := login(t, e, "alice")
-	docID := createStandalone(t, c, "초안", "postgres")
+	docID := createStandalone(t, e, c, "초안", "postgres")
 
 	if status, body := c.do("POST", "/api/v1/erd/documents/"+docID+"/import",
 		map[string]any{"sql": "CREATE TABLE t (id bigint PRIMARY KEY, name text NOT NULL);"}); status != 200 {

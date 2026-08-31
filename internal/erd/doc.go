@@ -24,6 +24,13 @@ import (
 type Document struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+	// ProjectID는 이 문서가 속한 프로젝트다.
+	//
+	// 대상 커넥션이 있으면 그 커넥션의 프로젝트와 같다(저장 계층이 커넥션 쪽을
+	// 참으로 삼아 맞춘다). 독립 초안에는 커넥션이 없으므로 이 값이 유일한 근거다 —
+	// 설계는 DB를 만들기 전에 시작되는 일이 더 많아서, 독립 초안이야말로
+	// 프로젝트가 필요한 쪽이다.
+	ProjectID string `json:"projectId"`
 	// ConnectionID는 이 초안이 향하는 대상 커넥션이다. dialect 결정과 권한 판정에 쓴다.
 	// 비어 있을 수 없다 — 어떤 DB를 위한 설계인지 모르면 타입도 마이그레이션도 정할 수 없다.
 	ConnectionID string `json:"connectionId"`

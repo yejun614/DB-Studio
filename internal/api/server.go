@@ -255,6 +255,18 @@ func (s *Server) routes() {
 	clusterGroup.Get("/", s.handleClusterStatus)
 	clusterGroup.Delete("/nodes/:id", s.handleRemoveClusterNode)
 
+	// 프로젝트: 자원의 울타리.
+	//
+	// 조회는 참여한 것만(슈퍼 어드민은 전부), 고치는 것은 커넥션 관리자다.
+	// 프로젝트를 만드는 일은 곧 그 안에 DB를 등록하겠다는 뜻이다.
+	projects := authed.Group("/projects")
+	projects.Get("/", s.handleListProjects)
+	projects.Post("/", s.requireConnManager, s.handleCreateProject)
+	projects.Get("/:projectId", s.handleGetProject)
+	projects.Put("/:projectId", s.requireConnManager, s.handleUpdateProject)
+	projects.Delete("/:projectId", s.requireConnManager, s.handleDeleteProject)
+	projects.Put("/:projectId/members", s.requireConnManager, s.handleSetProjectMembers)
+
 	// 커넥션: 조회는 접근 권한 기준으로 필터, 변경은 admin 이상
 	conns := authed.Group("/connections")
 	conns.Get("/", s.handleListConnections)

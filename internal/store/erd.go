@@ -22,6 +22,9 @@ var ErrOpConflict = errors.New("op already applied")
 type ERDDocumentMeta struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+	// ProjectID는 이 문서가 속한 프로젝트다. 독립 초안(커넥션 없음)의 권한 판정은
+	// 이 값 하나에 달려 있다.
+	ProjectID string `json:"projectId"`
 	// ConnectionID가 비어 있으면 대상 DB가 없는 독립 초안이다.
 	ConnectionID string    `json:"connectionId"`
 	Dialect      string    `json:"dialect"`
@@ -41,15 +44,31 @@ func (s *Store) CreateERDDocument(ctx context.Context, doc *erd.Document, create
 	if err != nil {
 		return err
 	}
+	// 대상 커넥션이 있으면 프로젝트는 그 커넥션의 것이다.
+	//
+	// 두 곳에 적힌 값이 어긋나면 어느 쪽이 참인지 판정이 답할 수 없게 된다. 부르는
+	// 쪽이 무엇을 넣었든 커넥션 쪽으로 맞추는 이유가 그것이다 — 커넥션은 실제
+	// 대상이고, 문서는 그것을 향한 그림이다.
+	if doc.ConnectionID != "" {
+		conn, cerr := s.GetConnection(ctx, doc.ConnectionID)
+		if cerr != nil {
+			return fmt.Errorf("resolve document project: %w", cerr)
+		}
+		doc.ProjectID = conn.ProjectID
+	}
+	if doc.ProjectID == "" {
+		return fmt.Errorf("insert erd document: 프로젝트가 없습니다")
+	}
 	now := nowString()
 	_, err = s.db.ExecContext(ctx, `INSERT INTO erd_documents
-		(id, name, connection_id, dialect, status, kind, snapshot_json, layout_json, notes_json,
-		 groups_json, domains_json, snapshot_seq, seq, source_snapshot_id, note, created_by, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		(id, name, project_id, connection_id, dialect, status, kind, snapshot_json, layout_json,
+		 notes_json, groups_json, domains_json, snapshot_seq, seq, source_snapshot_id, note,
+		 created_by, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		// 대상 커넥션이 없으면 NULL이다. 빈 문자열로 넣으면 외래키가 걸려 들어가지
 		// 않고, 들어간다 해도 "존재하지 않는 커넥션을 가리키는 문서"가 된다.
-		doc.ID, doc.Name, nullString(doc.ConnectionID), doc.Dialect, doc.Status, docKind(doc.Kind),
-		j.schema, j.layout, j.notes, j.groups, j.domains, doc.Seq, doc.Seq,
+		doc.ID, doc.Name, doc.ProjectID, nullString(doc.ConnectionID), doc.Dialect, doc.Status,
+		docKind(doc.Kind), j.schema, j.layout, j.notes, j.groups, j.domains, doc.Seq, doc.Seq,
 		sourceSnapshotID, note, nullString(createdBy), now, now)
 	if err != nil {
 		return fmt.Errorf("insert erd document: %w", err)
@@ -64,7 +83,7 @@ func (s *Store) CreateERDDocument(ctx context.Context, doc *erd.Document, create
 // 무한히 느려진다. 주기적 압축이 두 비용을 모두 묶는다.
 func (s *Store) GetERDDocument(ctx context.Context, id string) (*erd.Document, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT
-		id, name, COALESCE(connection_id, ''), dialect, status, kind,
+		id, name, project_id, COALESCE(connection_id, ''), dialect, status, kind,
 		snapshot_json, layout_json, notes_json,
 		groups_json, domains_json, snapshot_seq, seq
 		FROM erd_documents WHERE id = ?`, id)
@@ -72,7 +91,7 @@ func (s *Store) GetERDDocument(ctx context.Context, id string) (*erd.Document, e
 	var doc erd.Document
 	var j docJSON
 	var snapshotSeq int64
-	if err := row.Scan(&doc.ID, &doc.Name, &doc.ConnectionID, &doc.Dialect, &doc.Status, &doc.Kind,
+	if err := row.Scan(&doc.ID, &doc.Name, &doc.ProjectID, &doc.ConnectionID, &doc.Dialect, &doc.Status, &doc.Kind,
 		&j.schema, &j.layout, &j.notes, &j.groups, &j.domains, &snapshotSeq, &doc.Seq); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
@@ -117,11 +136,13 @@ func (s *Store) GetERDDocument(ctx context.Context, id string) (*erd.Document, e
 // 대상 커넥션이 없는 독립 초안(connection_id IS NULL)은 이 필터의 바깥이다.
 // 걸러낼 근거가 되는 커넥션이 없고, 그 초안은 실제 DB를 건드리지 않으므로
 // 로그인한 사람이면 누구나 본다. 삭제와 설정 변경만 작성자·어드민으로 좁힌다.
-func (s *Store) ListERDDocuments(ctx context.Context, connectionIDs []string, limit int) ([]*ERDDocumentMeta, error) {
+// projectIDs가 nil이면 프로젝트로 좁히지 않는다(슈퍼 어드민). 빈 슬라이스는
+// "볼 수 있는 프로젝트가 하나도 없다"는 뜻이라 결과도 비어야 한다.
+func (s *Store) ListERDDocuments(ctx context.Context, connectionIDs, projectIDs []string, limit int) ([]*ERDDocumentMeta, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 200
 	}
-	query := `SELECT id, name, COALESCE(connection_id, ''), dialect, status, seq, note,
+	query := `SELECT id, name, project_id, COALESCE(connection_id, ''), dialect, status, seq, note,
 		COALESCE(created_by, ''), created_at, updated_at,
 		-- 테이블 수는 스냅샷 JSON 전체를 디코딩하지 않고 세는 것이 목적이지만
 		-- SQLite에서 JSON 배열 길이는 json_array_length로 싸게 얻을 수 있다.
@@ -143,6 +164,19 @@ func (s *Store) ListERDDocuments(ctx context.Context, connectionIDs []string, li
 		}
 		query += ` AND (` + where + `)`
 	}
+	if projectIDs != nil {
+		if len(projectIDs) == 0 {
+			// IN () 는 SQLite에서 문법 오류다. 아무것도 맞지 않는 조건으로 바꾼다.
+			query += ` AND 0`
+		} else {
+			marks := make([]string, len(projectIDs))
+			for i, id := range projectIDs {
+				marks[i] = "?"
+				args = append(args, id)
+			}
+			query += ` AND project_id IN (` + strings.Join(marks, ",") + `)`
+		}
+	}
 	query += ` ORDER BY updated_at DESC LIMIT ?`
 	args = append(args, limit)
 
@@ -156,7 +190,7 @@ func (s *Store) ListERDDocuments(ctx context.Context, connectionIDs []string, li
 	for rows.Next() {
 		var m ERDDocumentMeta
 		var createdAt, updatedAt string
-		if err := rows.Scan(&m.ID, &m.Name, &m.ConnectionID, &m.Dialect, &m.Status,
+		if err := rows.Scan(&m.ID, &m.Name, &m.ProjectID, &m.ConnectionID, &m.Dialect, &m.Status,
 			&m.Seq, &m.Note, &m.CreatedBy, &createdAt, &updatedAt, &m.TableCount); err != nil {
 			return nil, fmt.Errorf("scan erd document meta: %w", err)
 		}
@@ -177,11 +211,11 @@ func (s *Store) ListERDDocuments(ctx context.Context, connectionIDs []string, li
 func (s *Store) GetERDDocumentMeta(ctx context.Context, id string) (*ERDDocumentMeta, error) {
 	var m ERDDocumentMeta
 	var createdAt, updatedAt string
-	err := s.db.QueryRowContext(ctx, `SELECT id, name, COALESCE(connection_id, ''),
+	err := s.db.QueryRowContext(ctx, `SELECT id, name, project_id, COALESCE(connection_id, ''),
 		dialect, status, seq, note, COALESCE(created_by, ''), created_at, updated_at,
 		COALESCE(json_array_length(snapshot_json, '$.tables'), 0)
 		FROM erd_documents WHERE id = ?`, id).
-		Scan(&m.ID, &m.Name, &m.ConnectionID, &m.Dialect, &m.Status, &m.Seq, &m.Note,
+		Scan(&m.ID, &m.Name, &m.ProjectID, &m.ConnectionID, &m.Dialect, &m.Status, &m.Seq, &m.Note,
 			&m.CreatedBy, &createdAt, &updatedAt, &m.TableCount)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound

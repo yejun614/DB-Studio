@@ -976,7 +976,19 @@ func toolListERDDocuments(tc *toolContext, args json.RawMessage) (string, error)
 		ids = append(ids, c.ID)
 		names[c.ID] = c.Name
 	}
-	docs, err := tc.srv.st.ListERDDocuments(tc.ctx, ids, 50)
+	// 독립 초안은 커넥션으로 걸러지지 않으므로 프로젝트로 좁힌다.
+	// 슈퍼 어드민에게는 nil(제한 없음)이 온다.
+	var scope []string
+	if tc.user != nil && tc.user.Role != model.RoleSuperadmin {
+		scope, err = tc.srv.st.ProjectIDsForUser(tc.ctx, tc.user.ID)
+		if err != nil {
+			return "", err
+		}
+		if scope == nil {
+			scope = []string{}
+		}
+	}
+	docs, err := tc.srv.st.ListERDDocuments(tc.ctx, ids, scope, 50)
 	if err != nil {
 		return "", err
 	}

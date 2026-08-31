@@ -14,12 +14,12 @@ func TestGlossaryReadAllWriteManagers(t *testing.T) {
 
 	alice := loginAs(t, e, "alice") // 슈퍼 어드민
 	if code, body := alice.do("POST", "/api/v1/glossary/",
-		map[string]any{"term": "회원", "physical": "member"}); code != 201 {
+		map[string]any{"projectId": e.project.ID, "term": "회원", "physical": "member"}); code != 201 {
 		t.Fatalf("관리자 추가 = %d: %v", code, body)
 	}
 
 	dana := loginAs(t, e, "dana")
-	code, body := dana.do("GET", "/api/v1/glossary/", nil)
+	code, body := dana.do("GET", "/api/v1/glossary/?project="+e.project.ID, nil)
 	if code != 200 {
 		t.Fatalf("일반 사용자 읽기 = %d: %v", code, body)
 	}
@@ -34,11 +34,11 @@ func TestGlossaryReadAllWriteManagers(t *testing.T) {
 	}
 
 	if code, _ := dana.do("POST", "/api/v1/glossary/",
-		map[string]any{"term": "주문", "physical": "order"}); code != 403 {
+		map[string]any{"projectId": e.project.ID, "term": "주문", "physical": "order"}); code != 403 {
 		t.Errorf("일반 사용자 추가 = %d, 403이어야 합니다", code)
 	}
 	if code, _ := dana.do("POST", "/api/v1/glossary/bulk",
-		map[string]any{"text": "주문, order"}); code != 403 {
+		map[string]any{"projectId": e.project.ID, "text": "주문, order"}); code != 403 {
 		t.Errorf("일반 사용자 여러 줄 = %d, 403이어야 합니다", code)
 	}
 }
@@ -49,11 +49,11 @@ func TestGlossaryRejectsDuplicate(t *testing.T) {
 	alice := loginAs(t, e, "alice")
 
 	if code, _ := alice.do("POST", "/api/v1/glossary/",
-		map[string]any{"term": "회원", "physical": "member"}); code != 201 {
+		map[string]any{"projectId": e.project.ID, "term": "회원", "physical": "member"}); code != 201 {
 		t.Fatal("첫 추가가 실패했습니다")
 	}
 	code, body := alice.do("POST", "/api/v1/glossary/",
-		map[string]any{"term": "  회원  ", "physical": "mbr"})
+		map[string]any{"projectId": e.project.ID, "term": "  회원  ", "physical": "mbr"})
 	if code != 409 {
 		t.Errorf("같은 용어 = %d, 409여야 합니다: %v", code, body)
 	}
@@ -72,8 +72,8 @@ func TestGlossaryNeedsBothNames(t *testing.T) {
 		body map[string]any
 		want string
 	}{
-		{"용어 없음", map[string]any{"term": " ", "physical": "member"}, "invalid_term"},
-		{"물리명 없음", map[string]any{"term": "회원", "physical": " "}, "invalid_physical"},
+		{"용어 없음", map[string]any{"projectId": e.project.ID, "term": " ", "physical": "member"}, "invalid_term"},
+		{"물리명 없음", map[string]any{"projectId": e.project.ID, "term": "회원", "physical": " "}, "invalid_physical"},
 	} {
 		code, body := alice.do("POST", "/api/v1/glossary/", tc.body)
 		if code != 400 {
@@ -94,11 +94,12 @@ func TestGlossaryBulkSkipsExisting(t *testing.T) {
 	alice := loginAs(t, e, "alice")
 
 	if code, _ := alice.do("POST", "/api/v1/glossary/",
-		map[string]any{"term": "회원", "physical": "member"}); code != 201 {
+		map[string]any{"projectId": e.project.ID, "term": "회원", "physical": "member"}); code != 201 {
 		t.Fatal("준비 실패")
 	}
 	code, body := alice.do("POST", "/api/v1/glossary/bulk", map[string]any{
-		"text": "# 주석\n주문, order\n회원, mbr\n주문 일시\torder_dttm\t결제 시각 아님\n망가진줄\n",
+		"projectId": e.project.ID,
+		"text":      "# 주석\n주문, order\n회원, mbr\n주문 일시\torder_dttm\t결제 시각 아님\n망가진줄\n",
 	})
 	if code != 200 {
 		t.Fatalf("여러 줄 = %d: %v", code, body)
@@ -117,7 +118,7 @@ func TestGlossaryBulkSkipsExisting(t *testing.T) {
 	}
 
 	// 건너뛴 줄이 기존 항목을 덮어쓰지 않아야 한다.
-	_, list := alice.do("GET", "/api/v1/glossary/?q=회원", nil)
+	_, list := alice.do("GET", "/api/v1/glossary/?project="+e.project.ID+"&q=회원", nil)
 	terms, _ := list["terms"].([]any)
 	if len(terms) != 1 {
 		t.Fatalf("회원 검색 = %d건", len(terms))
@@ -137,7 +138,8 @@ func TestGlossaryCategoriesRoundTrip(t *testing.T) {
 	alice := loginAs(t, e, "alice")
 
 	code, body := alice.do("POST", "/api/v1/glossary/", map[string]any{
-		"term": "비밀번호", "physical": "password",
+		"projectId": e.project.ID,
+		"term":      "비밀번호", "physical": "password",
 		"cat1": " 회원 ", "cat2": "인증", "cat3": "",
 	})
 	if code != 201 {
@@ -154,11 +156,11 @@ func TestGlossaryCategoriesRoundTrip(t *testing.T) {
 
 	// 분류 없는 용어도 그대로 받는다.
 	if code, body := alice.do("POST", "/api/v1/glossary/",
-		map[string]any{"term": "번호", "physical": "no"}); code != 201 {
+		map[string]any{"projectId": e.project.ID, "term": "번호", "physical": "no"}); code != 201 {
 		t.Fatalf("분류 없는 추가 = %d: %v", code, body)
 	}
 
-	_, list := alice.do("GET", "/api/v1/glossary/", nil)
+	_, list := alice.do("GET", "/api/v1/glossary/?project="+e.project.ID, nil)
 	cats, _ := list["categories"].([]any)
 	if len(cats) != 1 {
 		t.Fatalf("분류 조합 = %v, 쓰인 것 하나여야 합니다", list["categories"])
@@ -169,7 +171,7 @@ func TestGlossaryCategoriesRoundTrip(t *testing.T) {
 	}
 
 	// 분류로도 찾힌다.
-	_, found := alice.do("GET", "/api/v1/glossary/?q=인증", nil)
+	_, found := alice.do("GET", "/api/v1/glossary/?project="+e.project.ID+"&q=인증", nil)
 	terms, _ := found["terms"].([]any)
 	if len(terms) != 1 {
 		t.Errorf("분류로 찾기 = %d건", len(terms))
@@ -185,7 +187,8 @@ func TestGlossaryBulkTakesCategories(t *testing.T) {
 	alice := loginAs(t, e, "alice")
 
 	code, body := alice.do("POST", "/api/v1/glossary/bulk", map[string]any{
-		"text": "비밀번호\tpassword\t로그인 자격\t회원\t인증\t자격\n주문, order, , 주문\n번호, no\n",
+		"projectId": e.project.ID,
+		"text":      "비밀번호\tpassword\t로그인 자격\t회원\t인증\t자격\n주문, order, , 주문\n번호, no\n",
 	})
 	if code != 200 {
 		t.Fatalf("여러 줄 = %d: %v", code, body)
@@ -194,7 +197,7 @@ func TestGlossaryBulkTakesCategories(t *testing.T) {
 		t.Fatalf("더한 수 = %d, 기대 3: %v", len(added), body)
 	}
 
-	_, list := alice.do("GET", "/api/v1/glossary/?q=password", nil)
+	_, list := alice.do("GET", "/api/v1/glossary/?project="+e.project.ID+"&q=password", nil)
 	terms, _ := list["terms"].([]any)
 	if len(terms) != 1 {
 		t.Fatalf("찾기 = %d건", len(terms))
@@ -207,7 +210,7 @@ func TestGlossaryBulkTakesCategories(t *testing.T) {
 		t.Errorf("설명 = %v", got["note"])
 	}
 
-	_, one := alice.do("GET", "/api/v1/glossary/?q=order", nil)
+	_, one := alice.do("GET", "/api/v1/glossary/?project="+e.project.ID+"&q=order", nil)
 	rows, _ := one["terms"].([]any)
 	row, _ := rows[0].(map[string]any)
 	if row["cat1"] != "주문" {

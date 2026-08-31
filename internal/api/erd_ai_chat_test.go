@@ -81,7 +81,7 @@ func (c *client) doRaw(method, path string, body any) (int, string) {
 func TestERDChatAppliesToolCall(t *testing.T) {
 	e := newTestEnv(t)
 	c := login(t, e, "alice")
-	docID := createStandalone(t, c, "AI 대화", "postgres")
+	docID := createStandalone(t, e, c, "AI 대화", "postgres")
 
 	// 1회차: 툴 호출. 2회차: 결과를 받고 마무리 문장.
 	fake := newFakeLLM(t, [][]string{

@@ -20,10 +20,14 @@ import (
 
 // GlossaryTerm은 사전의 한 줄이다.
 type GlossaryTerm struct {
-	ID       string `json:"id"`
-	Term     string `json:"term"`
-	Physical string `json:"physical"`
-	Note     string `json:"note,omitempty"`
+	ID string `json:"id"`
+	// ProjectID는 이 말이 통하는 범위다. 사전은 팀의 약속이고, 팀이 다르면 약속도
+	// 다르다 — "주문"이 한쪽에서는 장바구니이고 다른 쪽에서는 배송 지시서인 일은
+	// 실제로 있다.
+	ProjectID string `json:"projectId"`
+	Term      string `json:"term"`
+	Physical  string `json:"physical"`
+	Note      string `json:"note,omitempty"`
 	// Cat1~3은 대·중·소 분류다. 셋 다 비어 있을 수 있다 — 처음부터 분류 체계를
 	// 세우고 시작하는 팀은 없고, 필수로 만들면 아무 말이나 넣게 된다.
 	Cat1 string `json:"cat1,omitempty"`
@@ -39,7 +43,7 @@ type GlossaryTerm struct {
 // ErrDuplicateTerm은 이미 사전에 있는 말이다.
 var ErrDuplicateTerm = errors.New("이미 있는 용어입니다")
 
-const glossarySelect = `SELECT g.id, g.term, g.physical, g.note,
+const glossarySelect = `SELECT g.id, g.project_id, g.term, g.physical, g.note,
 	g.cat1, g.cat2, g.cat3,
 	COALESCE(g.created_by, ''), COALESCE(u.display_name, u.username, ''),
 	g.created_at, g.updated_at
@@ -51,18 +55,18 @@ const glossarySelect = `SELECT g.id, g.term, g.physical, g.note,
 // 세 곳을 모두 뒤지는 이유: 사람은 "회원"으로도, "member"로도, "가입"으로도 찾는다.
 // 어느 칸에서 찾을지 고르게 하면 그 고르개 자체가 한 걸음이 되고, 사전은 찾기
 // 귀찮은 것이 되면 아무도 보지 않는다.
-func (s *Store) ListGlossary(ctx context.Context, q string, limit int) ([]*GlossaryTerm, error) {
-	query := glossarySelect
-	args := []any{}
+func (s *Store) ListGlossary(ctx context.Context, projectID, q string, limit int) ([]*GlossaryTerm, error) {
+	query := glossarySelect + ` WHERE g.project_id = ?`
+	args := []any{projectID}
 	if q = strings.TrimSpace(q); q != "" {
 		// 분류도 함께 뒤진다. "회원"으로 찾는 사람은 그 말 자체를 찾을 수도, 그
 		// 덩어리를 찾을 수도 있다 — 어느 쪽인지 되묻지 않고 둘 다 보여준다.
-		query += ` WHERE g.term LIKE ? COLLATE NOCASE
+		query += ` AND (g.term LIKE ? COLLATE NOCASE
 			OR g.physical LIKE ? COLLATE NOCASE
 			OR g.note LIKE ? COLLATE NOCASE
 			OR g.cat1 LIKE ? COLLATE NOCASE
 			OR g.cat2 LIKE ? COLLATE NOCASE
-			OR g.cat3 LIKE ? COLLATE NOCASE`
+			OR g.cat3 LIKE ? COLLATE NOCASE)`
 		like := "%" + q + "%"
 		args = append(args, like, like, like, like, like, like)
 	}
@@ -104,7 +108,7 @@ func (s *Store) GetGlossaryTerm(ctx context.Context, id string) (*GlossaryTerm, 
 
 func scanGlossary(row interface{ Scan(...any) error }) (*GlossaryTerm, error) {
 	var t GlossaryTerm
-	if err := row.Scan(&t.ID, &t.Term, &t.Physical, &t.Note,
+	if err := row.Scan(&t.ID, &t.ProjectID, &t.Term, &t.Physical, &t.Note,
 		&t.Cat1, &t.Cat2, &t.Cat3,
 		&t.CreatedBy, &t.CreatedName, &t.CreatedAt, &t.UpdatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -117,6 +121,7 @@ func scanGlossary(row interface{ Scan(...any) error }) (*GlossaryTerm, error) {
 
 // SaveGlossaryParams는 사전 한 줄의 입력이다.
 type SaveGlossaryParams struct {
+	ProjectID string
 	Term      string
 	Physical  string
 	Note      string
@@ -131,9 +136,9 @@ func (s *Store) CreateGlossaryTerm(ctx context.Context, p SaveGlossaryParams) (*
 	id := uuid.NewString()
 	now := nowString()
 	_, err := s.db.ExecContext(ctx, `INSERT INTO glossary_terms
-		(id, term, physical, note, cat1, cat2, cat3, created_by, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, p.Term, p.Physical, p.Note, p.Cat1, p.Cat2, p.Cat3,
+		(id, project_id, term, physical, note, cat1, cat2, cat3, created_by, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, p.ProjectID, p.Term, p.Physical, p.Note, p.Cat1, p.Cat2, p.Cat3,
 		nullString(p.CreatedBy), now, now)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -178,11 +183,11 @@ func (s *Store) DeleteGlossaryTerm(ctx context.Context, id string) error {
 // 분류를 따로 표로 두지 않으므로 목록은 여기서 만든다. 조합(대·중·소)을 그대로
 // 돌려주는 이유: 화면이 "이 대분류 아래에서 쓰인 중분류"를 제안하려면 어느 분류가
 // 어느 분류 아래에 있었는지를 알아야 한다.
-func (s *Store) GlossaryCategories(ctx context.Context) ([][3]string, error) {
+func (s *Store) GlossaryCategories(ctx context.Context, projectID string) ([][3]string, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT cat1, cat2, cat3
 		FROM glossary_terms
-		WHERE cat1 <> '' OR cat2 <> '' OR cat3 <> ''
-		ORDER BY cat1 COLLATE NOCASE, cat2 COLLATE NOCASE, cat3 COLLATE NOCASE`)
+		WHERE project_id = ? AND (cat1 <> '' OR cat2 <> '' OR cat3 <> '')
+		ORDER BY cat1 COLLATE NOCASE, cat2 COLLATE NOCASE, cat3 COLLATE NOCASE`, projectID)
 	if err != nil {
 		return nil, fmt.Errorf("list glossary categories: %w", err)
 	}

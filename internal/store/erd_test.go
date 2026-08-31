@@ -269,7 +269,7 @@ func TestERDDocumentList(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	list, err := st.ListERDDocuments(ctx, nil, 0)
+	list, err := st.ListERDDocuments(ctx, nil, nil, 0)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -284,7 +284,7 @@ func TestERDDocumentList(t *testing.T) {
 	}
 
 	// 접근 가능한 커넥션으로 필터하면 다른 커넥션의 문서는 보이지 않아야 한다.
-	other, err := st.ListERDDocuments(ctx, []string{"other-conn"}, 0)
+	other, err := st.ListERDDocuments(ctx, []string{"other-conn"}, nil, 0)
 	if err != nil {
 		t.Fatalf("list filtered: %v", err)
 	}
@@ -294,7 +294,7 @@ func TestERDDocumentList(t *testing.T) {
 
 	// 빈 슬라이스는 "접근 가능한 커넥션이 없음"이다. 이것을 nil(제한 없음)과 같이
 	// 취급하면 권한 없는 사용자에게 모든 문서가 노출된다.
-	none, err := st.ListERDDocuments(ctx, []string{}, 0)
+	none, err := st.ListERDDocuments(ctx, []string{}, nil, 0)
 	if err != nil {
 		t.Fatalf("list with empty scope: %v", err)
 	}
@@ -303,7 +303,7 @@ func TestERDDocumentList(t *testing.T) {
 	}
 
 	// nil은 제한 없음이다. 관리 목적의 전체 조회에 쓴다.
-	all, err := st.ListERDDocuments(ctx, nil, 0)
+	all, err := st.ListERDDocuments(ctx, nil, nil, 0)
 	if err != nil {
 		t.Fatalf("list unrestricted: %v", err)
 	}

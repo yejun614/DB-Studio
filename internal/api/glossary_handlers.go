@@ -11,34 +11,44 @@ import (
 
 // 용어 사전.
 //
-// 읽기는 누구나, 고치기는 커넥션 관리자만이다. 이것은 팀의 약속이라 아무나 바꾸면
+// 프로젝트마다 하나씩 있다. 사전은 팀의 약속이고 팀이 다르면 약속도 다르다 —
+// "주문"이 한쪽에서는 결제 전 장바구니이고 다른 쪽에서는 배송 지시서인 일은 실제로
+// 있다. 앱 하나에 사전이 하나뿐이면 그 둘 중 하나는 사전에 적지 못한 채로 쓰게 된다.
+//
+// 읽기는 참여자 누구나, 고치기는 커넥션 관리자만이다. 이것은 팀의 약속이라 아무나 바꾸면
 // 약속이 아니게 되지만, 아무나 볼 수 없으면 지킬 수도 없다 — 설계하는 사람이
 // 찾아보는 것이 이 표의 유일한 쓸모다.
 
 const maxTermLen = 80
 
 type glossaryRequest struct {
-	Term     string `json:"term"`
-	Physical string `json:"physical"`
-	Note     string `json:"note"`
-	Cat1     string `json:"cat1"`
-	Cat2     string `json:"cat2"`
-	Cat3     string `json:"cat3"`
+	ProjectID string `json:"projectId"`
+	Term      string `json:"term"`
+	Physical  string `json:"physical"`
+	Note      string `json:"note"`
+	Cat1      string `json:"cat1"`
+	Cat2      string `json:"cat2"`
+	Cat3      string `json:"cat3"`
 }
 
 func (s *Server) handleListGlossary(c *fiber.Ctx) error {
-	terms, err := s.st.ListGlossary(c.Context(), c.Query("q"), c.QueryInt("limit", 500))
+	project, perr := s.requireProject(c, c.Query("project"))
+	if perr != nil {
+		return perr
+	}
+	terms, err := s.st.ListGlossary(c.Context(), project.ID, c.Query("q"), c.QueryInt("limit", 500))
 	if err != nil {
 		return err
 	}
 	// 분류 목록은 검색어와 무관하게 사전 전체에서 모은다. 새 용어를 넣는 사람은
 	// "이미 쓰이던 분류"를 골라야 하는데, 그것이 지금 화면에 걸린 검색 결과에만
 	// 있으라는 법이 없다.
-	cats, err := s.st.GlossaryCategories(c.Context())
+	cats, err := s.st.GlossaryCategories(c.Context(), project.ID)
 	if err != nil {
 		return err
 	}
 	return c.JSON(fiber.Map{
+		"project":    project,
 		"terms":      terms,
 		"categories": cats,
 		// 고칠 수 있는 사람인지 화면이 알아야 한다. 눌러 보고서야 거부되는 버튼은
@@ -53,6 +63,11 @@ func (s *Server) handleCreateGlossaryTerm(c *fiber.Ctx) error {
 		// 거절 응답은 glossaryParams 가 이미 썼다.
 		return nil
 	}
+	project, perr := s.requireProject(c, p.ProjectID)
+	if perr != nil {
+		return perr
+	}
+	p.ProjectID = project.ID
 	u := currentUser(c)
 	p.CreatedBy = u.ID
 
@@ -81,10 +96,17 @@ func (s *Server) handleUpdateGlossaryTerm(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	// 고칠 수 있는 사람인지는 그 말이 든 프로젝트로 판단한다. 요청이 들고 온
+	// 프로젝트가 아니라 — 그러면 남의 사전을 자기 프로젝트 이름으로 고칠 수 있다.
+	if _, perr := s.requireProject(c, before.ProjectID); perr != nil {
+		return perr
+	}
 	p, ok := glossaryParams(c)
 	if !ok {
 		return nil
 	}
+	// 프로젝트는 옮기지 않는다. 옮기면 그 말을 쓰던 쪽에서 소리 없이 사라진다.
+	p.ProjectID = before.ProjectID
 
 	term, uerr := s.st.UpdateGlossaryTerm(c.Context(), id, p)
 	if errors.Is(uerr, store.ErrDuplicateTerm) {
@@ -118,6 +140,9 @@ func (s *Server) handleDeleteGlossaryTerm(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	if _, perr := s.requireProject(c, before.ProjectID); perr != nil {
+		return perr
+	}
 	if err := s.st.DeleteGlossaryTerm(c.Context(), id); err != nil {
 		return err
 	}
@@ -139,10 +164,15 @@ func (s *Server) handleDeleteGlossaryTerm(c *fiber.Ctx) error {
 // 붙여넣는 일을 반복하게 된다. 무엇을 건너뛰었는지는 결과로 돌려준다.
 func (s *Server) handleBulkGlossary(c *fiber.Ctx) error {
 	var body struct {
-		Text string `json:"text"`
+		ProjectID string `json:"projectId"`
+		Text      string `json:"text"`
 	}
 	if err := c.BodyParser(&body); err != nil {
 		return fail(c, fiber.StatusBadRequest, "bad_request", "요청 본문을 해석할 수 없습니다")
+	}
+	project, perr := s.requireProject(c, body.ProjectID)
+	if perr != nil {
+		return perr
 	}
 	u := currentUser(c)
 
@@ -168,6 +198,7 @@ func (s *Server) handleBulkGlossary(c *fiber.Ctx) error {
 			continue
 		}
 		p := store.SaveGlossaryParams{
+			ProjectID: project.ID,
 			Term:      strings.TrimSpace(parts[0]),
 			Physical:  strings.TrimSpace(parts[1]),
 			CreatedBy: u.ID,
@@ -215,9 +246,10 @@ func glossaryParams(c *fiber.Ctx) (store.SaveGlossaryParams, bool) {
 		return store.SaveGlossaryParams{}, false
 	}
 	p := store.SaveGlossaryParams{
-		Term:     strings.TrimSpace(req.Term),
-		Physical: strings.TrimSpace(req.Physical),
-		Note:     strings.TrimSpace(req.Note),
+		ProjectID: strings.TrimSpace(req.ProjectID),
+		Term:      strings.TrimSpace(req.Term),
+		Physical:  strings.TrimSpace(req.Physical),
+		Note:      strings.TrimSpace(req.Note),
 		// 분류는 셋 다 비어 있을 수 있다. 처음부터 분류 체계를 세우고 시작하는
 		// 팀은 없고, 필수로 만들면 아무 말이나 넣게 된다.
 		Cat1: strings.TrimSpace(req.Cat1),

@@ -157,7 +157,7 @@ func TestStructureDocumentIsSharedPerConnection(t *testing.T) {
 		t.Errorf("문서 종류 = %q, 기대 structure", doc.Kind)
 	}
 	// 초안 목록에는 나오지 않아야 한다(0022가 걱정한 오염).
-	metas, err := e.st.ListERDDocuments(context.Background(), nil, 100)
+	metas, err := e.st.ListERDDocuments(context.Background(), nil, nil, 100)
 	if err != nil {
 		t.Fatalf("문서 목록: %v", err)
 	}

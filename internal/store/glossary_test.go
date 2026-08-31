@@ -9,7 +9,7 @@ import (
 	"dbstudio/internal/crypto"
 )
 
-func glossaryFixture(t *testing.T) (context.Context, *Store) {
+func glossaryFixture(t *testing.T) (context.Context, *Store, string) {
 	t.Helper()
 	ctx := context.Background()
 	box, err := crypto.NewSecretBox(make([]byte, 32))
@@ -21,7 +21,12 @@ func glossaryFixture(t *testing.T) (context.Context, *Store) {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { st.Close() })
-	return ctx, st
+	// 사전은 프로젝트마다 하나다(0037). 시험용으로 하나 만들어 둔다.
+	pj, err := st.CreateProject(ctx, SaveProjectParams{Name: "테스트 프로젝트"})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	return ctx, st, pj.ID
 }
 
 // 같은 말이 두 번 오르면 사전이 아니다.
@@ -29,25 +34,25 @@ func glossaryFixture(t *testing.T) (context.Context, *Store) {
 // 대소문자도 구분하지 않는다 — "Member"와 "member"가 따로 오르면, 찾는 사람은 둘 중
 // 어느 쪽이 약속인지 알 수 없다.
 func TestGlossaryTermIsUnique(t *testing.T) {
-	ctx, st := glossaryFixture(t)
+	ctx, st, pid := glossaryFixture(t)
 
 	if _, err := st.CreateGlossaryTerm(ctx, SaveGlossaryParams{
-		Term: "회원", Physical: "member",
+		ProjectID: pid, Term: "회원", Physical: "member",
 	}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	if _, err := st.CreateGlossaryTerm(ctx, SaveGlossaryParams{
-		Term: "회원", Physical: "mbr",
+		ProjectID: pid, Term: "회원", Physical: "mbr",
 	}); !errors.Is(err, ErrDuplicateTerm) {
 		t.Errorf("같은 용어 = %v, ErrDuplicateTerm 이어야 합니다", err)
 	}
 	if _, err := st.CreateGlossaryTerm(ctx, SaveGlossaryParams{
-		Term: "Member", Physical: "member",
+		ProjectID: pid, Term: "Member", Physical: "member",
 	}); err != nil {
 		t.Fatalf("영문 용어: %v", err)
 	}
 	if _, err := st.CreateGlossaryTerm(ctx, SaveGlossaryParams{
-		Term: "MEMBER", Physical: "mbr",
+		ProjectID: pid, Term: "MEMBER", Physical: "mbr",
 	}); !errors.Is(err, ErrDuplicateTerm) {
 		t.Errorf("대소문자만 다른 용어 = %v, 같은 것으로 봐야 합니다", err)
 	}
@@ -59,12 +64,12 @@ func TestGlossaryTermIsUnique(t *testing.T) {
 // 일이다. 저장 계층에서 막으면 사전에 적지 못한 채로 쓰게 된다 — 사전 밖의 약속이
 // 생기는 것이 가장 나쁘다.
 func TestGlossaryPhysicalMayRepeat(t *testing.T) {
-	ctx, st := glossaryFixture(t)
+	ctx, st, pid := glossaryFixture(t)
 
-	if _, err := st.CreateGlossaryTerm(ctx, SaveGlossaryParams{Term: "번호", Physical: "no"}); err != nil {
+	if _, err := st.CreateGlossaryTerm(ctx, SaveGlossaryParams{ProjectID: pid, Term: "번호", Physical: "no"}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if _, err := st.CreateGlossaryTerm(ctx, SaveGlossaryParams{Term: "아니오", Physical: "no"}); err != nil {
+	if _, err := st.CreateGlossaryTerm(ctx, SaveGlossaryParams{ProjectID: pid, Term: "아니오", Physical: "no"}); err != nil {
 		t.Errorf("같은 물리명을 막았습니다: %v", err)
 	}
 }
@@ -74,11 +79,11 @@ func TestGlossaryPhysicalMayRepeat(t *testing.T) {
 // 사람은 "회원"으로도, "member"로도, "가입"으로도 찾는다. 어느 칸에서 찾을지 고르게
 // 하면 그 고르개가 한 걸음이 되고, 사전은 찾기 귀찮은 것이 되면 아무도 보지 않는다.
 func TestGlossarySearchLooksEverywhere(t *testing.T) {
-	ctx, st := glossaryFixture(t)
+	ctx, st, pid := glossaryFixture(t)
 	for _, p := range []SaveGlossaryParams{
-		{Term: "회원", Physical: "member", Note: "가입한 사람"},
-		{Term: "주문 일시", Physical: "order_dttm", Note: "결제 완료 시각이 아니다"},
-		{Term: "번호", Physical: "no"},
+		{ProjectID: pid, Term: "회원", Physical: "member", Note: "가입한 사람"},
+		{ProjectID: pid, Term: "주문 일시", Physical: "order_dttm", Note: "결제 완료 시각이 아니다"},
+		{ProjectID: pid, Term: "번호", Physical: "no"},
 	} {
 		if _, err := st.CreateGlossaryTerm(ctx, p); err != nil {
 			t.Fatalf("create %s: %v", p.Term, err)
@@ -91,7 +96,7 @@ func TestGlossarySearchLooksEverywhere(t *testing.T) {
 		{"가입", "회원"},       // 설명으로
 		{"MEMBER", "회원"},   // 대소문자 무시
 	} {
-		got, err := st.ListGlossary(ctx, tc.q, 0)
+		got, err := st.ListGlossary(ctx, pid, tc.q, 0)
 		if err != nil {
 			t.Fatalf("list %q: %v", tc.q, err)
 		}
@@ -102,7 +107,7 @@ func TestGlossarySearchLooksEverywhere(t *testing.T) {
 
 	// 사전은 찾아보는 것이라 가나다순이어야 한다. 최근 순이면 같은 말을 찾을 때마다
 	// 자리가 달라진다.
-	all, err := st.ListGlossary(ctx, "", 0)
+	all, err := st.ListGlossary(ctx, pid, "", 0)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -116,14 +121,14 @@ func TestGlossarySearchLooksEverywhere(t *testing.T) {
 }
 
 func TestGlossaryUpdateAndDelete(t *testing.T) {
-	ctx, st := glossaryFixture(t)
-	made, err := st.CreateGlossaryTerm(ctx, SaveGlossaryParams{Term: "회원", Physical: "member"})
+	ctx, st, pid := glossaryFixture(t)
+	made, err := st.CreateGlossaryTerm(ctx, SaveGlossaryParams{ProjectID: pid, Term: "회원", Physical: "member"})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
 	got, err := st.UpdateGlossaryTerm(ctx, made.ID, SaveGlossaryParams{
-		Term: "회원", Physical: "mbr", Note: "약어로 바꿈",
+		ProjectID: pid, Term: "회원", Physical: "mbr", Note: "약어로 바꿈",
 	})
 	if err != nil {
 		t.Fatalf("update: %v", err)
@@ -156,12 +161,12 @@ func termNames(terms []*GlossaryTerm) []string {
 // 처음부터 분류 체계를 세우고 시작하는 팀은 없다. 필수로 만들면 아무 말이나 넣게
 // 되고, 그렇게 들어간 분류는 없느니만 못하다.
 func TestGlossaryCategoriesAreOptionalAndSearchable(t *testing.T) {
-	ctx, st := glossaryFixture(t)
+	ctx, st, pid := glossaryFixture(t)
 	for _, p := range []SaveGlossaryParams{
-		{Term: "회원", Physical: "member", Cat1: "회원", Cat2: "기본"},
-		{Term: "비밀번호", Physical: "password", Cat1: "회원", Cat2: "인증", Cat3: "자격"},
-		{Term: "주문", Physical: "order", Cat1: "주문"},
-		{Term: "번호", Physical: "no"}, // 분류 없음
+		{ProjectID: pid, Term: "회원", Physical: "member", Cat1: "회원", Cat2: "기본"},
+		{ProjectID: pid, Term: "비밀번호", Physical: "password", Cat1: "회원", Cat2: "인증", Cat3: "자격"},
+		{ProjectID: pid, Term: "주문", Physical: "order", Cat1: "주문"},
+		{ProjectID: pid, Term: "번호", Physical: "no"}, // 분류 없음
 	} {
 		if _, err := st.CreateGlossaryTerm(ctx, p); err != nil {
 			t.Fatalf("create %s: %v", p.Term, err)
@@ -170,7 +175,7 @@ func TestGlossaryCategoriesAreOptionalAndSearchable(t *testing.T) {
 
 	// 분류로도 찾힌다. "회원"으로 찾는 사람은 그 말 자체를 찾을 수도, 그 덩어리를
 	// 찾을 수도 있다 — 어느 쪽인지 되묻지 않고 둘 다 보여준다.
-	got, err := st.ListGlossary(ctx, "인증", 0)
+	got, err := st.ListGlossary(ctx, pid, "인증", 0)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -180,7 +185,7 @@ func TestGlossaryCategoriesAreOptionalAndSearchable(t *testing.T) {
 
 	// 분류가 있는 것이 먼저, 없는 것이 뒤로 간다. 뒤에 있는 것은 아직 자리를 못
 	// 정한 것들이라 그 자체로 "정리할 것" 목록이 된다.
-	all, err := st.ListGlossary(ctx, "", 0)
+	all, err := st.ListGlossary(ctx, pid, "", 0)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -196,19 +201,19 @@ func TestGlossaryCategoriesAreOptionalAndSearchable(t *testing.T) {
 // 분류를 따로 표로 두지 않기 때문이다. 조합 그대로 돌려주어야 화면이 "이 대분류
 // 아래에서 쓰인 중분류"를 제안할 수 있다.
 func TestGlossaryCategoryListComesFromUse(t *testing.T) {
-	ctx, st := glossaryFixture(t)
+	ctx, st, pid := glossaryFixture(t)
 	for _, p := range []SaveGlossaryParams{
-		{Term: "회원", Physical: "member", Cat1: "회원", Cat2: "기본"},
-		{Term: "회원명", Physical: "member_nm", Cat1: "회원", Cat2: "기본"},
-		{Term: "비밀번호", Physical: "password", Cat1: "회원", Cat2: "인증"},
-		{Term: "번호", Physical: "no"},
+		{ProjectID: pid, Term: "회원", Physical: "member", Cat1: "회원", Cat2: "기본"},
+		{ProjectID: pid, Term: "회원명", Physical: "member_nm", Cat1: "회원", Cat2: "기본"},
+		{ProjectID: pid, Term: "비밀번호", Physical: "password", Cat1: "회원", Cat2: "인증"},
+		{ProjectID: pid, Term: "번호", Physical: "no"},
 	} {
 		if _, err := st.CreateGlossaryTerm(ctx, p); err != nil {
 			t.Fatalf("create: %v", err)
 		}
 	}
 
-	cats, err := st.GlossaryCategories(ctx)
+	cats, err := st.GlossaryCategories(ctx, pid)
 	if err != nil {
 		t.Fatalf("categories: %v", err)
 	}
@@ -225,13 +230,13 @@ func TestGlossaryCategoryListComesFromUse(t *testing.T) {
 
 	// 마지막 용어가 분류를 잃으면 그 조합도 목록에서 사라진다. 쓰이지 않는 분류를
 	// 누가 치우는가는 물을 필요조차 없어야 한다.
-	terms, _ := st.ListGlossary(ctx, "비밀번호", 0)
+	terms, _ := st.ListGlossary(ctx, pid, "비밀번호", 0)
 	if _, err := st.UpdateGlossaryTerm(ctx, terms[0].ID, SaveGlossaryParams{
-		Term: "비밀번호", Physical: "password", Cat1: "회원", Cat2: "기본",
+		ProjectID: pid, Term: "비밀번호", Physical: "password", Cat1: "회원", Cat2: "기본",
 	}); err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	cats, _ = st.GlossaryCategories(ctx)
+	cats, _ = st.GlossaryCategories(ctx, pid)
 	if len(cats) != 1 || cats[0] != [3]string{"회원", "기본", ""} {
 		t.Errorf("고친 뒤 분류 = %v, 쓰이지 않는 조합이 남았습니다", cats)
 	}

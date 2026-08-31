@@ -28,7 +28,13 @@ func (s *Server) handleListERDDocuments(c *fiber.Ctx) error {
 	if ids == nil {
 		ids = []string{}
 	}
-	docs, err := s.st.ListERDDocuments(c.Context(), ids, 0)
+	// 독립 초안에는 커넥션이 없어 위 목록으로 걸러지지 않는다. 프로젝트가 그
+	// 초안들의 유일한 울타리다.
+	scope, err := s.projectFilter(c)
+	if err != nil {
+		return err
+	}
+	docs, err := s.st.ListERDDocuments(c.Context(), ids, scope, 0)
 	if err != nil {
 		return err
 	}
@@ -88,6 +94,7 @@ func canManageERD(connectionID, createdBy string, u *model.User) bool {
 func (s *Server) handleCreateERDDocument(c *fiber.Ctx) error {
 	var body struct {
 		Name           string `json:"name"`
+		ProjectID      string `json:"projectId"`
 		ConnectionID   string `json:"connectionId"`
 		Dialect        string `json:"dialect"`
 		Note           string `json:"note"`
@@ -104,9 +111,9 @@ func (s *Server) handleCreateERDDocument(c *fiber.Ctx) error {
 		return fail(c, fiber.StatusBadRequest, "bad_request", "문서 이름이 너무 깁니다 (120자 제한)")
 	}
 
-	// 독립 초안. 대상이 없으므로 dialect를 직접 받는다.
+	// 독립 초안. 대상이 없으므로 dialect와 프로젝트를 직접 받는다.
 	if strings.TrimSpace(body.ConnectionID) == "" {
-		return s.createStandaloneERDDocument(c, name, body.Dialect, body.Note)
+		return s.createStandaloneERDDocument(c, name, body.ProjectID, body.Dialect, body.Note)
 	}
 
 	conn, err := s.resolveERDConnection(c, body.ConnectionID)
@@ -161,7 +168,13 @@ func (s *Server) handleCreateERDDocument(c *fiber.Ctx) error {
 // 권한을 따로 묻지 않는다. 이 문서는 어떤 데이터베이스도 가리키지 않으므로
 // 만들어서 할 수 있는 일이 "그림을 그리는 것"뿐이고, 그 문턱을 세우면 정작
 // 설계를 시작하려는 사람이 매번 권한을 요청하게 된다.
-func (s *Server) createStandaloneERDDocument(c *fiber.Ctx, name, dialect, note string) error {
+func (s *Server) createStandaloneERDDocument(c *fiber.Ctx, name, projectID, dialect, note string) error {
+	// 대상 DB가 없으므로 프로젝트가 이 초안의 유일한 울타리다. 없으면 아무에게도
+	// 보이지 않는 문서가 되고, 만든 사람조차 목록에서 찾지 못한다.
+	project, perr := s.requireProject(c, projectID)
+	if perr != nil {
+		return perr
+	}
 	dialect = strings.TrimSpace(dialect)
 	if dialect == "" {
 		return fail(c, fiber.StatusBadRequest, "bad_request",
@@ -180,6 +193,7 @@ func (s *Server) createStandaloneERDDocument(c *fiber.Ctx, name, dialect, note s
 
 	docID := uuid.NewString()
 	doc := erd.NewDocument(docID, name, "", dialect)
+	doc.ProjectID = project.ID
 	u := currentUser(c)
 	if err := s.st.CreateERDDocument(c.Context(), doc, u.ID, strings.TrimSpace(note), nil); err != nil {
 		return err
@@ -796,6 +810,15 @@ func (s *Server) resolveERDDocument(c *fiber.Ctx, docID string, need model.Level
 		return nil, nil, false, err
 	}
 	if doc.ConnectionID == "" {
+		// 독립 초안은 대상이 없어 등급을 물을 곳이 없다. 프로젝트 참여가 그
+		// 자리를 대신한다 — 아무나 볼 수 있게 두면 프로젝트를 나눈 의미가 없다.
+		ok, perr := s.canSeeProject(c, doc.ProjectID)
+		if perr != nil {
+			return nil, nil, false, perr
+		}
+		if !ok {
+			return nil, nil, false, fiber.NewError(fiber.StatusNotFound, "문서를 찾을 수 없습니다")
+		}
 		return doc, nil, true, nil
 	}
 	conn, err := s.st.GetConnection(c.Context(), doc.ConnectionID)
