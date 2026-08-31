@@ -3,7 +3,7 @@
 # distroless 변종(docker/Dockerfile)과 같은 바이너리를 담는다. 다른 점은 바닥에
 # 셸과 패키지 관리자가 있다는 것뿐이다. 그것이 필요한 경우는 둘이다.
 #
-#   1. 매크로의 Lua sh.run (-allow-shell). distroless에는 /bin/sh 가 없다.
+#   1. 매크로의 셸 노드와 Lua sh.run (-allow-shell). distroless에는 /bin/sh 가 없다.
 #   2. 컨테이너에 들어가 상태를 들여다보는 운영(docker exec ... sh).
 #
 # 그 편의의 대가는 공격 면이다. 셸과 패키지 관리자가 있는 이미지는 침입자가
@@ -20,7 +20,16 @@ ARG VERSION=dev
 #   신뢰시킬 수 있다(그런 서버는 공개 CA 묶음만으로는 검증되지 않는다).
 # tzdata: 바이너리에 이미 임베드되어 있지만(time/tzdata), 컨테이너 안에서
 #   date 같은 도구를 쓸 때를 위해 함께 둔다.
-RUN apk add --no-cache ca-certificates tzdata \
+# bash: 매크로 셸 노드가 실제로 찾는 실행 파일이다(internal/macro/shell.go).
+#   alpine 바닥에는 busybox sh 만 있고, 화면의 셸 고르개는 bash 와 powershell 만
+#   내놓는다. 그래서 이것이 없으면 이 변종의 존재 이유(위 1번)가 성립하지 않는다 —
+#   -allow-shell 을 켜고 스크립트를 돌리면 "bash: executable file not found" 로
+#   실패하고, 그 메시지만 보고 원인을 짚기는 어렵다.
+#
+#   패키지를 하나 더 얹는 것이 공격 면을 넓히는 것은 맞다. 다만 이 변종은 이미
+#   셸과 apk 를 담고 있어서, 여기서 늘어나는 면은 distroless 와의 차이에 비하면
+#   없는 것에 가깝다. 셸이 필요 없으면 기본(distroless) 태그를 쓰는 것이 답이다.
+RUN apk add --no-cache ca-certificates tzdata bash \
  && addgroup -g 65532 -S app \
  && adduser -u 65532 -S app -G app -H -D \
  && mkdir -p /data \

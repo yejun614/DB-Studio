@@ -77,6 +77,28 @@ services:
       DBSTUDIO_METRIC_RETENTION: "48h"
       DBSTUDIO_LOG_LEVEL: "info"        # debug 로 올리면 모든 API 요청이 남는다
 
+      # ── 매크로의 셸 스크립트 ──────────────────────────────────────
+      # 켜면 매크로에서 bash 스크립트를 실행할 수 있다. 두 가지가 함께 필요하다.
+      #
+      #   1. 아래 줄을 켠다.
+      #   2. 위 image 를 **-alpine 태그**로 바꾼다(ghcr.io/.../db-studio:alpine).
+      #      기본 이미지(distroless)에는 셸이 아예 없어서, 이 값만 켜면 실행
+      #      시점에 "bash: executable file not found" 로 실패한다. alpine 변종에는
+      #      bash 가 함께 들어 있다.
+      #
+      # 사용자에게 **셸 스크립트 실행**(script.run) 권한도 줘야 한다 — 이중 잠금이라
+      # 이 값만으로는 아무도 실행할 수 없다.
+      #
+      # read_only: true 는 그대로 둬도 된다. 스크립트는 /tmp(tmpfs)에 쓰여 실행되고,
+      # 그 자리는 아래에서 이미 열어 두었다. 다른 경로에 써야 하면 그 경로에
+      # volume 이나 tmpfs 를 더한다.
+      #
+      # **켜기 전에**: 이 스위치가 켜지는 순간 이 컨테이너는 원격 셸이 된다. 그리고
+      # 이 컨테이너는 등록된 모든 DB의 열쇠를 들고 있고 밖으로 나가는 길도 열려
+      # 있다. 아래 ngrok 터널과 함께 켜는 것은 그 셸을 인터넷에 두는 일이다.
+      # DBSTUDIO_ALLOW_SHELL: "true"
+      # DBSTUDIO_SHELL_TIMEOUT: "2m"
+
       # ── 그 밖에 ────────────────────────────────────────────────────
       # 플래그 40개 전부에 DBSTUDIO_* 대응이 있다. 전체 목록:
       # https://github.com/yejun614/DB-Studio/blob/main/docs/getting-started.md#옵션

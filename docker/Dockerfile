@@ -18,8 +18,9 @@
 # scratch는 쓸 수 없다 — 모든 HTTPS 호출이
 # "x509: certificate signed by unknown authority" 로 실패한다. distroless/static은
 # 그 묶음(/etc/ssl/certs/ca-certificates.crt)과 nonroot 계정만 담은 700KB 바닥이다.
-# 셸이 없으므로 매크로의 sh.run(-allow-shell)은 이 변종에서 동작하지 않는다 —
-# 그것이 필요하면 alpine 변종을 쓴다(Dockerfile.alpine).
+# 셸이 없으므로 매크로의 셸 노드와 sh.run(-allow-shell)은 이 변종에서 동작하지
+# 않는다 — 그것이 필요하면 alpine 변종을 쓴다(Dockerfile.alpine). 거기에는 bash 가
+# 함께 들어 있어서 -allow-shell 만 켜면 바로 된다.
 
 # 데이터 디렉터리를 미리 만들어 소유자를 맞춘다.
 #
