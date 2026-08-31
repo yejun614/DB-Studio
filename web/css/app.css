@@ -2455,6 +2455,31 @@ tr.is-destructive td { background: hsl(var(--h-danger) / 0.08); }
   color: var(--text-dim);
 }
 
+/* ---------- 용어 사전 ---------- */
+
+.table.glossary td { vertical-align: top; }
+/* 물리명은 눌러서 복사한다. 사전에서 얻어 가는 것이 결국 이 한 낱말이라,
+   눈으로 읽고 손으로 옮겨 적게 하면 그 자리에서 오타가 난다. */
+.glossary-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+.glossary-copy code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+}
+.glossary-copy .icon { opacity: 0; transition: opacity 0.12s; }
+.glossary-copy:hover { background: var(--surface-2); border-color: var(--border-soft); }
+.glossary-copy:hover .icon { opacity: 0.7; }
+
 /* ---------- API 토큰 ---------- */
 
 /* 토큰 줄에는 스타일이 아예 없었다. 그래서 줄과 줄이 붙어 흐르고, 아래에 놓인

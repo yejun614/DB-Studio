@@ -24,6 +24,7 @@ import { renderERDList } from './pages/erd.js';
 import { renderStructure } from './pages/structure.js';
 import { renderERDEditor } from './pages/erdeditor.js';
 import { renderMigrations, renderMigrationDetail, renderVersions } from './pages/migrations.js';
+import { renderGlossary } from './pages/glossary.js';
 import { renderVCS } from './pages/vcs.js';
 import { renderNoSQL } from './pages/nosql.js';
 import { renderData } from './pages/data.js';
@@ -68,6 +69,7 @@ router.define('/erd', renderERDList);
 router.define('/erd/:id', renderERDEditor);
 router.define('/migrations', renderMigrations);
 router.define('/migrations/:id', renderMigrationDetail);
+router.define('/glossary', renderGlossary);
 router.define('/versions', renderVersions);
 router.define('/vcs', renderVCS);
 router.define('/assistant', renderAssistant);
@@ -140,6 +142,9 @@ const NAV = [
     items: [
       { path: '/structure', label: '구조', icon: 'workflow' },
       { path: '/erd', label: 'ERD 설계', icon: 'edit' },
+      // 용어 사전은 설계하다 찾아보는 것이라 ERD 옆에 둔다. 관리 묶음에 두면
+      // "설정"처럼 보이는데, 이것은 설정이 아니라 설계하는 사람이 매일 여는 표다.
+      { path: '/glossary', label: '용어 사전', icon: 'list' },
       { path: '/migrations', label: '마이그레이션', icon: 'play' },
       { path: '/versions', label: '버전 이력', icon: 'refresh' },
     ],
