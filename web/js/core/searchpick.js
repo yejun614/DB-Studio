@@ -266,16 +266,22 @@ export function searchPicker({
  * @param {string} [opts.value] 처음 값
  * @param {string} [opts.placeholder]
  * @param {(value: string) => void} [opts.onChange] 값이 바뀔 때
+ * @param {boolean} [opts.code] 제안을 식으로 칠할지 (기본 true)
+ * @param {string} [opts.iconName] 칸 앞 아이콘
  * @returns {{node: HTMLElement, input: HTMLInputElement, value: string, setItems: Function}}
  */
-export function suggestInput({ items = [], value = '', placeholder = '', onChange }) {
+export function suggestInput({
+  items = [], value = '', placeholder = '', onChange,
+  code = true, iconName = 'sparkles',
+}) {
   const toRow = (it) => ({
     value: it.value,
     label: it.label ?? it.value,
     hint: it.hint ?? '',
     group: it.group ?? '',
-    // 기본값은 식이다. 목록에서 함수와 괄호를 따로 칠한다.
-    code: true,
+    // 기본값은 식이라 함수와 괄호를 따로 칠한다. 사람 말이 들어오는 칸(분류
+    // 이름 같은)에서는 끄야 한다 — 한글을 코드처럼 칠하면 읽기 어렵다.
+    code,
   });
   let rows = items.map(toRow);
   let open = false;
@@ -284,7 +290,7 @@ export function suggestInput({ items = [], value = '', placeholder = '', onChang
   const box = h('input.input.pick-input.is-free', {
     type: 'text', value, placeholder, autocomplete: 'off', spellcheck: false,
   });
-  const field = h('div.pick-field', {}, icon('sparkles'), box);
+  const field = h('div.pick-field', {}, icon(iconName), box);
   const { list, place, attach, detach } = createList(box);
   const node = h('div.pick.is-single', {}, field, list);
 

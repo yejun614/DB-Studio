@@ -2484,6 +2484,30 @@ tr.is-destructive td { background: hsl(var(--h-danger) / 0.08); }
 .glossary-copy:hover { background: var(--surface-2); border-color: var(--border-soft); }
 .glossary-copy:hover .icon { opacity: 0.7; }
 
+/* 분류는 표의 맨 앞에 둔다. 사전을 훑는 사람은 덩어리로 읽고, 덩어리는 줄의
+   시작에 있어야 눈이 따라간다. 폭은 글자에 맞춰 줄인다(width: 1%) — 남는 자리는
+   설명 쪽으로 가야 한다. 거기가 글이 길어지는 칸이다. */
+.table.glossary thead th:first-child { width: 1%; }
+.glossary-cat { width: 1%; white-space: nowrap; }
+.glossary-cat-btn {
+  padding: 1px 5px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px;
+}
+.glossary-cat-btn:hover { background: var(--surface-2); color: var(--text); }
+.glossary-cat-sep { margin: 0 1px; color: var(--muted); opacity: 0.55; font-size: 11px; }
+
+/* 모달의 세 칸은 한 줄에 나란히 둔다. 대·중·소는 한 덩어리라, 위아래로 늘어놓으면
+   서로 다른 세 가지를 묻는 것처럼 보인다. */
+.glossary-cats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.glossary-cat-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.glossary-cat-field .field-label { font-size: 11.5px; }
+
 /* ---------- API 토큰 ---------- */
 
 /* 토큰 줄에는 스타일이 아예 없었다. 그래서 줄과 줄이 붙어 흐르고, 아래에 놓인
