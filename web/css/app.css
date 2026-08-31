@@ -2418,6 +2418,54 @@ tr.is-destructive td { background: hsl(var(--h-danger) / 0.08); }
 .mig-review-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; }
 .mig-review-comment { margin: 6px 0 0; font-size: 13px; white-space: pre-wrap; }
 
+/* ---------- API 토큰 ---------- */
+
+/* 토큰 줄에는 스타일이 아예 없었다. 그래서 줄과 줄이 붙어 흐르고, 아래에 놓인
+   폐기·삭제 단추가 **다음 토큰의 것**처럼 보였다 — 지우는 단추가 남의 줄에 붙어
+   보이는 것은 그냥 못생긴 것이 아니라 위험한 것이다. */
+.token-list { display: flex; flex-direction: column; gap: 8px; margin: 14px 0; }
+.token-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-alt);
+}
+.token-main { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.token-name { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.token-label {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 42ch;
+}
+.token-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px 10px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+/* 가운뎃점은 글자로 넣지 않고 사이에만 그린다. 줄이 접혀도 점이 줄 끝에 남지 않는다. */
+.token-meta > span + span::before { content: '·'; margin-right: 10px; color: var(--text-mute); }
+.token-prefix {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--text);
+}
+.token-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+/* 죽은 토큰은 흐리게. 지우지 않는 이유는 코드 주석에 적어 두었다. */
+.token-row.is-dead { opacity: 0.55; }
+.token-row.is-dead .token-label { text-decoration: line-through; }
+
 /* ---------- 활동 기록 ---------- */
 
 .mig-activity .field-help { margin-bottom: 14px; }

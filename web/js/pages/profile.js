@@ -229,23 +229,26 @@ function tokenCard() {
 function tokenRow(t, reload) {
   const revoked = Boolean(t.revokedAt);
   const expired = t.expiresAt && new Date(t.expiresAt) < new Date();
+  // 죽은 토큰(폐기·만료)은 흐리게 둔다. 지우지는 않는다 — "이런 토큰이 있었고
+  // 언제까지 살아 있었다"가 사고를 되짚을 때 필요한 사실이다.
   return h('div.token-row', { class: revoked || expired ? 'is-dead' : '' },
-    h('div', {},
+    h('div.token-main', {},
       h('div.token-name', {},
-        t.name,
+        h('span.token-label', {}, t.name),
         badge(t.scope === 'write' ? '쓰기' : '읽기', t.scope === 'write' ? 'warn' : 'neutral'),
         revoked ? badge('폐기됨', 'neutral') : null,
         !revoked && expired ? badge('만료됨', 'neutral') : null,
       ),
-      h('div.muted.small', {},
-        h('code', {}, `${t.prefix}…`),
-        ` · 발급 ${formatDate(t.createdAt)}`,
-        t.expiresAt ? ` · 만료 ${formatDate(t.expiresAt)}` : ' · 만료 없음',
+      // 앞자리는 로그에서 이 토큰을 알아보는 유일한 단서다. 눈에 띄게 둔다.
+      h('div.token-meta', {},
+        h('code.token-prefix', {}, `${t.prefix}…`),
+        h('span', {}, `발급 ${formatDate(t.createdAt)}`),
+        h('span', {}, t.expiresAt ? `만료 ${formatDate(t.expiresAt)}` : '만료 없음'),
       ),
-      h('div.muted.small', {},
-        t.lastUsedAt
+      h('div.token-meta', {},
+        h('span', {}, t.lastUsedAt
           ? `마지막 사용 ${relativeTime(t.lastUsedAt)}${t.lastUsedIp ? ` · ${t.lastUsedIp}` : ''}`
-          : '사용 기록 없음'),
+          : '사용 기록 없음')),
     ),
     h('div.token-actions', {},
       revoked ? null : h('button.btn.btn-small', {
