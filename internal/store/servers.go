@@ -18,20 +18,24 @@ import (
 // 서버는 접속 정보와 자격증명을 갖고, 커넥션(관리 대상 DB)이 그 아래에 달린다.
 // 자격증명이 여기 한 벌만 있다는 것이 이 구조의 요점이다.
 
-const serverColumns = `s.id, s.name, s.kind, s.host, s.port, s.options,
+const serverColumns = `s.id, s.project_id, COALESCE(pj.name, ''),
+	s.name, s.kind, s.host, s.port, s.options,
 	s.default_environment, s.tags, s.note, s.enabled,
 	s.created_by, s.created_at, s.updated_at,
 	COALESCE(sec.username, ''),
 	(SELECT COUNT(*) FROM connections c WHERE c.server_id = s.id)`
 
-const serverFrom = ` FROM servers s LEFT JOIN server_secrets sec ON sec.server_id = s.id`
+const serverFrom = ` FROM servers s
+	LEFT JOIN server_secrets sec ON sec.server_id = s.id
+	LEFT JOIN projects pj ON pj.id = s.project_id`
 
 func scanServer(row interface{ Scan(...any) error }) (*model.Server, error) {
 	var v model.Server
 	var options, tags, createdAt, updatedAt string
 	var createdBy sql.NullString
 	var enabled int
-	if err := row.Scan(&v.ID, &v.Name, &v.Kind, &v.Host, &v.Port, &options,
+	if err := row.Scan(&v.ID, &v.ProjectID, &v.ProjectName,
+		&v.Name, &v.Kind, &v.Host, &v.Port, &options,
 		&v.DefaultEnvironment, &tags, &v.Note, &enabled,
 		&createdBy, &createdAt, &updatedAt, &v.Username, &v.DatabaseCount); err != nil {
 		return nil, err
@@ -48,6 +52,8 @@ func scanServer(row interface{ Scan(...any) error }) (*model.Server, error) {
 // SaveServerParams는 서버 생성/수정 입력이다.
 // Password가 nil이면 기존 비밀번호를 유지한다(수정 시).
 type SaveServerParams struct {
+	// ProjectID는 이 서버가 속할 프로젝트다. 만들 때 반드시 있어야 한다.
+	ProjectID          string
 	Name               string
 	Kind               model.DBKind
 	Host               string
@@ -93,11 +99,14 @@ func (s *Store) CreateServer(ctx context.Context, p SaveServerParams) (*model.Se
 	if p.ActorID != "" {
 		createdBy = p.ActorID
 	}
+	if p.ProjectID == "" {
+		return nil, ErrNoProject
+	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO servers
-		(id, name, name_lower, kind, host, port, options, default_environment, tags, note,
-		 enabled, created_by, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, p.Name, strings.ToLower(p.Name), string(p.Kind), p.Host, p.Port, optJSON,
+		(id, project_id, name, name_lower, kind, host, port, options, default_environment,
+		 tags, note, enabled, created_by, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, p.ProjectID, p.Name, strings.ToLower(p.Name), string(p.Kind), p.Host, p.Port, optJSON,
 		string(p.DefaultEnvironment), model.TagsToString(p.Tags), p.Note,
 		boolInt(p.Enabled), createdBy, now, now); err != nil {
 		if isUniqueViolation(err) {
@@ -196,8 +205,27 @@ func (s *Store) GetServer(ctx context.Context, id string) (*model.Server, error)
 	return v, nil
 }
 
-func (s *Store) ListServers(ctx context.Context) ([]*model.Server, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+serverColumns+serverFrom+` ORDER BY s.name_lower`)
+// ListServers는 서버를 반환한다. projectIDs가 nil이면 좁히지 않는다(슈퍼 어드민).
+// 빈 슬라이스는 "볼 수 있는 프로젝트가 없다"는 뜻이라 결과도 비어야 한다.
+func (s *Store) ListServers(ctx context.Context, projectIDs []string) ([]*model.Server, error) {
+	query := `SELECT ` + serverColumns + serverFrom
+	args := []any{}
+	if projectIDs != nil {
+		if len(projectIDs) == 0 {
+			// IN () 는 SQLite에서 문법 오류다. 아무것도 맞지 않는 조건으로 바꾼다.
+			query += ` WHERE 0`
+		} else {
+			marks := make([]string, len(projectIDs))
+			for i, id := range projectIDs {
+				marks[i] = "?"
+				args = append(args, id)
+			}
+			query += ` WHERE s.project_id IN (` + strings.Join(marks, ",") + `)`
+		}
+	}
+	query += ` ORDER BY s.name_lower`
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list servers: %w", err)
 	}
@@ -322,6 +350,8 @@ func (s *Store) CreateServerWithDatabase(ctx context.Context, sp SaveServerParam
 		return nil, nil, err
 	}
 	cp.ServerID = srv.ID
+	// DB의 프로젝트는 서버의 프로젝트다. 부르는 쪽이 무엇을 넣었든 여기서 맞춘다.
+	cp.ProjectID = srv.ProjectID
 	if cp.Environment == "" {
 		cp.Environment = sp.DefaultEnvironment
 	}

@@ -451,7 +451,8 @@ function openAddDatabases(item, reload) {
     btn.disabled = true;
     try {
       const res = await api.post(`/servers/${srv.id}/databases`, {
-        projectId: currentProjectID(),
+        // 프로젝트는 보내지 않는다. 서버가 이미 한 프로젝트의 것이고, DB는 그
+        // 서버를 따라간다 — 근거는 하나여야 한다.
         databases: picked,
         environment: environment.value,
         tags: tags.value.split(',').map((t) => t.trim()).filter(Boolean),

@@ -163,7 +163,8 @@ func (r *connectionRequest) dbParams(actorID string) (store.SaveConnectionParams
 // serverPart는 같은 요청에서 서버 쪽 입력을 뽑는다.
 func (r *connectionRequest) serverPart() serverRequest {
 	return serverRequest{
-		Name: r.Name, Kind: r.Kind, Host: r.Host, Port: r.Port,
+		ProjectID: r.ProjectID,
+		Name:      r.Name, Kind: r.Kind, Host: r.Host, Port: r.Port,
 		Options: r.Options, DefaultEnvironment: r.Environment,
 		Tags: r.Tags, Enabled: r.Enabled,
 		Username: r.Username, Password: r.Password, Extra: r.Extra,
@@ -191,12 +192,15 @@ func (s *Server) handleCreateConnection(c *fiber.Ctx) error {
 
 	// 서버를 지정했으면 그 아래에 DB만 더한다. 접속 정보는 서버의 것을 쓴다.
 	if params.ServerID != "" {
-		srv, err := s.st.GetServer(c.Context(), params.ServerID)
-		if errors.Is(err, store.ErrNotFound) {
-			return fail(c, fiber.StatusNotFound, "not_found", "서버를 찾을 수 없습니다")
+		srv, serr := s.requireServer(c, params.ServerID)
+		if serr != nil {
+			return serr
 		}
-		if err != nil {
-			return err
+		// DB의 프로젝트는 서버의 프로젝트다. 요청이 다른 곳을 가리키면 되돌린다 —
+		// 조용히 고치면 사람이 고른 것과 저장된 것이 달라진다.
+		if params.ProjectID != srv.ProjectID {
+			return fail(c, fiber.StatusBadRequest, "project_mismatch",
+				"그 서버는 다른 프로젝트의 것입니다. 서버가 속한 프로젝트에서 DB를 추가하세요")
 		}
 		conn, err := s.st.CreateConnection(c.Context(), params)
 		if errors.Is(err, store.ErrDuplicateName) {
@@ -216,7 +220,7 @@ func (s *Server) handleCreateConnection(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusCreated).JSON(fiber.Map{"connection": conn})
 	}
 
-	// 서버가 없으면 함께 만든다.
+	// 서버가 없으면 함께 만든다. 서버도 같은 프로젝트에 들어간다.
 	sreq := req.serverPart()
 	sp, adapter, err := sreq.toParams(actor.ID)
 	if err != nil {

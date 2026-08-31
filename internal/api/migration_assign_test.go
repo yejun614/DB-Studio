@@ -25,7 +25,7 @@ func assignEnv(t *testing.T) (*testEnv, *model.Connection, *store.Migration) {
 	e := newTestEnv(t)
 
 	pw := "pw"
-	srv, err := e.st.CreateServer(ctx, store.SaveServerParams{
+	srv, err := e.st.CreateServer(ctx, store.SaveServerParams{ProjectID: e.project.ID,
 		Name: "pg", Kind: model.KindPostgres, Host: "127.0.0.1", Port: 5432,
 		DefaultEnvironment: model.EnvDev, Enabled: true, Username: "app", Password: &pw,
 	})

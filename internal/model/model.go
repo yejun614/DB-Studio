@@ -202,12 +202,19 @@ type Session struct {
 // 세 번 등록해야 했고, 비밀번호를 바꾸면 세 곳을 고쳐야 했다. 자격증명은 한 곳에 있어야
 // 한다 — 여러 벌이면 언젠가 한 벌만 갱신되고, 그 사실은 접속 실패로만 드러난다.
 type Server struct {
-	ID      string  `json:"id"`
-	Name    string  `json:"name"`
-	Kind    DBKind  `json:"kind"`
-	Host    string  `json:"host"`
-	Port    int     `json:"port"`
-	Options Options `json:"options"`
+	ID string `json:"id"`
+	// ProjectID는 이 서버가 속한 프로젝트다.
+	//
+	// 프로젝트마다 서버를 따로 등록한다. 접속 정보와 자격증명이 서버에 붙어 있어서,
+	// 같은 호스트라도 팀이 다르면 계정이 다르고 그래서 등록도 따로 하게 된다.
+	// 그 아래 DB의 프로젝트도 여기서 나온다 — 근거는 하나여야 한다.
+	ProjectID   string  `json:"projectId"`
+	ProjectName string  `json:"projectName,omitempty"`
+	Name        string  `json:"name"`
+	Kind        DBKind  `json:"kind"`
+	Host        string  `json:"host"`
+	Port        int     `json:"port"`
+	Options     Options `json:"options"`
 	// DefaultEnvironment는 이 서버에 DB를 추가할 때의 기본값이다.
 	// 환경 자체는 DB(Connection)마다 정한다 — 이유는 0016 마이그레이션에 적어 두었다.
 	DefaultEnvironment Environment `json:"defaultEnvironment"`

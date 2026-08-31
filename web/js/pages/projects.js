@@ -1,10 +1,11 @@
 // 프로젝트 관리.
 //
-// 프로젝트는 자원의 울타리다. 커넥션과 ERD 초안과 용어 사전이 프로젝트에 속하고,
-// 그 아래 달린 것들(마이그레이션·버전·백업·구조 문서)은 커넥션을 따라 함께 간다.
+// 프로젝트는 자원의 울타리다. 계층은 프로젝트 → 서버 → DB이고, 그 아래 달린
+// 것들(마이그레이션·버전·백업·구조 문서)은 커넥션을 따라 함께 간다. 독립 ERD
+// 초안과 용어 사전도 프로젝트에 속한다.
 //
-// 서버 컴퓨터·매크로·클러스터·사용자는 프로젝트 밖이다. 한 대의 서버가 여러
-// 프로젝트의 DB를 담고, 매크로 하나가 두 프로젝트를 오갈 수 있다.
+// 매크로·클러스터·사용자·알림·서버 컴퓨터 감시는 프로젝트 밖이다. 매크로 하나가
+// 두 프로젝트를 오갈 수 있고, 클러스터 노드는 앱 자신이 도는 기계다.
 import { api } from '../core/api.js';
 import {
   h, mount, icon, input, textarea, field, spinner, emptyState, pageHeader,
@@ -34,7 +35,8 @@ export async function renderProjects(outlet) {
     const list = projects();
     const canManage = canManageProjects();
     mount(outlet,
-      pageHeader('프로젝트', '자원은 모두 프로젝트 안에 있습니다. DB 커넥션·ERD·마이그레이션·버전·용어 사전이 여기에 딸립니다.',
+      pageHeader('프로젝트',
+        '자원은 모두 프로젝트 안에 있습니다. DB 서버·커넥션·ERD·마이그레이션·버전·용어 사전이 여기에 딸립니다.',
         canManage
           ? h('button.btn.btn-primary', {
             type: 'button', onclick: () => openProjectDialog(null, reload),
@@ -61,8 +63,8 @@ function firstRun(canManage, reload) {
     icon('box', 28),
     h('h2', {}, '아직 프로젝트가 없습니다'),
     h('p.muted', {},
-      'DB 커넥션도 ERD도 프로젝트 안에서 만듭니다. 팀이나 제품 단위로 하나씩 두면 '
-      + '목록이 남의 것으로 채워지지 않고, 참여자만 그 안을 볼 수 있습니다.'),
+      'DB 서버도 커넥션도 ERD도 프로젝트 안에서 만듭니다. 팀이나 제품 단위로 하나씩 '
+      + '두면 목록이 남의 것으로 채워지지 않고, 참여자만 그 안을 볼 수 있습니다.'),
     h('button.btn.btn-primary', {
       type: 'button', onclick: () => openProjectDialog(null, reload),
     }, icon('plus'), '첫 프로젝트 만들기'),
@@ -90,7 +92,8 @@ function projectCard(p, canManage, reload) {
         }, '이 프로젝트 보기'),
     ),
     h('div.project-stats', {},
-      stat('DB 커넥션', p.connections),
+      stat('서버', p.servers),
+      stat('DB', p.connections),
       stat('ERD 초안', p.documents),
       stat('참여자', p.members)),
     h('div.project-foot', {},
@@ -235,12 +238,12 @@ async function openMembersDialog(p, reload) {
 // 안에 든 것을 함께 지우지 않는 이유: 단추 하나로 DB 열 개와 그 아래 ERD·
 // 마이그레이션이 한꺼번에 사라진다면, 그것은 무엇을 지우는지 말할 수 없는 단추다.
 async function removeProject(p, reload) {
-  const used = (p.connections ?? 0) + (p.documents ?? 0);
+  const used = (p.servers ?? 0) + (p.connections ?? 0) + (p.documents ?? 0);
   const ok = await confirmDialog({
     title: '프로젝트 지우기',
     message: used > 0
-      ? `"${p.name}" 안에 DB ${p.connections}개와 ERD ${p.documents}개가 있습니다. `
-        + '먼저 그것들을 지우거나 옮긴 뒤에 프로젝트를 지울 수 있습니다.'
+      ? `"${p.name}" 안에 서버 ${p.servers}개, DB ${p.connections}개, ERD ${p.documents}개가 있습니다. `
+        + '먼저 그것들을 지운 뒤에 프로젝트를 지울 수 있습니다.'
       : `"${p.name}" 을 지웁니다. 안에 든 것이 없으므로 사라지는 것은 이름과 참여자 명단뿐입니다.`,
     confirmLabel: '지우기',
     danger: true,

@@ -87,7 +87,7 @@ func TestObservedStructureIsNotDrift(t *testing.T) {
 	}
 
 	_, conn, err := st.CreateServerWithDatabase(ctx,
-		store.SaveServerParams{
+		store.SaveServerParams{ProjectID: testProjectID(t, ctx, st),
 			Name: "fake-redis", Kind: model.KindRedis, DefaultEnvironment: model.EnvDev,
 			Host: "127.0.0.1", Port: 6379, Enabled: true,
 		},
@@ -154,7 +154,7 @@ func TestFingerprintChangeWithoutStructuralDiff(t *testing.T) {
 		t.Fatalf("seed rules: %v", err)
 	}
 	_, conn, err := st.CreateServerWithDatabase(ctx,
-		store.SaveServerParams{
+		store.SaveServerParams{ProjectID: testProjectID(t, ctx, st),
 			Name: "fake-sql", Kind: model.KindSQLite, DefaultEnvironment: model.EnvDev,
 			Enabled: true,
 		},

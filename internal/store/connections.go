@@ -87,6 +87,25 @@ func (s *Store) CreateConnection(ctx context.Context, p SaveConnectionParams) (*
 		createdBy = p.ActorID
 	}
 
+	// DB의 프로젝트는 그 서버의 프로젝트다.
+	//
+	// 부르는 쪽이 넣은 값을 쓰지 않고 서버에서 다시 읽는 이유: 근거가 둘이면 어긋날
+	// 수 있고, 어긋나는 순간 어느 쪽이 참인지 권한 판정이 답하지 못한다. 커넥션에
+	// 컬럼을 남겨 두는 것은 판정과 목록이 조인 없이 읽기 위해서일 뿐이다.
+	if p.ServerID != "" {
+		srv, serr := s.GetServer(ctx, p.ServerID)
+		if serr != nil {
+			return nil, fmt.Errorf("resolve server project: %w", serr)
+		}
+		if p.ProjectID != "" && p.ProjectID != srv.ProjectID {
+			return nil, ErrProjectMismatch
+		}
+		p.ProjectID = srv.ProjectID
+	}
+	if p.ProjectID == "" {
+		return nil, ErrNoProject
+	}
+
 	_, err := s.db.ExecContext(ctx, `INSERT INTO connections
 		(id, project_id, server_id, name, name_lower, environment, database_name, tags, note,
 		 enabled, created_by, created_at, updated_at, node_id)

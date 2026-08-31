@@ -140,7 +140,7 @@ func (tc *toolContext) resolveServer(nameOrID string) (*model.Server, error) {
 	if nameOrID == "" {
 		return nil, errors.New("서버를 지정하세요")
 	}
-	servers, err := tc.srv.st.ListServers(tc.ctx)
+	servers, err := tc.srv.st.ListServers(tc.ctx, tc.projectScope())
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +159,7 @@ func toolListServers(tc *toolContext, args json.RawMessage) (string, error) {
 	if err := parseArgs(args, &in); err != nil {
 		return "", err
 	}
-	servers, err := tc.srv.st.ListServers(tc.ctx)
+	servers, err := tc.srv.st.ListServers(tc.ctx, tc.projectScope())
 	if err != nil {
 		return "", err
 	}

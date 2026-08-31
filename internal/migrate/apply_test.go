@@ -82,7 +82,7 @@ func setup(t *testing.T, kind model.DBKind, host string, port int, dbName, user,
 
 	pw := pass
 	_, conn, err := st.CreateServerWithDatabase(ctx,
-		store.SaveServerParams{
+		store.SaveServerParams{ProjectID: pj.ID,
 			Name: "target-" + string(kind), Kind: kind, DefaultEnvironment: model.EnvDev,
 			Host: host, Port: port, Username: user,
 			Options: opts, Tags: []string{}, Enabled: true, Password: &pw,

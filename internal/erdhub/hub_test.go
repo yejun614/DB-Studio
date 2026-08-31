@@ -46,7 +46,7 @@ func fixture(t *testing.T) (context.Context, *store.Store, *Hub, string) {
 
 	pw := "pw"
 	_, conn, err := st.CreateServerWithDatabase(ctx,
-		store.SaveServerParams{
+		store.SaveServerParams{ProjectID: pj.ID,
 			Name: "c", Kind: model.KindPostgres, DefaultEnvironment: model.EnvDev,
 			Host: "h", Port: 1, Options: model.Options{}, Tags: []string{},
 			Enabled: true, Password: &pw,

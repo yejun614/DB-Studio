@@ -20,7 +20,7 @@ func structureFixture(t *testing.T, e *testEnv, name string) (*model.Connection,
 	ctx := context.Background()
 	pw := "pw"
 	_, conn, err := e.st.CreateServerWithDatabase(ctx,
-		store.SaveServerParams{
+		store.SaveServerParams{ProjectID: e.project.ID,
 			Name: name + "-srv", Kind: model.KindPostgres, DefaultEnvironment: model.EnvDev,
 			Host: "h", Port: 5432, Options: model.Options{}, Tags: []string{},
 			Enabled: true, Password: &pw,

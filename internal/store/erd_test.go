@@ -34,7 +34,7 @@ func erdFixture(t *testing.T) (context.Context, *Store, string) {
 	}
 	pw := "pw"
 	_, conn, err := st.CreateServerWithDatabase(ctx,
-		SaveServerParams{
+		SaveServerParams{ProjectID: pj.ID,
 			Name: "c", Kind: model.KindPostgres, DefaultEnvironment: model.EnvDev,
 			Host: "h", Port: 1, Options: model.Options{}, Tags: []string{},
 			Enabled: true, Password: &pw,

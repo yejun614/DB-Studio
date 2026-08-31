@@ -23,6 +23,8 @@ import (
 // serverRequest는 서버 생성/수정 입력이다.
 // Password가 nil이면(수정 시) 기존 비밀번호를 유지한다.
 type serverRequest struct {
+	// ProjectID는 이 서버가 속할 프로젝트다. 만들 때 반드시 있어야 한다.
+	ProjectID          string            `json:"projectId"`
 	Name               string            `json:"name"`
 	Kind               model.DBKind      `json:"kind"`
 	Host               string            `json:"host"`
@@ -69,7 +71,8 @@ func (r *serverRequest) toParams(actorID string) (store.SaveServerParams, dbx.Ad
 		r.Tags = []string{}
 	}
 	p = store.SaveServerParams{
-		Name: r.Name, Kind: r.Kind,
+		ProjectID: strings.TrimSpace(r.ProjectID),
+		Name:      r.Name, Kind: r.Kind,
 		Host: strings.TrimSpace(r.Host), Port: port,
 		Options: r.Options, DefaultEnvironment: r.DefaultEnvironment,
 		Tags: r.Tags, Note: r.Note,
@@ -96,13 +99,43 @@ func validateServerTarget(adapter dbx.Adapter, p store.SaveServerParams, databas
 	})
 }
 
+// requireServer는 서버를 읽고 그 프로젝트를 볼 수 있는 사람인지 확인한다.
+//
+// "없음"과 "볼 수 없음"에 같은 404를 주는 이유는 프로젝트와 같다: 403은 그 자리에
+// 무언가 있다는 사실을 알려 주는데, 서버 이름과 호스트는 그 자체로 알려서는 안 되는
+// 것일 수 있다.
+func (s *Server) requireServer(c *fiber.Ctx, id string) (*model.Server, error) {
+	srv, err := s.st.GetServer(c.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, fiber.NewError(fiber.StatusNotFound, "서버를 찾을 수 없습니다")
+	}
+	if err != nil {
+		return nil, err
+	}
+	ok, err := s.canSeeProject(c, srv.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		s.auditDenied(c, "server.denied", srv.ID)
+		return nil, fiber.NewError(fiber.StatusNotFound, "서버를 찾을 수 없습니다")
+	}
+	return srv, nil
+}
+
 // handleListServers는 서버와 그 아래 DB를 함께 반환한다.
 //
 // 두 번 부르게 하지 않는 이유: 화면이 항상 둘을 같이 그린다(서버 줄을 펴면 DB 목록).
 // 나눠 두면 목록 화면이 N+1 요청을 하게 된다.
 func (s *Server) handleListServers(c *fiber.Ctx) error {
 	u := currentUser(c)
-	servers, err := s.st.ListServers(c.Context())
+	// 서버 목록도 프로젝트로 좁힌다. 예전에는 서버가 프로젝트 밖이라 프로젝트를
+	// 바꿔도 남의 팀 서버가 호스트 이름까지 그대로 떠 있었다.
+	scope, err := s.projectFilter(c)
+	if err != nil {
+		return err
+	}
+	servers, err := s.st.ListServers(c.Context(), scope)
 	if err != nil {
 		return err
 	}
@@ -117,14 +150,6 @@ func (s *Server) handleListServers(c *fiber.Ctx) error {
 	access := make(map[string]model.EffectiveAccess, len(effective))
 	for _, e := range effective {
 		access[e.ConnectionID] = e
-	}
-
-	// 서버는 프로젝트 밖에 있지만(한 대에 여러 프로젝트의 DB가 함께 산다) 그 아래
-	// 걸리는 DB는 보고 있는 프로젝트의 것만이다. 관리자 예외도 여기서는 프로젝트를
-	// 넘지 못한다 — 넘으면 참여하지 않은 팀의 DB 이름이 이 화면에 그대로 뜬다.
-	scope, err := s.projectFilter(c)
-	if err != nil {
-		return err
 	}
 
 	canManage := u.Role.CanManageConnections()
@@ -169,10 +194,7 @@ func (s *Server) handleListServers(c *fiber.Ctx) error {
 }
 
 func (s *Server) handleGetServer(c *fiber.Ctx) error {
-	srv, err := s.st.GetServer(c.Context(), c.Params("id"))
-	if errors.Is(err, store.ErrNotFound) {
-		return fail(c, fiber.StatusNotFound, "not_found", "서버를 찾을 수 없습니다")
-	}
+	srv, err := s.requireServer(c, c.Params("id"))
 	if err != nil {
 		return err
 	}
@@ -206,6 +228,11 @@ func (s *Server) handleCreateServer(c *fiber.Ctx) error {
 		return fail(c, fiber.StatusBadRequest, "needs_first_database",
 			kindNeedsFirstDatabase(params.Kind))
 	}
+	// 프로젝트는 반드시 있고, 자기가 볼 수 있는 곳이어야 한다. 어디에도 속하지 않은
+	// 서버는 목록에 뜨지 않으므로 만든 사람조차 찾지 못한다.
+	if _, perr := s.requireProject(c, params.ProjectID); perr != nil {
+		return perr
+	}
 	// 대상 DB 없이도 접속 정보 자체는 검증할 수 있어야 한다.
 	// 종류별 부트스트랩 DB를 넣어 형식만 본다.
 	if err := validateServerTarget(adapter, params, dbx.BootstrapDatabase(params.Kind)); err != nil {
@@ -232,6 +259,12 @@ func (s *Server) handleCreateServer(c *fiber.Ctx) error {
 // **여기서의 실수도 모든 DB에 반영된다** — 그래서 응답에 영향 범위(DB 수)를 함께 준다.
 func (s *Server) handleUpdateServer(c *fiber.Ctx) error {
 	id := c.Params("id")
+	// 프로젝트를 볼 수 있는 사람만 그 서버를 고칠 수 있다. 자격증명이 여기 붙어
+	// 있으므로 이 관문이 없으면 남의 팀 DB의 접속 계정을 바꿀 수 있다.
+	before, perr := s.requireServer(c, id)
+	if perr != nil {
+		return perr
+	}
 	var req serverRequest
 	if err := c.BodyParser(&req); err != nil {
 		return fail(c, fiber.StatusBadRequest, "bad_request", "요청 형식이 올바르지 않습니다")
@@ -241,6 +274,9 @@ func (s *Server) handleUpdateServer(c *fiber.Ctx) error {
 	if err != nil {
 		return fail(c, fiber.StatusBadRequest, "invalid_server", err.Error())
 	}
+	// 프로젝트는 옮기지 않는다. 옮기면 그 서버의 DB 전부가 함께 옮겨지고, 원래
+	// 프로젝트의 사람들이 그것을 소리 없이 잃는다.
+	params.ProjectID = before.ProjectID
 	// 수정에서는 이미 등록된 DB 하나를 빌려 검증한다.
 	// Oracle·SQLite처럼 대상이 곧 접속 정보의 일부인 종류는 그래야 형식을 볼 수 있다.
 	probeDB := dbx.BootstrapDatabase(params.Kind)
@@ -288,10 +324,7 @@ func (s *Server) connectionsOf(c *fiber.Ctx, serverID string) []*model.Connectio
 // 스키마 버전·ERD 문서를 함께 지우는 일이다. 커넥션 하나를 지우는 것과 무게가 다르다.
 func (s *Server) handleDeleteServer(c *fiber.Ctx) error {
 	id := c.Params("id")
-	srv, err := s.st.GetServer(c.Context(), id)
-	if errors.Is(err, store.ErrNotFound) {
-		return fail(c, fiber.StatusNotFound, "not_found", "서버를 찾을 수 없습니다")
-	}
+	srv, err := s.requireServer(c, id)
 	if err != nil {
 		return err
 	}
@@ -315,10 +348,7 @@ func (s *Server) handleDeleteServer(c *fiber.Ctx) error {
 // 이미 등록된 것은 registered로 표시해 내려보낸다 — 목록에서 빼면 "왜 안 보이지"가 되고,
 // 표시 없이 두면 같은 DB를 두 번 등록하려다 실패한다.
 func (s *Server) handleListServerDatabases(c *fiber.Ctx) error {
-	srv, err := s.st.GetServer(c.Context(), c.Params("id"))
-	if errors.Is(err, store.ErrNotFound) {
-		return fail(c, fiber.StatusNotFound, "not_found", "서버를 찾을 수 없습니다")
-	}
+	srv, err := s.requireServer(c, c.Params("id"))
 	if err != nil {
 		return err
 	}
@@ -356,9 +386,8 @@ func (s *Server) handleListServerDatabases(c *fiber.Ctx) error {
 
 // addDatabasesRequest는 서버에 DB 여러 개를 한 번에 등록하는 요청이다.
 type addDatabasesRequest struct {
-	// ProjectID는 등록할 DB들이 들어갈 프로젝트다. 서버는 프로젝트 밖에 있으므로
-	// 여기서 받아야 한다 — 서버에서 물려받을 수 있는 값이 아니다.
-	ProjectID   string            `json:"projectId"`
+	// 프로젝트는 받지 않는다. 서버가 이미 한 프로젝트의 것이고, DB는 그 서버의
+	// 프로젝트에 들어간다 — 근거는 하나여야 한다.
 	Databases   []string          `json:"databases"`
 	Environment model.Environment `json:"environment"`
 	// NamePrefix가 비면 "<서버명> / <DB명>"으로 짓는다.
@@ -372,10 +401,7 @@ type addDatabasesRequest struct {
 // 사용자는 무엇이 문제였는지 모른 채 처음부터 다시 골라야 한다. 대신 어느 것이
 // 왜 실패했는지 함께 돌려준다.
 func (s *Server) handleAddServerDatabases(c *fiber.Ctx) error {
-	srv, err := s.st.GetServer(c.Context(), c.Params("id"))
-	if errors.Is(err, store.ErrNotFound) {
-		return fail(c, fiber.StatusNotFound, "not_found", "서버를 찾을 수 없습니다")
-	}
+	srv, err := s.requireServer(c, c.Params("id"))
 	if err != nil {
 		return err
 	}
@@ -397,10 +423,6 @@ func (s *Server) handleAddServerDatabases(c *fiber.Ctx) error {
 	if req.Tags == nil {
 		req.Tags = []string{}
 	}
-	project, perr := s.requireProject(c, req.ProjectID)
-	if perr != nil {
-		return perr
-	}
 
 	prefix := strings.TrimSpace(req.NamePrefix)
 	if prefix == "" {
@@ -415,8 +437,11 @@ func (s *Server) handleAddServerDatabases(c *fiber.Ctx) error {
 		if name == "" {
 			continue
 		}
+		// 프로젝트는 서버에서 나온다. 요청이 들고 온 값을 쓰지 않는 이유: 서버가
+		// 이미 한 프로젝트의 것이므로, 다른 프로젝트를 적어 넣을 수 있게 두면
+		// 근거가 둘이 되고 그중 하나는 언젠가 어긋난다.
 		conn, err := s.st.CreateConnection(c.Context(), store.SaveConnectionParams{
-			ProjectID: project.ID,
+			ProjectID: srv.ProjectID,
 			ServerID:  srv.ID, Name: prefix + " / " + name, Environment: env,
 			DatabaseName: name, Tags: req.Tags, Enabled: true, ActorID: actor.ID,
 		})
@@ -460,10 +485,7 @@ type mergeRequest struct {
 // 봉인된 값은 비교할 수조차 없기 때문이다. 합치는 판단은 값을 아는 사람이 해야 하고,
 // 그 사람이 여기를 부른다. **옮겨진 DB는 대상 서버의 자격증명을 쓰게 된다.**
 func (s *Server) handleMergeServers(c *fiber.Ctx) error {
-	target, err := s.st.GetServer(c.Context(), c.Params("id"))
-	if errors.Is(err, store.ErrNotFound) {
-		return fail(c, fiber.StatusNotFound, "not_found", "대상 서버를 찾을 수 없습니다")
-	}
+	target, err := s.requireServer(c, c.Params("id"))
 	if err != nil {
 		return err
 	}
@@ -494,12 +516,15 @@ func (s *Server) handleMergeServers(c *fiber.Ctx) error {
 	names := []string{}
 	conflicts := []string{}
 	for _, srcID := range req.SourceServerIDs {
-		src, err := s.st.GetServer(c.Context(), srcID)
-		if errors.Is(err, store.ErrNotFound) {
-			return fail(c, fiber.StatusNotFound, "not_found", "합칠 서버를 찾을 수 없습니다")
+		src, serr := s.requireServer(c, srcID)
+		if serr != nil {
+			return serr
 		}
-		if err != nil {
-			return err
+		// 프로젝트를 넘어 합치지 않는다. 옮겨진 DB는 대상 서버의 프로젝트로
+		// 딸려 가는데, 그러면 원래 프로젝트의 사람들이 그 DB를 소리 없이 잃는다.
+		if src.ProjectID != target.ProjectID {
+			return fail(c, fiber.StatusBadRequest, "project_mismatch",
+				src.Name+"은(는) 다른 프로젝트의 서버라 합칠 수 없습니다")
 		}
 		// 종류가 다르면 접속 자체가 불가능하다. 합치는 순간 전부 죽는다.
 		if src.Kind != target.Kind {

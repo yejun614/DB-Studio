@@ -87,7 +87,7 @@ func TestServerMigrationIsLossless(t *testing.T) {
 
 	// 커넥션마다 서버 하나가 생겨야 한다. 자동으로 묶지 않는 것이 의도다 —
 	// 봉인된 비밀번호는 같은지 비교할 수조차 없어서, 묶으면 한쪽이 조용히 사라진다.
-	servers, err := st.ListServers(ctx)
+	servers, err := st.ListServers(ctx, nil)
 	if err != nil {
 		t.Fatalf("list servers: %v", err)
 	}
@@ -120,7 +120,7 @@ func serverFixture(t *testing.T) (context.Context, *Store) {
 func mkServer(t *testing.T, ctx context.Context, st *Store, name string) *model.Server {
 	t.Helper()
 	pw := "pw"
-	srv, err := st.CreateServer(ctx, SaveServerParams{
+	srv, err := st.CreateServer(ctx, SaveServerParams{ProjectID: testProject(t, ctx, st).ID,
 		Name: name, Kind: model.KindPostgres, Host: "10.0.0.1", Port: 5432,
 		DefaultEnvironment: model.EnvDev, Enabled: true, Username: "app", Password: &pw,
 	})

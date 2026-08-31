@@ -260,7 +260,7 @@ func newIsolatedMySQL(t *testing.T, ctx context.Context, st *store.Store, name s
 	})
 
 	_, conn, err := st.CreateServerWithDatabase(ctx,
-		store.SaveServerParams{
+		store.SaveServerParams{ProjectID: testProjectID(t, ctx, st),
 			Name: name, Kind: model.KindMySQL, DefaultEnvironment: env,
 			Host: "127.0.0.1", Port: 13306,
 			Options: model.Options{}, Tags: []string{}, Enabled: true,

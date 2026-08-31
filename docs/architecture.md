@@ -11,7 +11,7 @@ internal/
   config/            플래그·환경변수 설정
   crypto/            argon2id 비밀번호 해싱, AES-GCM 시크릿 봉인, 랜덤 생성
   store/             메타 SQLite: 마이그레이션 러너 + 리포지토리
-                     projects.go = 자원의 울타리(커넥션·ERD·용어가 여기 속한다),
+                     projects.go = 자원의 울타리(프로젝트 → 서버 → DB, ERD·용어도),
                      servers.go = DB 서버(접속 정보·자격증명), connections.go = 그 아래 DB
     migrations/      embed된 스키마 SQL
   model/             엔티티와 열거형 (역할, 접근 모드, 능력 등급, DB 종류)

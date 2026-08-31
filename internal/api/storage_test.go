@@ -74,7 +74,7 @@ func storageFixture(t *testing.T, e *testEnv, name string, kind model.DBKind, ta
 	}
 	pw := "secret"
 	_, conn, err := e.st.CreateServerWithDatabase(context.Background(),
-		store.SaveServerParams{
+		store.SaveServerParams{ProjectID: e.project.ID,
 			Name: name + "-srv", Kind: kind, DefaultEnvironment: model.EnvDev,
 			Host: host, Port: port, Options: model.Options{"scheme": "http"},
 			Tags: []string{}, Enabled: true, Username: "hdfs", Password: &pw,

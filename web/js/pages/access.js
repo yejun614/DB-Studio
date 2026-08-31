@@ -178,7 +178,7 @@ export async function renderAccess(outlet, params) {
                     }),
                     h('span', {}, p.name),
                     h('span.field-help', {},
-                      `DB ${p.connections}개 · ERD ${p.documents}개`)))),
+                      `서버 ${p.servers}개 · DB ${p.connections}개 · ERD ${p.documents}개`)))),
               h('span.field-help', {},
                 '아래 설정보다 앞선 관문입니다. 참여하지 않은 프로젝트의 DB는 '
                 + '등급이 무엇으로 적혀 있든 목록에도 나오지 않습니다'),

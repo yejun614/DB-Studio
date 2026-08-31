@@ -16,9 +16,13 @@ import (
 // (마이그레이션·버전·스냅샷·백업·구조 문서)은 커넥션을 따라 저절로 딸려 간다.
 // 그래서 이 파일이 아는 표는 셋뿐이다 — 나머지는 알 필요가 없다.
 //
-// 서버 컴퓨터·매크로·클러스터·사용자는 프로젝트 밖에 있다. 한 대의 서버가 여러
-// 프로젝트의 DB를 담고 매크로 하나가 두 프로젝트를 오갈 수 있어서, 그런 것을
-// 프로젝트에 매면 "어느 프로젝트의 권한으로 도는가"라는 답 없는 물음이 생긴다.
+// DB 서버도 프로젝트 안이다(0038). 프로젝트마다 서버를 따로 등록하기 때문이다 —
+// 접속 정보와 자격증명이 서버에 붙어 있어서, 같은 호스트라도 팀이 다르면 계정이
+// 다르고 그래서 등록도 따로 하게 된다. 계층은 프로젝트 → 서버 → DB다.
+//
+// 매크로·클러스터·사용자·알림·서버 컴퓨터 감시는 여전히 프로젝트 밖이다. 매크로
+// 하나가 두 프로젝트를 오갈 수 있고, 클러스터 노드는 앱 자신이 도는 기계다. 그런
+// 것을 프로젝트에 매면 "어느 프로젝트의 권한으로 도는가"라는 답 없는 물음이 생긴다.
 
 // DefaultProjectID는 프로젝트가 생기기 전부터 있던 자원이 들어간 곳이다(0037).
 // 새 설치에는 없다 — 옮길 것이 없으면 만들지 않는다.
@@ -34,8 +38,9 @@ type Project struct {
 	CreatedAt   string `json:"createdAt"`
 	UpdatedAt   string `json:"updatedAt"`
 
-	// 아래 셋은 목록에서만 채운다. "지워도 되는 프로젝트인가"를 화면이 눌러 보기
+	// 아래 넷은 목록에서만 채운다. "지워도 되는 프로젝트인가"를 화면이 눌러 보기
 	// 전에 알아야 하고, 사람은 이름보다 규모로 프로젝트를 알아본다.
+	Servers     int `json:"servers"`
 	Connections int `json:"connections"`
 	Documents   int `json:"documents"`
 	Members     int `json:"members"`
@@ -51,10 +56,20 @@ type ProjectMember struct {
 	AddedAt string `json:"addedAt"`
 }
 
-var ErrProjectInUse = errors.New("project has resources")
+var (
+	ErrProjectInUse = errors.New("project has resources")
+	// ErrNoProject는 프로젝트 없이 자원을 만들려 할 때다. 어디에도 속하지 않은
+	// 자원은 목록에도 권한 판정에도 나타나지 않으므로, 만들 수는 있는데 아무도 볼
+	// 수 없는 유령이 된다.
+	ErrNoProject = errors.New("project required")
+	// ErrProjectMismatch는 DB를 그 서버와 다른 프로젝트에 넣으려 할 때다.
+	// DB의 프로젝트는 언제나 그 서버의 프로젝트다 — 근거는 하나여야 한다.
+	ErrProjectMismatch = errors.New("project does not match server")
+)
 
 const projectSelect = `SELECT p.id, p.name, p.note, COALESCE(p.created_by, ''),
 	COALESCE(u.display_name, u.username, ''), p.created_at, p.updated_at,
+	(SELECT count(*) FROM servers sv WHERE sv.project_id = p.id),
 	(SELECT count(*) FROM connections c WHERE c.project_id = p.id),
 	(SELECT count(*) FROM erd_documents d WHERE d.project_id = p.id AND d.kind <> 'structure'),
 	(SELECT count(*) FROM project_members m WHERE m.project_id = p.id)
@@ -64,7 +79,7 @@ const projectSelect = `SELECT p.id, p.name, p.note, COALESCE(p.created_by, ''),
 func scanProject(row interface{ Scan(...any) error }) (*Project, error) {
 	var p Project
 	if err := row.Scan(&p.ID, &p.Name, &p.Note, &p.CreatedBy, &p.CreatedName,
-		&p.CreatedAt, &p.UpdatedAt, &p.Connections, &p.Documents, &p.Members); err != nil {
+		&p.CreatedAt, &p.UpdatedAt, &p.Servers, &p.Connections, &p.Documents, &p.Members); err != nil {
 		return nil, err
 	}
 	return &p, nil
@@ -199,10 +214,11 @@ func (s *Store) DeleteProject(ctx context.Context, id string) error {
 func (s *Store) projectResourceCount(ctx context.Context, id string) (int, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx, `SELECT
-		(SELECT count(*) FROM connections WHERE project_id = ?)
+		(SELECT count(*) FROM servers WHERE project_id = ?)
+		+ (SELECT count(*) FROM connections WHERE project_id = ?)
 		+ (SELECT count(*) FROM erd_documents WHERE project_id = ?)
 		+ (SELECT count(*) FROM glossary_terms WHERE project_id = ?)`,
-		id, id, id).Scan(&n)
+		id, id, id, id).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("count project resources: %w", err)
 	}

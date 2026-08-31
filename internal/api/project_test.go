@@ -173,6 +173,13 @@ func TestProjectWithResourcesIsNotDeleted(t *testing.T) {
 	if code, _ := alice.do("DELETE", "/api/v1/connections/"+conn.ID, nil); code != 200 {
 		t.Fatalf("커넥션 삭제 실패")
 	}
+	// 서버도 프로젝트 안에 있다. 남아 있으면 아직 빈 프로젝트가 아니다.
+	if code, body := alice.do("DELETE", "/api/v1/projects/"+e.project.ID, nil); code != 409 {
+		t.Errorf("서버가 남았는데 삭제 = %d: %v", code, body)
+	}
+	if code, _ := alice.do("DELETE", "/api/v1/servers/"+conn.ServerID, nil); code != 200 {
+		t.Fatalf("서버 삭제 실패")
+	}
 	if code, body := alice.do("DELETE", "/api/v1/projects/"+e.project.ID, nil); code != 200 {
 		t.Errorf("빈 프로젝트 삭제 = %d: %v", code, body)
 	}
@@ -250,4 +257,65 @@ func mustUserID(t *testing.T, e *testEnv, name string) string {
 	}
 	t.Fatalf("사용자 %s 를 찾을 수 없습니다", name)
 	return ""
+}
+
+// 서버도 프로젝트 안에 있다.
+//
+// 접속 정보와 자격증명이 서버에 붙어 있어서 프로젝트마다 따로 등록한다. 남의
+// 프로젝트 서버가 목록에 뜨면 호스트 이름과 계정이 그대로 노출된다.
+func TestServersAreScopedToProject(t *testing.T) {
+	e, conn, _ := assignEnv(t)
+	alice := loginAs(t, e, "alice")
+
+	_, body := alice.do("POST", "/api/v1/projects/", map[string]any{"name": "물류"})
+	made, _ := body["project"].(map[string]any)
+	second, _ := made["id"].(string)
+
+	// 새 프로젝트에는 서버가 하나도 없다.
+	_, empty := alice.do("GET", "/api/v1/servers/?project="+second, nil)
+	if items, _ := empty["items"].([]any); len(items) != 0 {
+		t.Errorf("새 프로젝트에 서버가 %d개 보입니다", len(items))
+	}
+	// 원래 프로젝트에는 있다.
+	_, mine := alice.do("GET", "/api/v1/servers/?project="+e.project.ID, nil)
+	if items, _ := mine["items"].([]any); len(items) != 1 {
+		t.Fatalf("원래 프로젝트의 서버 = %d개, 1개여야 합니다", len(items))
+	}
+
+	// 같은 이름의 서버를 다른 프로젝트에 만들 수 있다.
+	code, got := alice.do("POST", "/api/v1/servers", map[string]any{
+		"projectId": second, "name": "pg", "kind": "postgres",
+		"host": "10.0.0.9", "port": 5432, "defaultEnvironment": "dev",
+	})
+	if code != 201 {
+		t.Fatalf("다른 프로젝트에 같은 이름 = %d: %v", code, got)
+	}
+
+	// 프로젝트 없이는 만들 수 없다.
+	if code, _ := alice.do("POST", "/api/v1/servers", map[string]any{
+		"name": "떠도는", "kind": "postgres", "host": "h", "port": 5432,
+		"defaultEnvironment": "dev",
+	}); code != 400 {
+		t.Errorf("프로젝트 없는 서버 생성 = %d, 400이어야 합니다", code)
+	}
+
+	// 서버의 프로젝트와 다른 곳에 DB를 붙일 수 없다. 근거가 둘이면 어긋난다.
+	if code, got := alice.do("POST", "/api/v1/connections/", map[string]any{
+		"projectId": second, "serverId": conn.ServerID, "name": "남의 서버에",
+		"environment": "dev", "databaseName": "other",
+	}); code != 400 || got["error"] != "project_mismatch" {
+		t.Errorf("다른 프로젝트 서버에 DB = %d %v", code, got["error"])
+	}
+
+	// 참여하지 않은 사람에게는 서버가 있는지조차 알려주지 않는다.
+	mkUserRole(t, e, "dana", model.RoleMember)
+	e.join(t, mustUserID(t, e, "dana"))
+	dana := loginAs(t, e, "dana")
+	if code, _ := dana.do("GET", "/api/v1/servers/"+conn.ServerID, nil); code != 200 {
+		t.Errorf("참여자가 서버를 못 봅니다: %d", code)
+	}
+	_, danaList := dana.do("GET", "/api/v1/servers/?project="+second, nil)
+	if items, _ := danaList["items"].([]any); len(items) != 0 {
+		t.Errorf("참여하지 않은 프로젝트의 서버가 %d개 보입니다", len(items))
+	}
 }

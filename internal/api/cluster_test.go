@@ -160,9 +160,19 @@ func TestClusterReplicationAndForwarding(t *testing.T) {
 		t.Fatal("세션 쿠키가 리플리카를 통해 돌아오지 않았습니다")
 	}
 
+	// 서버도 프로젝트 안에 있으므로 먼저 하나 만든다. 이것도 리플리카를 통해
+	// 마스터로 전달되어야 하는 쓰기다.
+	status, body = c.do("POST", "/api/v1/projects/", map[string]any{"name": "테스트 프로젝트"})
+	if status != 201 {
+		t.Fatalf("리플리카에서 프로젝트 생성 = %d: %v", status, body)
+	}
+	madeProject, _ := body["project"].(map[string]any)
+	projectID, _ := madeProject["id"].(string)
+
 	// 리플리카에서 서버(=접속 대상)를 하나 만든다.
 	status, body = c.do("POST", "/api/v1/servers", map[string]any{
-		"name": "pg-1", "kind": "postgres", "host": "10.0.0.9", "port": 5432,
+		"projectId": projectID,
+		"name":      "pg-1", "kind": "postgres", "host": "10.0.0.9", "port": 5432,
 		"defaultEnvironment": "dev",
 	})
 	if status != 201 && status != 200 {
@@ -172,7 +182,7 @@ func TestClusterReplicationAndForwarding(t *testing.T) {
 	// 마스터에 저장되었는가.
 	ctx := context.Background()
 	waitFor(t, 3*time.Second, "리플리카에서 만든 것이 마스터에 없습니다", func() bool {
-		servers, err := master.st.ListServers(ctx)
+		servers, err := master.st.ListServers(ctx, nil)
 		return err == nil && len(servers) == 1
 	})
 
@@ -342,20 +352,21 @@ func TestNodeRoutingUnknownNode(t *testing.T) {
 		map[string]string{"username": "alice", "password": testPassword}); status != 200 {
 		t.Fatal("로그인 실패")
 	}
+	pj, err := master.st.CreateProject(ctx, store.SaveProjectParams{Name: "테스트 프로젝트"})
+	if err != nil {
+		t.Fatalf("프로젝트 생성: %v", err)
+	}
 	status, body := c.do("POST", "/api/v1/servers", map[string]any{
-		"name": "pg-1", "kind": "postgres", "host": "10.0.0.9", "port": 5432,
+		"projectId": pj.ID,
+		"name":      "pg-1", "kind": "postgres", "host": "10.0.0.9", "port": 5432,
 		"defaultEnvironment": "dev",
 	})
 	if status != 200 && status != 201 {
 		t.Fatalf("서버 생성 = %d: %v", status, body)
 	}
-	servers, err := master.st.ListServers(ctx)
+	servers, err := master.st.ListServers(ctx, nil)
 	if err != nil || len(servers) == 0 {
 		t.Fatalf("서버 목록: %v", err)
-	}
-	pj, err := master.st.CreateProject(ctx, store.SaveProjectParams{Name: "테스트 프로젝트"})
-	if err != nil {
-		t.Fatalf("프로젝트 생성: %v", err)
 	}
 	conn, err := master.st.CreateConnection(ctx, store.SaveConnectionParams{
 		ProjectID: pj.ID,

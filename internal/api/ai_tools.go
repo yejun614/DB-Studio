@@ -965,6 +965,25 @@ func toolDiffSchema(tc *toolContext, args json.RawMessage) (string, error) {
 	})
 }
 
+// projectScope는 이 사람이 볼 수 있는 프로젝트 아이디를 준다(슈퍼 어드민은 nil).
+//
+// 툴도 화면과 같은 관문을 지나야 한다. 여기서만 전체를 돌려주면 AI가 권한 우회
+// 통로가 된다 — 그것이 이 파일 전체의 규칙이다.
+func (tc *toolContext) projectScope() []string {
+	if tc.user == nil {
+		return []string{}
+	}
+	if tc.user.Role == model.RoleSuperadmin {
+		return nil
+	}
+	ids, err := tc.srv.st.ProjectIDsForUser(tc.ctx, tc.user.ID)
+	if err != nil || ids == nil {
+		// 읽지 못했으면 아무것도 보여주지 않는다. 실패가 권한을 넓히면 안 된다.
+		return []string{}
+	}
+	return ids
+}
+
 func toolListERDDocuments(tc *toolContext, args json.RawMessage) (string, error) {
 	conns, _, err := tc.accessibleConns(model.LevelMonitor)
 	if err != nil {
@@ -977,18 +996,7 @@ func toolListERDDocuments(tc *toolContext, args json.RawMessage) (string, error)
 		names[c.ID] = c.Name
 	}
 	// 독립 초안은 커넥션으로 걸러지지 않으므로 프로젝트로 좁힌다.
-	// 슈퍼 어드민에게는 nil(제한 없음)이 온다.
-	var scope []string
-	if tc.user != nil && tc.user.Role != model.RoleSuperadmin {
-		scope, err = tc.srv.st.ProjectIDsForUser(tc.ctx, tc.user.ID)
-		if err != nil {
-			return "", err
-		}
-		if scope == nil {
-			scope = []string{}
-		}
-	}
-	docs, err := tc.srv.st.ListERDDocuments(tc.ctx, ids, scope, 50)
+	docs, err := tc.srv.st.ListERDDocuments(tc.ctx, ids, tc.projectScope(), 50)
 	if err != nil {
 		return "", err
 	}

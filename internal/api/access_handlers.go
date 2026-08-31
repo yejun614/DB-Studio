@@ -36,7 +36,8 @@ func (s *Server) handleGetAccess(c *fiber.Ctx) error {
 		return err
 	}
 
-	servers, err := s.st.ListServers(c.Context())
+	// 이 화면은 슈퍼 어드민 전용이라 전부 본다(nil = 제한 없음).
+	servers, err := s.st.ListServers(c.Context(), nil)
 	if err != nil {
 		return err
 	}
@@ -206,7 +207,7 @@ func (s *Server) handlePutAccess(c *fiber.Ctx) error {
 	}
 
 	// ---- 서버 단위 ----
-	servers, err := s.st.ListServers(c.Context())
+	servers, err := s.st.ListServers(c.Context(), nil)
 	if err != nil {
 		return err
 	}

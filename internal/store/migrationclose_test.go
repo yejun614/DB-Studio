@@ -42,8 +42,8 @@ func TestMigrationCloseMigrationIsLossless(t *testing.T) {
 	t.Cleanup(func() { st.Close() })
 
 	owner := mkUser(t, ctx, st, "maker")
-	srv := mkServer(t, ctx, st, "pg")
-	connID := mkConnRow(t, ctx, st, srv.ID, "appdb")
+	srvID := mkServerRow(t, ctx, st, "pg")
+	connID := mkConnRow(t, ctx, st, srvID, "appdb")
 	migID := mkMigrationRow(t, ctx, st, connID, owner.ID, "주문 표 추가")
 
 	if err := st.AddMigrationReview(ctx, &MigrationReview{
@@ -127,6 +127,15 @@ func TestMigrationCloseMigrationIsLossless(t *testing.T) {
 	if conn.ProjectID != DefaultProjectID {
 		t.Errorf("커넥션의 프로젝트 = %q, 기대 %q", conn.ProjectID, DefaultProjectID)
 	}
+	// 서버도 함께 옮겨져야 한다(0038). 서버가 갈 곳을 잃으면 그 아래 DB는
+	// 목록에 뜨지 않는다.
+	srv, err := st.GetServer(ctx, srvID)
+	if err != nil {
+		t.Fatalf("서버가 사라졌다: %v", err)
+	}
+	if srv.ProjectID != DefaultProjectID {
+		t.Errorf("서버의 프로젝트 = %q, 기대 %q", srv.ProjectID, DefaultProjectID)
+	}
 	// 있던 사람은 모두 기본 프로젝트의 참여자가 되어야 한다.
 	ok, err := st.IsProjectMember(ctx, DefaultProjectID, owner.ID)
 	if err != nil {
@@ -135,6 +144,24 @@ func TestMigrationCloseMigrationIsLossless(t *testing.T) {
 	if !ok {
 		t.Error("있던 사용자가 기본 프로젝트에 들어가지 않았다 — 앱을 올리는 순간 권한을 잃는다")
 	}
+}
+
+// mkServerRow는 옛 스키마 위에 서버 행 하나를 넣는다(다시 읽지 않는다).
+//
+// mkServer를 쓸 수 없는 이유는 mkConnRow와 같다: 그것은 프로젝트를 먼저 만드는데,
+// 여기서는 projects 표가 아직 없는 시점(30번)에서 시작한다.
+func mkServerRow(t *testing.T, ctx context.Context, st *Store, name string) string {
+	t.Helper()
+	id := "srv_" + uuid.NewString()
+	now := nowString()
+	if _, err := st.db.ExecContext(ctx, `INSERT INTO servers
+		(id, name, name_lower, kind, host, port, options, default_environment,
+		 tags, note, enabled, created_by, created_at, updated_at)
+		VALUES (?, ?, ?, 'postgres', '10.0.0.1', 5432, '{}', 'dev', '', '', 1, NULL, ?, ?)`,
+		id, name, name, now, now); err != nil {
+		t.Fatalf("서버 행: %v", err)
+	}
+	return id
 }
 
 // mkConnRow는 옛 스키마 위에 커넥션 행 하나를 넣는다(다시 읽지 않는다).

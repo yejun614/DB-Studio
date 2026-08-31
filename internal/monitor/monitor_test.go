@@ -43,7 +43,7 @@ func newTestConnection(t *testing.T, st *store.Store, name string, env model.Env
 	}
 	pw := "pw"
 	_, conn, err := st.CreateServerWithDatabase(context.Background(),
-		store.SaveServerParams{
+		store.SaveServerParams{ProjectID: pj.ID,
 			Name: name, Kind: model.KindMySQL, DefaultEnvironment: env,
 			Host: "127.0.0.1", Port: 3306,
 			Options: model.Options{}, Tags: []string{}, Enabled: true,
