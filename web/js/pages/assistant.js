@@ -176,25 +176,28 @@ function buildLayout(data, conns, canManageKeys, activeId, nav, opts = {}) {
   // 항목 안에 넣을 수 없다: 항목 자체가 <a> 또는 <button>이고, 그 안에 버튼을
   // 넣는 것은 잘못된 마크업이라 브라우저가 알아서 밖으로 끄집어낸다. 그러면 클릭이
   // 어디로 가는지 종류마다 달라진다.
-  const sessionRow = (s) => h('div.ai-session-row', {},
-    sessionItem(s, [
-      h('div.ai-session-title', {}, s.title || '새 대화'),
-      h('div.ai-session-meta', {},
-        h('span.muted', {}, relativeTime(s.updatedAt)),
-        s.pendingCount > 0 ? badge(`승인 ${s.pendingCount}`, 'warn') : null,
-        s.messageCount ? h('span.muted', {}, `${s.messageCount}개`) : null,
-      ),
-    ]),
-    h('button.icon-btn.ai-session-del', {
-      type: 'button', title: '이 대화 삭제', 'aria-label': `${s.title || '새 대화'} 삭제`,
-      onclick: (e) => {
-        // 목록의 클릭이 항목으로 번지면 지우려다 그 대화를 열게 된다.
-        e.preventDefault();
-        e.stopPropagation();
-        removeSessionFromList(s, s.id === activeId, nav);
-      },
-    }, icon('trash', 13)),
-  );
+  const sessionRow = (s) => {
+    const row = h('div.ai-session-row', {},
+      sessionItem(s, [
+        h('div.ai-session-title', {}, s.title || '새 대화'),
+        h('div.ai-session-meta', {},
+          h('span.muted', {}, relativeTime(s.updatedAt)),
+          s.pendingCount > 0 ? badge(`승인 ${s.pendingCount}`, 'warn') : null,
+          s.messageCount ? h('span.muted', {}, `${s.messageCount}개`) : null,
+        ),
+      ]),
+      h('button.icon-btn.ai-session-del', {
+        type: 'button', title: '이 대화 삭제', 'aria-label': `${s.title || '새 대화'} 삭제`,
+        onclick: (e) => {
+          // 목록의 클릭이 항목으로 번지면 지우려다 그 대화를 열게 된다.
+          e.preventDefault();
+          e.stopPropagation();
+          removeSessionFromList(s, s.id === activeId, nav, row);
+        },
+      }, icon('trash', 13)),
+    );
+    return row;
+  };
 
   const list = h('div.ai-session-list', {}, data.sessions.length === 0
     ? h('p.muted.ai-empty-list', {}, '대화가 없습니다')
@@ -243,7 +246,7 @@ function buildLayout(data, conns, canManageKeys, activeId, nav, opts = {}) {
 // 승인 대기 중인 제안이 있으면 그 수를 문장에 넣는다. 그것은 "아직 사람이 결정하지
 // 않은 것"이고, 대화를 지우면 결정할 자리도 함께 사라진다 — 개수를 보여주지 않으면
 // 그 사실을 지운 뒤에 알게 된다.
-async function removeSessionFromList(session, isActive, nav) {
+async function removeSessionFromList(session, isActive, nav, row) {
   const name = session.title || '새 대화';
   const pending = session.pendingCount > 0
     ? ` 승인을 기다리는 제안 ${session.pendingCount}건도 함께 사라집니다.`
@@ -258,6 +261,16 @@ async function removeSessionFromList(session, isActive, nav) {
   try {
     await api.del(`/ai/sessions/${encodeURIComponent(session.id)}`);
     toast('대화를 삭제했습니다', 'success');
+    // 그 줄을 그 자리에서 지운다.
+    //
+    // 다시 그리는 것에만 맡길 수 없다. 팝업에서는 이 목록이 겹쳐 뜬 창에 담겨
+    // 있어서, 뒤의 화면을 새로 그려도 사람이 보고 있는 그 목록은 옛 것 그대로다 —
+    // "지웠는데 그대로 있다"가 그래서 생긴다.
+    const list = row?.parentElement;
+    row?.remove();
+    if (list && !list.querySelector('.ai-session-row')) {
+      mount(list, h('p.muted.ai-empty-list', {}, '대화가 없습니다'));
+    }
     // 보고 있던 대화를 지웠으면 빈 자리를 보여주지 않고 다른 대화를 연다.
     if (isActive) nav.open('');
     else nav.refresh();
