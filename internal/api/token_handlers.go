@@ -126,6 +126,61 @@ func (s *Server) handleRevokeToken(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"ok": true})
 }
 
+// handleRotateToken은 토큰의 **값만** 다시 발급한다.
+//
+// 값이 샜을 때 할 일은 대개 "이 토큰을 버리고 새로 만들기"가 아니라 "이 토큰의 값만
+// 바꾸기"다. 클라이언트 설정에서 토큰을 가리키는 것은 이름이고, 새로 만들어 옮기면
+// 설정을 고칠 곳이 늘어나며 그 사이 옛 토큰을 지우는 것을 잊는다.
+//
+// 이름·범위·만료는 그대로다. 만료가 얼마 남지 않았다면 재발급해도 그대로 얼마 남지
+// 않은 채다 — 그때 필요한 것은 새 토큰이다.
+func (s *Server) handleRotateToken(c *fiber.Ctx) error {
+	u := currentUser(c)
+	id := c.Params("tokenId")
+
+	t, err := s.st.GetAPIToken(c.Context(), id)
+	if errors.Is(err, store.ErrNotFound) || (err == nil && t.UserID != u.ID) {
+		// 남의 토큰은 "없음"으로 답한다. 존재 여부를 알려주지 않는다.
+		return fail(c, fiber.StatusNotFound, "not_found", "토큰을 찾을 수 없습니다")
+	}
+	if err != nil {
+		return err
+	}
+	if t.RevokedAt != nil {
+		return fail(c, fiber.StatusBadRequest, "revoked",
+			"폐기된 토큰은 값을 다시 발급할 수 없습니다. 지우고 새로 만드세요")
+	}
+
+	raw, err := s.authn.RotateAPIToken(c.Context(), id, u.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return fail(c, fiber.StatusNotFound, "not_found", "토큰을 찾을 수 없습니다")
+	}
+	if err != nil {
+		return err
+	}
+
+	// 옛 값이 언제 죽었는지가 사고 조사에서 필요한 사실이다. 접두사를 둘 다 남긴다.
+	s.audit(c, store.AuditParams{
+		Action: "token.rotated", TargetType: "api_token", TargetID: id,
+		Detail: map[string]any{
+			"name": t.Name, "scope": t.Scope, "oldPrefix": t.Prefix,
+			"expiresAt": t.ExpiresAt,
+		},
+	})
+
+	saved, err := s.st.GetAPIToken(c.Context(), id)
+	if err != nil {
+		return err
+	}
+	// 원문은 여기서 한 번만 나간다. 발급과 같은 모양으로 돌려주어 화면이 같은 자리를
+	// 쓸 수 있게 한다.
+	return c.JSON(fiber.Map{
+		"token": saved,
+		"value": raw,
+		"note":  "이 값은 다시 표시되지 않습니다. 지금 복사해 두세요.",
+	})
+}
+
 func (s *Server) handleDeleteToken(c *fiber.Ctx) error {
 	u := currentUser(c)
 	id := c.Params("tokenId")
