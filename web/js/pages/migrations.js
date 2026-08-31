@@ -377,6 +377,22 @@ function myDecision(m) {
   return mine?.decision ?? null;
 }
 
+// hasRun은 이 계획이 이미 실행된 적이 있는지다.
+//
+// 적용된 뒤 닫은 계획도 실행된 계획이다 — 닫혔다는 이유로 "아직 안 한 일"처럼
+// 다루면 미리 검사 같은 것이 다시 나타난다. 그 SQL은 이미 이력이다.
+function hasRun(m) {
+  switch (m.status) {
+    case 'applied':
+    case 'rolled_back':
+    case 'failed':
+      return true;
+    case 'closed':
+      return m.closedFrom === 'applied';
+  }
+  return false;
+}
+
 function actionBar(m, res, precheckBox, reload) {
   const buttons = [];
 
@@ -400,7 +416,7 @@ function actionBar(m, res, precheckBox, reload) {
   // 사전 검사와 다른 일을 한다. 사전 검사는 "지금 실행해도 되는 조건인가"(승인 수,
   // 드리프트)를 보고, 미리 검사는 "이 SQL이 이 DB에서 도는가"를 본다. 둘 다 필요해서
   // 둘 다 둔다 — 조건은 맞는데 SQL이 깨진 경우가 바로 이 기능이 생긴 까닭이다.
-  if (m.status !== 'applied' && m.status !== 'rolled_back' && m.status !== 'failed') {
+  if (!hasRun(m)) {
     buttons.push(h('button.btn', {
       type: 'button',
       onclick: (e) => runDryRun({
@@ -446,11 +462,12 @@ function actionBar(m, res, precheckBox, reload) {
   // 접었다"는 사실과 그때의 리뷰까지 사라져, 같은 논의가 다시 올라왔을 때 왜
   // 접었는지 아무도 모른다. 닫힌 계획은 다시 열 수 있다.
   //
-  // 롤백된 계획도 닫는다. 되돌린 뒤 "이 변경은 하지 않기로 했다"고 정하는 것이
-  // 롤백의 흔한 결말인데, 닫을 길이 없으면 목록에 영원히 "롤백됨"으로 남아 아직
-  // 할 일인지 끝난 일인지 구분되지 않는다. 적용됨은 여전히 닫지 않는다 — 그것은
-  // 지금 DB에 들어 있는 변경이라서 이력 그 자체다.
-  if (m.status !== 'applied' && m.status !== 'closed') {
+  // 적용됨·롤백됨도 닫는다. 끝난 계획이 목록에 영원히 남으면 "지금 볼 것"과 "끝난
+  // 것"이 섞여, 목록은 훑을수록 무거워진다.
+  //
+  // 닫아도 사실이 사라지지 않는다. 닫기 전 상태를 기억했다가 다시 열 때 그 자리로
+  // 돌려보내므로, 적용된 계획은 적용됨으로 돌아오고 롤백할 길도 그대로다.
+  if (m.status !== 'closed') {
     buttons.push(h('button.btn', {
       type: 'button',
       onclick: () => changeStatus(m.id, 'closed', reload),
@@ -459,6 +476,10 @@ function actionBar(m, res, precheckBox, reload) {
   if (m.status === 'closed') {
     // 닫혀 있는 동안 대상 DB가 바뀌었을 수 있으므로 초안으로 돌아간다.
     // 그때의 승인은 지금 구조를 본 것이 아니다.
+    //
+    // 다만 적용된 상태에서 닫은 계획은 적용됨으로 돌아간다. 그것을 초안으로
+    // 보내면 DB에 들어가 있는 변경이 "아직 실행하지 않은 초안"으로 보이고,
+    // 롤백 버튼도 사라져 되돌릴 방법이 화면에서 없어진다.
     //
     // 먼저 묻는 이유: 이 버튼은 남아 있는 리뷰를 지운다. "다시 열기"라는 이름만
     // 보면 되돌리는 일 같지만, 실제로는 승인 기록이 사라지는 일이다. 무엇이
@@ -528,8 +549,11 @@ function applyGate(m, res, reload) {
         '반려를 남긴 사람이 결정을 바꾸거나, 지적을 반영한 새 계획이 필요합니다.'));
   }
   if (m.status === 'closed') {
-    return gateNote('info',
-      h('span', {},
+    return gateNote('info', m.closedFrom === 'applied'
+      ? h('span', {},
+        h('b', {}, '닫힌'), ' 계획입니다. 이미 적용된 뒤에 닫혔으므로, 다시 열면 ',
+        h('b', {}, '적용됨'), ' 으로 돌아가고 롤백할 수 있습니다.')
+      : h('span', {},
         h('b', {}, '닫힌'), ' 계획입니다. 다시 열면 초안으로 돌아가고, 승인을 다시 받아야 합니다.'));
   }
   if (m.status === 'rolled_back') {
@@ -596,6 +620,19 @@ async function reopenForRerun(m, reload) {
 // 그때의 승인은 지금 구조를 본 것이 아니다 — 그것을 인정하면 아무도 지금 상태를
 // 보지 않은 채 실행할 수 있다. 서버도 draft 전이에서 리뷰를 지운다.
 async function reopen(m, reload) {
+  // 적용된 뒤 닫은 계획은 적용됨으로 돌아간다. 리뷰도 그대로다 — 지울 이유가 없다.
+  // 그 계획은 이미 실행됐고, 다시 여는 것은 "끝난 일을 다시 보이게 하는 것"뿐이다.
+  if (m.closedFrom === 'applied') {
+    const ok = await confirmDialog({
+      title: '계획 다시 열기',
+      message: '이 계획은 적용된 뒤에 닫혔습니다. 적용됨 상태로 되돌립니다 — '
+        + '실행 기록과 리뷰는 그대로이고, 다시 롤백할 수 있게 됩니다.',
+      confirmLabel: '다시 열기',
+    });
+    if (!ok) return;
+    changeStatus(m.id, 'applied', reload, '적용됨 상태로 되돌렸습니다');
+    return;
+  }
   const left = (m.reviews ?? []).length;
   const ok = await confirmDialog({
     title: '계획 다시 열기',
@@ -1071,6 +1108,9 @@ function statusText(d) {
   if (d.to === 'closed') return '계획을 닫았습니다';
   if (d.from === 'closed' && d.to === 'draft') {
     return '닫은 계획을 다시 열었습니다 (초안으로 돌아가 승인을 다시 받아야 합니다)';
+  }
+  if (d.from === 'closed' && d.to === 'applied') {
+    return '닫은 계획을 다시 열었습니다 (적용됨으로 돌아왔습니다)';
   }
   if (d.to === 'draft') return '초안으로 되돌렸습니다 (그때까지의 승인·반려가 지워졌습니다)';
   if (d.to === 'in_review') return '리뷰를 시작했습니다';
