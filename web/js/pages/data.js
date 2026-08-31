@@ -845,7 +845,11 @@ export async function renderData(outlet, params, query) {
         h('button.btn.btn-danger', {
           type: 'button',
           onclick: async (e) => {
-            e.currentTarget.disabled = true;
+            // currentTarget 은 이벤트가 끝나면 null 이 된다. await 뒤에서 다시 만지면
+            // 그 자리에서 예외가 나고, 그러면 실패를 알리는 토스트조차 뜨지 않는다 —
+            // 눌렀는데 아무 일도 일어나지 않은 것처럼 보인다.
+            const pressed = e.currentTarget;
+            pressed.disabled = true;
             try {
               const res = await api.post(`/connections/${conn.id}/data/batch`, {
                 namespace: view.object.namespace ?? '',
@@ -857,7 +861,7 @@ export async function renderData(outlet, params, query) {
               toast(`${res.results.length}건을 적용했습니다 (영향 ${res.affected}행)`, 'success');
               loadRows(false);
             } catch (err) {
-              e.currentTarget.disabled = false;
+              pressed.disabled = false;
               toastError(err);
             }
           },

@@ -207,7 +207,11 @@ export function openTOTPDisable(onDone) {
       h('button.btn.btn-danger', {
         type: 'button',
         onclick: async (e) => {
-          e.currentTarget.disabled = true;
+          // currentTarget 은 이벤트가 끝나면 null 이 된다. await 뒤에서 다시 만지면
+          // 그 자리에서 예외가 나고, 그러면 실패를 알리는 토스트조차 뜨지 않는다 —
+          // 눌렀는데 아무 일도 일어나지 않은 것처럼 보인다.
+          const pressed = e.currentTarget;
+          pressed.disabled = true;
           try {
             await api.post('/auth/totp/disable', { password: password.value });
             await loadSession();
@@ -216,7 +220,7 @@ export function openTOTPDisable(onDone) {
             onDone?.();
           } catch (err) {
             toastError(err);
-            e.currentTarget.disabled = false;
+            pressed.disabled = false;
           }
         },
       }, '해제'),
@@ -242,14 +246,18 @@ export function openRecoveryRegenerate(onDone) {
       h('button.btn.btn-primary', {
         type: 'button',
         onclick: async (e) => {
-          e.currentTarget.disabled = true;
+          // currentTarget 은 이벤트가 끝나면 null 이 된다. await 뒤에서 다시 만지면
+          // 그 자리에서 예외가 나고, 그러면 실패를 알리는 토스트조차 뜨지 않는다 —
+          // 눌렀는데 아무 일도 일어나지 않은 것처럼 보인다.
+          const pressed = e.currentTarget;
+          pressed.disabled = true;
           try {
             const res = await api.post('/auth/totp/recovery', { code: code.value.trim() });
             close();
             showRecoveryCodes(res.recoveryCodes, onDone);
           } catch (err) {
             toastError(err);
-            e.currentTarget.disabled = false;
+            pressed.disabled = false;
           }
         },
       }, '재발급'),

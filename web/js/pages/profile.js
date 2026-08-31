@@ -397,7 +397,11 @@ function openTokenDialog(reload) {
             toast('토큰 이름을 입력하세요', 'error');
             return;
           }
-          e.currentTarget.disabled = true;
+          // currentTarget 은 이벤트가 끝나면 null 이 된다. await 뒤에서 다시 만지면
+          // 그 자리에서 예외가 나고, 그러면 실패를 알리는 토스트조차 뜨지 않는다 —
+          // 눌렀는데 아무 일도 일어나지 않은 것처럼 보인다.
+          const pressed = e.currentTarget;
+          pressed.disabled = true;
           try {
             const res = await api.post('/auth/tokens', {
               name: name.value.trim(),
@@ -409,7 +413,7 @@ function openTokenDialog(reload) {
             reload();
           } catch (err) {
             toastError(err);
-            e.currentTarget.disabled = false;
+            pressed.disabled = false;
           }
         },
       }, '발급'),
