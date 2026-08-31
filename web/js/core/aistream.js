@@ -51,14 +51,16 @@ export async function readSSE(body, onEvent) {
 //
 // api.js의 헬퍼를 쓰지 않는 이유: 그쪽은 JSON 본문을 통째로 기다린다. 여기서는
 // 첫 토큰이 도착하는 순간부터 그려야 하므로 응답 본문을 직접 읽어야 한다.
-export async function streamAIChat(sessionId, message, onEvent, signal) {
+// replaceFrom이 있으면 그 메시지와 그 뒤를 지우고 그 자리에서 다시 시작한다
+// (사람이 자기 말을 고쳐 다시 보내는 경우).
+export async function streamAIChat(sessionId, message, onEvent, signal, replaceFrom = 0) {
   const res = await fetch(
     `/api/v1/ai/sessions/${encodeURIComponent(sessionId)}/chat`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'dbstudio' },
       credentials: 'same-origin',
-      body: JSON.stringify({ message }),
+      body: JSON.stringify(replaceFrom ? { message, replaceFrom } : { message }),
       signal,
     },
   );

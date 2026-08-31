@@ -577,6 +577,57 @@ func (s *Store) ListAIMessages(ctx context.Context, sessionID string, limit int)
 	return out, nil
 }
 
+// GetAIMessage는 한 대화 안의 메시지 하나를 읽는다.
+//
+// 세션 아이디를 함께 받는 이유: 아이디만으로 찾으면 남의 대화의 메시지를 가리키는
+// 요청이 통과한다. 메시지 아이디는 앱 전체에서 증가하는 숫자라 추측하기도 쉽다.
+func (s *Store) GetAIMessage(ctx context.Context, sessionID string, id int64) (*AIMessage, error) {
+	var m AIMessage
+	var callsJSON, resultsJSON, createdAt string
+	err := s.db.QueryRowContext(ctx, `SELECT
+		id, session_id, role, text, tool_calls, tool_results,
+		input_tokens, output_tokens, error, created_at
+		FROM ai_messages WHERE id = ? AND session_id = ?`, id, sessionID).
+		Scan(&m.ID, &m.SessionID, &m.Role, &m.Text, &callsJSON, &resultsJSON,
+			&m.InputTokens, &m.OutputTokens, &m.Error, &createdAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get ai message: %w", err)
+	}
+	m.ToolCalls = []ai.ToolCall{}
+	_ = json.Unmarshal([]byte(callsJSON), &m.ToolCalls)
+	m.ToolResults = []ai.ToolResult{}
+	_ = json.Unmarshal([]byte(resultsJSON), &m.ToolResults)
+	m.CreatedAt = parseTime(createdAt)
+	return &m, nil
+}
+
+// TruncateAIMessagesFrom은 그 메시지와 그 뒤에 온 것을 모두 지운다.
+//
+// 말을 고쳐 다시 보내는 것은 새 말을 더하는 일이 아니라 **그 자리부터 다시 하는**
+// 일이다. 고친 말 뒤에 옛 답이 남아 있으면 대화는 있지도 않았던 문답이 되고, 다음
+// 요청의 문맥으로 그 옛 답이 그대로 모델에게 간다.
+//
+// 남은 개수를 함께 돌려준다. 첫 말을 고쳤다면 대화가 비게 되고, 그때는 그 말에서
+// 뽑아 둔 제목도 옛 말이라 다시 정해야 한다.
+func (s *Store) TruncateAIMessagesFrom(ctx context.Context, sessionID string, fromID int64) (int64, int64, error) {
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM ai_messages WHERE session_id = ? AND id >= ?`, sessionID, fromID)
+	if err != nil {
+		return 0, 0, fmt.Errorf("truncate ai messages: %w", err)
+	}
+	removed, _ := res.RowsAffected()
+
+	var left int64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT count(*) FROM ai_messages WHERE session_id = ?`, sessionID).Scan(&left); err != nil {
+		return removed, 0, fmt.Errorf("count ai messages: %w", err)
+	}
+	return removed, left, nil
+}
+
 // ---------- 보류 중인 제안 ----------
 
 // 제안 상태.

@@ -617,6 +617,9 @@ func (s *Server) handleAIChat(c *fiber.Ctx) error {
 	}
 	var body struct {
 		Message string `json:"message"`
+		// ReplaceFrom이 있으면 그 메시지와 그 뒤를 지우고 그 자리에서 다시 시작한다.
+		// 사람이 자기 말을 고쳐 다시 보내는 것이 그 뜻이다.
+		ReplaceFrom int64 `json:"replaceFrom"`
 	}
 	if err := c.BodyParser(&body); err != nil {
 		return fail(c, fiber.StatusBadRequest, "bad_request", "요청 본문을 해석할 수 없습니다")
@@ -633,6 +636,42 @@ func (s *Server) handleAIChat(c *fiber.Ctx) error {
 	if err != nil {
 		return failDetail(c, fiber.StatusBadRequest, "no_provider",
 			"AI 프로바이더를 사용할 수 없습니다", err.Error())
+	}
+
+	// 고친 말이면 그 자리부터 지운다.
+	//
+	// 새 말을 뒤에 붙이지 않는 이유: 고치기는 "다시 묻는 것"이 아니라 "그때 다르게
+	// 물었다면"이다. 옛 문답이 뒤에 남으면 대화는 있지도 않았던 흐름이 되고, 다음
+	// 요청의 문맥으로 그 옛 답이 그대로 모델에게 간다.
+	//
+	// 지우기 전에 그 메시지가 **이 대화의 사용자 말인지** 확인한다. 아이디는 앱
+	// 전체에서 증가하는 숫자라 남의 대화를 가리키기 쉽고, 모델의 답을 가리키면
+	// "내 말을 고친다"가 아니라 남의 답을 지우는 일이 된다.
+	if body.ReplaceFrom > 0 {
+		target, terr := s.st.GetAIMessage(c.Context(), sess.ID, body.ReplaceFrom)
+		if errors.Is(terr, store.ErrNotFound) {
+			return fail(c, fiber.StatusNotFound, "not_found", "고칠 메시지를 찾을 수 없습니다")
+		}
+		if terr != nil {
+			return terr
+		}
+		if target.Role != string(ai.RoleUser) {
+			return fail(c, fiber.StatusBadRequest, "not_user_message",
+				"고칠 수 있는 것은 내가 보낸 말입니다")
+		}
+		removed, left, derr := s.st.TruncateAIMessagesFrom(c.Context(), sess.ID, body.ReplaceFrom)
+		if derr != nil {
+			return derr
+		}
+		// 첫 말을 고쳤으면 제목도 그 말에서 뽑은 것이다. 비워 두면 아래에서 새 말로
+		// 다시 정해진다 — 그러지 않으면 목록의 제목과 대화의 첫 줄이 어긋난다.
+		if left == 0 {
+			sess.Title = ""
+		}
+		s.audit(c, store.AuditParams{
+			Action: "ai.message.replaced", TargetType: "ai_session", TargetID: sess.ID,
+			Detail: map[string]any{"fromId": body.ReplaceFrom, "removed": removed},
+		})
 	}
 
 	// 새 사용자 메시지가 오면 이전 제안은 문맥을 잃는다. 그대로 두면 한참 뒤에

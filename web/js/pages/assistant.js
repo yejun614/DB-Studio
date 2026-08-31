@@ -7,8 +7,9 @@ import { withProject } from '../core/project.js';
 import { streamAIChat } from '../core/aistream.js';
 import { state } from '../core/store.js';
 import {
-  h, mount, icon, select, input, spinner, emptyState,
+  h, mount, icon, select, input, textarea, spinner, emptyState,
   badge, envBadge, toast, toastError, relativeTime, openModal, confirmDialog,
+  copyToClipboard,
 } from '../core/ui.js';
 import { navigate, currentPath } from '../core/router.js';
 import { openFloatPanel, panelModal, isPanelOpen, closeFloatPanel } from '../core/floatpanel.js';
@@ -170,16 +171,34 @@ function buildLayout(data, conns, canManageKeys, activeId, nav, opts = {}) {
       onclick: () => nav.open(s.id),
     }, children));
 
-  const list = h('div.ai-session-list', {}, data.sessions.length === 0
-    ? h('p.muted.ai-empty-list', {}, '대화가 없습니다')
-    : data.sessions.map((s) => sessionItem(s, [
+  // 지우기 단추는 항목 **바깥**에 둔다(형제).
+  //
+  // 항목 안에 넣을 수 없다: 항목 자체가 <a> 또는 <button>이고, 그 안에 버튼을
+  // 넣는 것은 잘못된 마크업이라 브라우저가 알아서 밖으로 끄집어낸다. 그러면 클릭이
+  // 어디로 가는지 종류마다 달라진다.
+  const sessionRow = (s) => h('div.ai-session-row', {},
+    sessionItem(s, [
       h('div.ai-session-title', {}, s.title || '새 대화'),
       h('div.ai-session-meta', {},
         h('span.muted', {}, relativeTime(s.updatedAt)),
         s.pendingCount > 0 ? badge(`승인 ${s.pendingCount}`, 'warn') : null,
         s.messageCount ? h('span.muted', {}, `${s.messageCount}개`) : null,
       ),
-    ])));
+    ]),
+    h('button.icon-btn.ai-session-del', {
+      type: 'button', title: '이 대화 삭제', 'aria-label': `${s.title || '새 대화'} 삭제`,
+      onclick: (e) => {
+        // 목록의 클릭이 항목으로 번지면 지우려다 그 대화를 열게 된다.
+        e.preventDefault();
+        e.stopPropagation();
+        removeSessionFromList(s, s.id === activeId, nav);
+      },
+    }, icon('trash', 13)),
+  );
+
+  const list = h('div.ai-session-list', {}, data.sessions.length === 0
+    ? h('p.muted.ai-empty-list', {}, '대화가 없습니다')
+    : data.sessions.map(sessionRow));
 
   const sidebar = h('aside.ai-sidebar', {},
       h('div.ai-sidebar-head', {},
@@ -217,6 +236,34 @@ function buildLayout(data, conns, canManageKeys, activeId, nav, opts = {}) {
   };
 
   return { root, main, list, sidebar, openSessions, panel };
+}
+
+// removeSessionFromList는 목록에서 대화를 지운다.
+//
+// 승인 대기 중인 제안이 있으면 그 수를 문장에 넣는다. 그것은 "아직 사람이 결정하지
+// 않은 것"이고, 대화를 지우면 결정할 자리도 함께 사라진다 — 개수를 보여주지 않으면
+// 그 사실을 지운 뒤에 알게 된다.
+async function removeSessionFromList(session, isActive, nav) {
+  const name = session.title || '새 대화';
+  const pending = session.pendingCount > 0
+    ? ` 승인을 기다리는 제안 ${session.pendingCount}건도 함께 사라집니다.`
+    : '';
+  const ok = await confirmDialog({
+    title: '대화 삭제',
+    message: `"${name}" 과 그 툴 실행 기록을 삭제합니다.${pending} `
+      + '이미 실행된 작업은 되돌아가지 않습니다.',
+    confirmLabel: '삭제', danger: true,
+  });
+  if (!ok) return;
+  try {
+    await api.del(`/ai/sessions/${encodeURIComponent(session.id)}`);
+    toast('대화를 삭제했습니다', 'success');
+    // 보고 있던 대화를 지웠으면 빈 자리를 보여주지 않고 다른 대화를 연다.
+    if (isActive) nav.open('');
+    else nav.refresh();
+  } catch (err) {
+    toastError(err);
+  }
 }
 
 function noProviderView(canManageKeys, nav) {
@@ -587,7 +634,11 @@ class ChatView {
     const items = [];
     for (const m of this.messages) {
       const node = this.messageNode(m);
-      if (node) items.push(node);
+      if (!node) continue;
+      // 고치기가 그 자리를 찾아야 한다. 대화 전체를 다시 그리지 않고 그 말풍선만
+      // 칸으로 바꾸기 위해서다 — 다시 그리면 스크롤이 튀고 스트림이 끊긴다.
+      if (m.id) node.dataset.msgId = String(m.id);
+      items.push(node);
     }
     // 승인 대기 중인 제안은 항상 마지막에 눈에 띄게 둔다.
     for (const p of this.pending) {
@@ -622,7 +673,11 @@ class ChatView {
 
   messageNode(m) {
     if (m.role === 'user') {
-      return h('div.ai-msg.is-user', {}, h('div.ai-bubble', {}, m.text));
+      // 고치기는 아이디가 있을 때만이다. 방금 보낸 말은 서버에 저장되기 전이라
+      // 지울 자리를 가리킬 수 없다 — 스트림이 끝나면 다시 그려지며 생긴다.
+      return h('div.ai-msg.is-user', {},
+        h('div.ai-bubble', {}, m.text),
+        this.msgActions(m.text, m.id ? () => this.startEdit(m) : null));
     }
     if (m.role === 'assistant') {
       const parts = [];
@@ -634,6 +689,9 @@ class ChatView {
         parts.push(h('div.notice.notice-danger', {}, icon('alert'), m.error));
       }
       if (parts.length === 0) return null;
+      // 답에는 복사만 둔다. 남의 말을 고치는 것은 대화를 고치는 것이 아니라
+      // 없었던 일을 만드는 것이다.
+      if (m.text) parts.push(this.msgActions(m.text, null));
       return h('div.ai-msg.is-assistant', {}, parts);
     }
     if (m.role === 'tool') {
@@ -653,6 +711,79 @@ class ChatView {
       }));
     }
     return null;
+  }
+
+  // msgActions는 말풍선에 붙는 동작 줄이다(복사, 그리고 내 말이면 고치기).
+  //
+  // 늘 보이게 두지 않는다 — 대화 열 줄에 단추 스무 개가 함께 서 있으면 읽는 것이
+  // 방해된다. CSS가 그 말풍선에 손이 올라갈 때만 보여준다. 키보드로도 닿아야 하므로
+  // 포커스에서도 보인다(:focus-within).
+  msgActions(text, onEdit) {
+    return h('div.ai-msg-actions', {},
+      h('button.icon-btn', {
+        type: 'button', title: '복사',
+        onclick: () => copyToClipboard(text),
+      }, icon('copy', 13)),
+      onEdit
+        ? h('button.icon-btn', {
+          type: 'button', title: '고쳐서 다시 보내기',
+          onclick: onEdit,
+        }, icon('edit', 13))
+        : null);
+  }
+
+  // startEdit은 그 말풍선을 고치는 칸으로 바꾼다.
+  //
+  // 입력 칸으로 옮겨 적게 하지 않는 이유: 그러면 "고친 것"과 "새로 물은 것"이
+  // 구분되지 않고, 옛 문답이 위에 그대로 남는다. 이 자리에서 고쳐야 그 자리부터
+  // 다시 시작한다는 뜻이 화면에 드러난다.
+  startEdit(m) {
+    if (this.controller) {
+      toast('답변이 끝난 뒤에 고칠 수 있습니다', 'info');
+      return;
+    }
+    const box = textarea({ rows: 3, value: m.text });
+    const node = [...this.log.children].find((el) => el.dataset.msgId === String(m.id));
+    if (!node) return;
+
+    const cancel = () => this.renderLog();
+    const submit = () => {
+      const next = box.value.trim();
+      if (!next) {
+        toast('내용을 비울 수는 없습니다. 지우려면 대화를 새로 시작하세요', 'error');
+        return;
+      }
+      if (next === m.text) {
+        cancel();
+        return;
+      }
+      this.send(next, m.id);
+    };
+
+    mount(node,
+      h('div.ai-bubble.ai-edit', {},
+        box,
+        h('p.field-help', {},
+          '다시 보내면 이 말부터 아래의 답까지 사라지고, 고친 말로 다시 시작합니다.'),
+        h('div.ai-edit-actions', {},
+          h('button.btn.btn-small', { type: 'button', onclick: cancel }, '취소'),
+          h('button.btn.btn-small.btn-primary', {
+            type: 'button', onclick: submit,
+          }, icon('play', 13), '다시 보내기'))));
+    box.focus();
+    // 끝으로 커서를 둔다. 고치려는 사람은 대개 뒤에 덧붙이거나 지운다.
+    box.setSelectionRange(box.value.length, box.value.length);
+    box.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        submit();
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        cancel();
+      }
+    });
+    node.scrollIntoView({ block: 'nearest' });
   }
 
   pendingNode(p) {
@@ -731,19 +862,27 @@ class ChatView {
   }
 
   // send는 메시지를 보내고 응답을 스트리밍으로 받는다.
-  async send(overrideText) {
+  async send(overrideText, replaceFrom = 0) {
     const text = (overrideText ?? this.inputBox.value).trim();
     if (!text || this.controller) return;
 
+    if (replaceFrom) {
+      // 고친 말부터 아래를 화면에서도 먼저 걷어낸다. 서버가 지우는 것과 같은
+      // 자리다 — 남겨 두면 답이 오는 동안 옛 문답이 함께 보인다.
+      const cut = this.messages.findIndex((x) => x.id === replaceFrom);
+      if (cut >= 0) this.messages = this.messages.slice(0, cut);
+      this.pending = [];
+    }
     this.messages.push({ role: 'user', text });
-    this.inputBox.value = '';
+    if (!overrideText) this.inputBox.value = '';
     this.sendBtn.disabled = true;
     this.streaming = createStreamingNode();
     this.renderLog();
 
     this.controller = new AbortController();
     try {
-      await streamAIChat(this.sessionId, text, (ev) => this.handleEvent(ev), this.controller.signal);
+      await streamAIChat(this.sessionId, text, (ev) => this.handleEvent(ev),
+        this.controller.signal, replaceFrom);
     } catch (err) {
       if (err.name !== 'AbortError') {
         this.streaming?.setError(err.message);
