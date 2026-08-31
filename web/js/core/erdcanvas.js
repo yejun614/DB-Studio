@@ -864,6 +864,26 @@ export class ErdCanvas {
   // clearSelection은 "빈 곳을 눌렀다"는 뜻일 때만 켠다. 스페이스바로 옮기는 것은
   // 보는 자리를 바꾸는 일이지 고른 것을 놓는 일이 아니다 — 골라 둔 열 장을 옮겨
   // 보려고 화면을 밀었더니 선택이 풀리면, 그 뒤의 정렬·복제를 다시 골라야 한다.
+  // otherButton은 왼쪽이 아닌 버튼을 처리한다. 처리했으면 true.
+  //
+  // 빈 곳에서는 이미 이 규칙이었다(가운데는 화면 이동, 오른쪽은 우리 것이 아니다).
+  // 그런데 카드·메모·묶음은 각자 pointerdown 을 잡으면서 버튼을 보지 않아, 그 위에서만
+  // 규칙이 달랐다 — 가운데 버튼으로 끌면 화면이 아니라 **그것이** 움직였다. 묶음은
+  // 넓어서 화면을 옮기려다 그 위를 누르는 일이 잦으니, 옮기려다 배치를 흐트러뜨리게
+  // 된다. 오른쪽 버튼도 마찬가지로 막는다: 브라우저 메뉴가 뜬 채 드래그가 시작된
+  // 상태가 남는다.
+  otherButton(e) {
+    if (e.button === 2) return true;
+    if (e.button !== 1) return false;
+    // 브라우저의 자동 스크롤(가운데 버튼을 누르면 나오는 사방 화살표)을 막는다.
+    // 그것이 켜지면 우리 이동과 두 힘이 동시에 당겨 화면이 튄다.
+    e.preventDefault();
+    // 고른 것은 그대로 둔다. 화면을 잠깐 옮기는 일이 "고른 것을 놓는 일"이어서는
+    // 안 된다 — 속성 창을 보면서 다른 곳을 살피는 것이 이 버튼을 쓰는 이유다.
+    this.startPan(e, { clearSelection: false });
+    return true;
+  }
+
   startPan(e, { clearSelection = false } = {}) {
     this.drag = { mode: 'pan', startClient: { x: e.clientX, y: e.clientY }, view: { ...this.view } };
     // 화면을 손으로 옮기기 시작했다. 따라가기와 두 힘이 동시에 당기면
@@ -920,6 +940,7 @@ export class ErdCanvas {
 
   onCardPointerDown(e, key, geom) {
     e.stopPropagation();
+    if (this.otherButton(e)) return;
     // 스페이스바를 누르고 있으면 무엇을 눌렀든 화면 이동이다. 카드 위에서만 안 되면
     // "빈 곳을 찾아 눌러야 하는" 도구가 되는데, 카드가 화면을 덮은 상태에서 옮기려는
     // 순간이 바로 그 도구가 필요한 순간이다.
@@ -960,6 +981,7 @@ export class ErdCanvas {
 
   onNotePointerDown(e, note, mode = 'move') {
     e.stopPropagation();
+    if (this.otherButton(e)) return;
     if (this.spaceHeld) {
       this.startPan(e);
       return;
@@ -996,6 +1018,7 @@ export class ErdCanvas {
 
   onGroupPointerDown(e, group, mode) {
     e.stopPropagation();
+    if (this.otherButton(e)) return;
     if (this.spaceHeld) {
       this.startPan(e);
       return;
