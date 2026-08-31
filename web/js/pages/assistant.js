@@ -129,12 +129,22 @@ export async function mountAssistant(outlet, {
   const ui = buildLayout(data, conns, canManageKeys, sessionId, nav, { compact, panel });
   mount(outlet, ui.root);
 
+  // 대화가 없어도, 프로바이더가 없어도 **키 관리와 툴 목록에는 닿을 수 있어야 한다.**
+  //
+  // 팝업(compact)에는 사이드바가 늘 보이지 않고 머리글의 "대화" 단추로만 열리는데,
+  // 그 머리글은 대화가 있을 때만 그려졌다. 그래서 처음 켠 사람 — 대화도 키도 없는
+  // 바로 그 사람 — 이 키를 넣을 자리도 툴 목록도 찾을 수 없었다. 넓은 화면에서는
+  // 사이드바가 그대로 있으므로 이 머리글은 팝업에서만 붙인다.
+  const emptyMain = (...body) => {
+    mount(ui.main, compact ? [emptyHead(ui), ...body] : body);
+  };
+
   if (data.providers.length === 0) {
-    mount(ui.main, noProviderView(canManageKeys, nav));
+    emptyMain(noProviderView(canManageKeys, nav));
     return () => {};
   }
   if (!sessionId) {
-    mount(ui.main, emptyState('대화를 시작하려면 새 대화를 만드세요.',
+    emptyMain(emptyState('대화를 시작하려면 새 대화를 만드세요.',
       h('button.btn.btn-primary', {
         type: 'button', onclick: () => createSession(data, conns, nav),
       }, icon('plus'), '새 대화')));
@@ -142,7 +152,7 @@ export async function mountAssistant(outlet, {
   }
   if (!data.sessions.some((s) => s.id === sessionId)) {
     // 목록은 본인 세션만 담고 있다. 없다면 남의 세션이거나 이미 삭제된 것이다.
-    mount(ui.main, errorPanel({
+    emptyMain(errorPanel({
       message: '이 대화를 찾을 수 없습니다',
       detail: '삭제되었거나 다른 사용자의 대화입니다.',
     }));
@@ -153,6 +163,22 @@ export async function mountAssistant(outlet, {
   chat.compact = compact;
   await chat.load();
   return () => chat.stop();
+}
+
+// emptyHead는 대화가 없을 때의 머리글이다(팝업 전용).
+//
+// 여기 있는 "대화" 단추 하나가 사이드바를 겹쳐 연다 — 그 안에 새 대화·AI 키 관리·
+// 툴 목록이 모두 있다. 세 가지를 여기에 다시 늘어놓지 않는 이유: 같은 것을 두 곳에
+// 그리면 하나가 늘거나 이름이 바뀔 때 한쪽만 낡는다.
+function emptyHead(ui) {
+  return h('header.ai-head.is-compact', {},
+    h('div.ai-head-main', {},
+      h('button.btn.btn-small', {
+        type: 'button', title: '대화 목록 · AI 키 · 툴',
+        onclick: () => ui.openSessions?.(),
+      }, icon('list'), '대화'),
+      h('h1.ai-title', {}, 'AI 어시스턴트'),
+    ));
 }
 
 function buildLayout(data, conns, canManageKeys, activeId, nav, opts = {}) {
@@ -233,9 +259,16 @@ function buildLayout(data, conns, canManageKeys, activeId, nav, opts = {}) {
       ? panelModal(panel, { title: '대화', body: () => sidebar })
       : openModal({ title: '대화', width: 420, body: () => sidebar });
     // 목록에서 고르면 화면이 통째로 다시 그려지므로 겹친 창은 닫아 둔다.
-    sidebar.addEventListener('click', (e) => {
-      if (e.target.closest('.ai-session')) close();
-    }, { once: true });
+    //
+    // once 로 두지 않는다: 이 창 안에는 대화 말고도 누를 것이 있다(새 대화·AI 키
+    // 관리·툴 목록). 그중 하나를 먼저 누르면 그 한 번으로 이 감시가 사라져서,
+    // 그다음에 대화를 골라도 창이 열린 채 남는다.
+    const onPick = (e) => {
+      if (!e.target.closest('.ai-session')) return;
+      sidebar.removeEventListener('click', onPick);
+      close();
+    };
+    sidebar.addEventListener('click', onPick);
   };
 
   return { root, main, list, sidebar, openSessions, panel };
