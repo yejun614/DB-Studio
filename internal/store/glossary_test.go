@@ -150,3 +150,101 @@ func termNames(terms []*GlossaryTerm) []string {
 	}
 	return out
 }
+
+// 분류는 셋 다 비워 둘 수 있고, 찾기는 분류도 본다.
+//
+// 처음부터 분류 체계를 세우고 시작하는 팀은 없다. 필수로 만들면 아무 말이나 넣게
+// 되고, 그렇게 들어간 분류는 없느니만 못하다.
+func TestGlossaryCategoriesAreOptionalAndSearchable(t *testing.T) {
+	ctx, st := glossaryFixture(t)
+	for _, p := range []SaveGlossaryParams{
+		{Term: "회원", Physical: "member", Cat1: "회원", Cat2: "기본"},
+		{Term: "비밀번호", Physical: "password", Cat1: "회원", Cat2: "인증", Cat3: "자격"},
+		{Term: "주문", Physical: "order", Cat1: "주문"},
+		{Term: "번호", Physical: "no"}, // 분류 없음
+	} {
+		if _, err := st.CreateGlossaryTerm(ctx, p); err != nil {
+			t.Fatalf("create %s: %v", p.Term, err)
+		}
+	}
+
+	// 분류로도 찾힌다. "회원"으로 찾는 사람은 그 말 자체를 찾을 수도, 그 덩어리를
+	// 찾을 수도 있다 — 어느 쪽인지 되묻지 않고 둘 다 보여준다.
+	got, err := st.ListGlossary(ctx, "인증", 0)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(got) != 1 || got[0].Term != "비밀번호" {
+		t.Errorf("분류로 찾기 = %v", termNames(got))
+	}
+
+	// 분류가 있는 것이 먼저, 없는 것이 뒤로 간다. 뒤에 있는 것은 아직 자리를 못
+	// 정한 것들이라 그 자체로 "정리할 것" 목록이 된다.
+	all, err := st.ListGlossary(ctx, "", 0)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	// 분류 → 용어 순. 분류 없는 "번호"만 뒤로 간다.
+	want := []string{"주문", "회원", "비밀번호", "번호"}
+	if names := termNames(all); !equalNames(names, want) {
+		t.Errorf("차례 = %v, 기대 %v", names, want)
+	}
+}
+
+// 분류 목록은 실제로 쓰인 조합에서 모은다.
+//
+// 분류를 따로 표로 두지 않기 때문이다. 조합 그대로 돌려주어야 화면이 "이 대분류
+// 아래에서 쓰인 중분류"를 제안할 수 있다.
+func TestGlossaryCategoryListComesFromUse(t *testing.T) {
+	ctx, st := glossaryFixture(t)
+	for _, p := range []SaveGlossaryParams{
+		{Term: "회원", Physical: "member", Cat1: "회원", Cat2: "기본"},
+		{Term: "회원명", Physical: "member_nm", Cat1: "회원", Cat2: "기본"},
+		{Term: "비밀번호", Physical: "password", Cat1: "회원", Cat2: "인증"},
+		{Term: "번호", Physical: "no"},
+	} {
+		if _, err := st.CreateGlossaryTerm(ctx, p); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+	}
+
+	cats, err := st.GlossaryCategories(ctx)
+	if err != nil {
+		t.Fatalf("categories: %v", err)
+	}
+	// 같은 조합은 한 번만, 분류가 아예 없는 용어는 목록에 없다.
+	want := [][3]string{{"회원", "기본", ""}, {"회원", "인증", ""}}
+	if len(cats) != len(want) {
+		t.Fatalf("분류 조합 = %v, 기대 %v", cats, want)
+	}
+	for i := range want {
+		if cats[i] != want[i] {
+			t.Errorf("조합[%d] = %v, 기대 %v", i, cats[i], want[i])
+		}
+	}
+
+	// 마지막 용어가 분류를 잃으면 그 조합도 목록에서 사라진다. 쓰이지 않는 분류를
+	// 누가 치우는가는 물을 필요조차 없어야 한다.
+	terms, _ := st.ListGlossary(ctx, "비밀번호", 0)
+	if _, err := st.UpdateGlossaryTerm(ctx, terms[0].ID, SaveGlossaryParams{
+		Term: "비밀번호", Physical: "password", Cat1: "회원", Cat2: "기본",
+	}); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	cats, _ = st.GlossaryCategories(ctx)
+	if len(cats) != 1 || cats[0] != [3]string{"회원", "기본", ""} {
+		t.Errorf("고친 뒤 분류 = %v, 쓰이지 않는 조합이 남았습니다", cats)
+	}
+}
+
+func equalNames(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
