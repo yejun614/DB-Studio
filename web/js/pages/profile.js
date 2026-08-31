@@ -242,8 +242,14 @@ function tokenRow(t, reload) {
       // 앞자리는 로그에서 이 토큰을 알아보는 유일한 단서다. 눈에 띄게 둔다.
       h('div.token-meta', {},
         h('code.token-prefix', {}, `${t.prefix}…`),
-        h('span', {}, `발급 ${formatDate(t.createdAt)}`),
+        // 재발급했다면 지금 살아 있는 값이 언제 나온 것인지를 앞에 둔다. "발급"만
+        // 있으면 어제 재발급한 토큰이 석 달 전 것처럼 보이고, 그러면 클라이언트에
+        // 넣어 둔 값이 최신인지 아무도 확신할 수 없다.
+        h('span', {}, t.rotatedAt
+          ? `재발급 ${formatDate(t.rotatedAt)}`
+          : `발급 ${formatDate(t.createdAt)}`),
         h('span', {}, t.expiresAt ? `만료 ${formatDate(t.expiresAt)}` : '만료 없음'),
+        t.rotatedAt ? h('span', {}, `처음 만든 날 ${formatDate(t.createdAt)}`) : null,
       ),
       h('div.token-meta', {},
         h('span', {}, t.lastUsedAt
@@ -251,28 +257,24 @@ function tokenRow(t, reload) {
           : '사용 기록 없음')),
     ),
     h('div.token-actions', {},
+      // 값만 다시 발급한다. 값이 샜을 때 할 일은 대개 "이 토큰을 버리기"가 아니라
+      // "이 토큰의 값 바꾸기"다 — 클라이언트 설정이 가리키는 것은 이름이고, 새로
+      // 만들어 옮기면 고칠 곳이 늘어나며 그 사이 옛 토큰 지우는 것을 잊는다.
+      //
+      // 폐기 단추는 없앴다. 값을 바꾸거나(재발급) 아예 지우거나(삭제) 둘로 충분하고,
+      // 셋을 늘어놓으면 "폐기와 삭제는 뭐가 다른가"를 매번 생각해야 한다.
       revoked ? null : h('button.btn.btn-small', {
         type: 'button',
-        onclick: async () => {
-          const ok = await confirmDialog({
-            title: '토큰 폐기',
-            message: `${t.name} 을(를) 폐기합니다. 이 토큰을 쓰는 클라이언트는 즉시 접속할 수 없게 됩니다.`,
-            confirmLabel: '폐기', danger: true,
-          });
-          if (!ok) return;
-          try {
-            await api.post(`/auth/tokens/${t.id}/revoke`);
-            toast('토큰을 폐기했습니다', 'success');
-            reload();
-          } catch (err) { toastError(err); }
-        },
-      }, '폐기'),
+        title: '이름·범위·만료는 그대로 두고 값만 새로 만듭니다',
+        onclick: () => rotateToken(t, reload),
+      }, icon('refresh'), '재발급'),
       h('button.icon-btn.danger', {
         type: 'button', title: '기록에서 지우기',
         onclick: async () => {
           const ok = await confirmDialog({
             title: '토큰 기록 삭제',
-            message: '기록까지 지웁니다. 폐기와 달리 흔적이 남지 않습니다.',
+            message: `${t.name} 을(를) 목록에서 지웁니다. 이 토큰을 쓰는 클라이언트는 `
+              + '즉시 접속할 수 없게 되고, 이런 토큰이 있었다는 기록도 남지 않습니다.',
             confirmLabel: '삭제', danger: true,
           });
           if (!ok) return;
@@ -284,6 +286,29 @@ function tokenRow(t, reload) {
       }, icon('trash')),
     ),
   );
+}
+
+// rotateToken은 값만 새로 발급하고 그 값을 한 번 보여준다.
+//
+// 먼저 묻는 이유: 누르는 순간 지금 쓰이고 있는 값이 죽는다. 되돌릴 수 없고, 새 값을
+// 넣기 전까지 그 클라이언트는 붙지 못한다.
+async function rotateToken(t, reload) {
+  const ok = await confirmDialog({
+    title: '토큰 값 재발급',
+    message: `${t.name} 의 값을 새로 만듭니다. 지금 쓰던 값은 그 즉시 못 쓰게 되므로, `
+      + '새 값을 클라이언트에 넣기 전까지는 접속이 끊깁니다.',
+    confirmLabel: '재발급',
+    details: h('p.notice.notice-info', {}, icon('activity'),
+      h('span', {},
+        '이름·범위·만료는 그대로입니다', t.expiresAt ? ` (만료 ${formatDate(t.expiresAt)})` : '',
+        '. 만료가 얼마 남지 않았다면 재발급해도 그대로입니다 — 그때는 새 토큰을 만드세요.')),
+  });
+  if (!ok) return;
+  try {
+    const res = await api.post(`/auth/tokens/${t.id}/rotate`);
+    showTokenOnce(res.value, '토큰 값을 다시 발급했습니다');
+    reload();
+  } catch (err) { toastError(err); }
 }
 
 function mcpHint(mcpPath) {
@@ -394,9 +419,9 @@ function openTokenDialog(reload) {
 
 // showTokenOnce는 발급된 토큰을 한 번만 보여준다.
 // 서버가 해시만 저장하므로 이 창을 닫으면 되찾을 방법이 없다.
-function showTokenOnce(value) {
+function showTokenOnce(value, title = '토큰이 발급되었습니다') {
   openModal({
-    title: '토큰이 발급되었습니다',
+    title,
     width: 620,
     body: () => [
       h('p.notice.notice-warn', {}, icon('alert'),
