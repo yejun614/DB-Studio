@@ -38,21 +38,25 @@ func (d Decision) HasCap(c model.Capability) bool {
 // 판정 순서:
 //  1. 비활성 사용자 → 거부
 //  2. superadmin → 무조건 migrate
-//  3. 접근 범위(mode) 확인 → 범위 밖이면 거부
-//  4. 커넥션별 오버라이드가 있으면 그 등급, 없으면 default_level
-//  5. 등급이 none이면 거부
+//  3. 프로젝트 참여 확인 → 참여하지 않았으면 거부
+//  4. 접근 범위(mode) 확인 → 범위 밖이면 거부
+//  5. 커넥션별 오버라이드가 있으면 그 등급, 없으면 default_level
+//  6. 등급이 none이면 거부
 func (a *Authorizer) Resolve(ctx context.Context, u *model.User, connectionID string) (Decision, error) {
 	if d, done := shortCircuit(u); done {
 		return d, nil
 	}
-	// 커넥션의 소속 서버를 알아야 서버 단위 설정을 볼 수 있다.
-	// 조회에 실패해도 커넥션 단위 판정은 가능하므로, 여기서 막지 않고 서버 없이 판정한다 —
-	// 조회 실패로 권한이 **넓어지는** 방향은 없다(서버 설정은 커넥션 설정보다 약하다).
-	scope := model.Scope{ConnectionID: connectionID}
-	if conn, err := a.st.GetConnection(ctx, connectionID); err == nil {
-		scope.ServerID = conn.ServerID
+	// 커넥션을 읽어야 소속 서버와 프로젝트를 알 수 있다.
+	//
+	// 예전에는 조회에 실패해도 서버 없이 판정을 이어 갔다 — 서버 설정은 커넥션
+	// 설정보다 약해서 실패가 권한을 넓히지 않았기 때문이다. 프로젝트는 반대다.
+	// 어느 프로젝트인지 모르면 참여 여부를 확인할 방법이 없고, 모른 채로 통과시키면
+	// 관문이 조용히 열린다. 그래서 이제는 막는다.
+	conn, err := a.st.GetConnection(ctx, connectionID)
+	if err != nil {
+		return Decision{Reason: "대상 DB를 확인할 수 없음"}, nil
 	}
-	return a.resolveScope(ctx, u, scope)
+	return a.resolveScope(ctx, u, conn.Scope())
 }
 
 // ResolveScope는 커넥션을 이미 읽어 둔 호출부용이다. Resolve의 재조회를 피한다.
@@ -93,6 +97,19 @@ func shortCircuit(u *model.User) (Decision, bool) {
 // 서버와 커넥션 두 층이 있고 **좁은 쪽이 이긴다**. "이 서버 전체에 모니터링, 단
 // billing DB만 접근 불가"가 표현되어야 하기 때문이다. 반대로 두면 예외를 적을 수 없다.
 func resolveWithPolicy(p *model.AccessPolicy, scope model.Scope) Decision {
+	// 프로젝트가 첫 관문이다.
+	//
+	// 등급·능력보다 앞에 두는 이유: 프로젝트는 "무엇을 할 수 있는가"가 아니라
+	// "무엇이 내 일인가"다. 참여하지 않은 프로젝트의 DB는 등급이 무엇으로 적혀
+	// 있든 보이지 않아야 한다. 반대로 두면 옛 등급 설정이 남아 있는 사람에게 새
+	// 프로젝트의 DB가 그대로 열린다.
+	//
+	// 프로젝트를 알 수 없는 대상(ProjectID가 빈 값)도 막는다. 참여 여부를 확인할
+	// 수 없다는 뜻이고, 확인할 수 없는 것을 통과시키면 관문이 아니다.
+	if scope.ProjectID == "" || !slices.Contains(p.Projects, scope.ProjectID) {
+		return Decision{Reason: "참여하지 않은 프로젝트"}
+	}
+
 	inList := slices.Contains(p.Items, scope.ConnectionID)
 	// 서버가 목록에 있으면 그 아래 DB도 목록에 있는 것으로 본다.
 	// 이것이 일괄 부여의 실체다 — DB를 추가해도 권한을 다시 챙길 필요가 없다.

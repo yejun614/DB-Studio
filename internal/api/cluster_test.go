@@ -353,8 +353,13 @@ func TestNodeRoutingUnknownNode(t *testing.T) {
 	if err != nil || len(servers) == 0 {
 		t.Fatalf("서버 목록: %v", err)
 	}
+	pj, err := master.st.CreateProject(ctx, store.SaveProjectParams{Name: "테스트 프로젝트"})
+	if err != nil {
+		t.Fatalf("프로젝트 생성: %v", err)
+	}
 	conn, err := master.st.CreateConnection(ctx, store.SaveConnectionParams{
-		ServerID: servers[0].ID, Name: "db1", Environment: model.EnvDev,
+		ProjectID: pj.ID,
+		ServerID:  servers[0].ID, Name: "db1", Environment: model.EnvDev,
 		DatabaseName: "x.db", Enabled: true, NodeID: "없는-노드",
 	})
 	if err != nil {

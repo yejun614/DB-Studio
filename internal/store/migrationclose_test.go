@@ -43,8 +43,8 @@ func TestMigrationCloseMigrationIsLossless(t *testing.T) {
 
 	owner := mkUser(t, ctx, st, "maker")
 	srv := mkServer(t, ctx, st, "pg")
-	conn := addDB(t, ctx, st, srv, "appdb")
-	migID := mkMigrationRow(t, ctx, st, conn.ID, owner.ID, "주문 표 추가")
+	connID := mkConnRow(t, ctx, st, srv.ID, "appdb")
+	migID := mkMigrationRow(t, ctx, st, connID, owner.ID, "주문 표 추가")
 
 	if err := st.AddMigrationReview(ctx, &MigrationReview{
 		MigrationID: migID, ReviewerID: owner.ID, ReviewerName: "maker",
@@ -74,7 +74,7 @@ func TestMigrationCloseMigrationIsLossless(t *testing.T) {
 	if got.Title != "주문 표 추가" || got.Status != MigrationInReview || got.UpSQL == "" {
 		t.Errorf("내용이 달라졌다: title=%q status=%q upSQL=%q", got.Title, got.Status, got.UpSQL)
 	}
-	if got.ConnectionID != conn.ID || got.CreatedBy != owner.ID {
+	if got.ConnectionID != connID || got.CreatedBy != owner.ID {
 		t.Errorf("소속·작성자가 달라졌다: %+v", got)
 	}
 	// 담당자가 비어 있던 행은 만든 사람으로 채워져야 한다.
@@ -116,6 +116,43 @@ func TestMigrationCloseMigrationIsLossless(t *testing.T) {
 	if len(got.Reviewers) != 1 {
 		t.Errorf("다시 연 뒤 리뷰어 지정 %d명, 기대 1명 (지정은 결정과 다르다)", len(got.Reviewers))
 	}
+
+	// 0037은 connections 표도 새로 만들어 옮긴다. 옛 DB에서 시작한 이 시험이
+	// 그것까지 지나왔으므로, 그 커넥션이 기본 프로젝트에 들어갔는지 여기서 본다.
+	// 들어가지 못했다면 앱은 뜨지만 아무에게도 보이지 않는 DB가 된다.
+	conn, err := st.GetConnection(ctx, connID)
+	if err != nil {
+		t.Fatalf("커넥션이 사라졌다: %v", err)
+	}
+	if conn.ProjectID != DefaultProjectID {
+		t.Errorf("커넥션의 프로젝트 = %q, 기대 %q", conn.ProjectID, DefaultProjectID)
+	}
+	// 있던 사람은 모두 기본 프로젝트의 참여자가 되어야 한다.
+	ok, err := st.IsProjectMember(ctx, DefaultProjectID, owner.ID)
+	if err != nil {
+		t.Fatalf("참여 확인: %v", err)
+	}
+	if !ok {
+		t.Error("있던 사용자가 기본 프로젝트에 들어가지 않았다 — 앱을 올리는 순간 권한을 잃는다")
+	}
+}
+
+// mkConnRow는 옛 스키마 위에 커넥션 행 하나를 넣는다(다시 읽지 않는다).
+//
+// addDB를 쓸 수 없는 이유는 mkMigrationRow와 같다: 그것은 프로젝트를 먼저 만드는데,
+// 여기서는 projects 표가 아직 없는 시점(30번)에서 시작한다.
+func mkConnRow(t *testing.T, ctx context.Context, st *Store, serverID, db string) string {
+	t.Helper()
+	id := uuid.NewString()
+	now := nowString()
+	if _, err := st.db.ExecContext(ctx, `INSERT INTO connections
+		(id, server_id, name, name_lower, environment, database_name, tags, note,
+		 enabled, created_by, created_at, updated_at, node_id)
+		VALUES (?, ?, ?, ?, 'dev', ?, '', '', 1, NULL, ?, ?, '')`,
+		id, serverID, db, db, db, now, now); err != nil {
+		t.Fatalf("커넥션 행: %v", err)
+	}
+	return id
 }
 
 // 적용된 계획도 닫을 수 있고, 다시 열면 적용됨으로 돌아온다.

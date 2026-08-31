@@ -75,6 +75,11 @@ func setup(t *testing.T, kind model.DBKind, host string, port int, dbName, user,
 		t.Fatalf("create reviewer: %v", err)
 	}
 
+	pj, err := st.CreateProject(ctx, store.SaveProjectParams{Name: "테스트 프로젝트"})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
 	pw := pass
 	_, conn, err := st.CreateServerWithDatabase(ctx,
 		store.SaveServerParams{
@@ -83,7 +88,8 @@ func setup(t *testing.T, kind model.DBKind, host string, port int, dbName, user,
 			Options: opts, Tags: []string{}, Enabled: true, Password: &pw,
 		},
 		store.SaveConnectionParams{
-			Name: "target-" + string(kind), Environment: model.EnvDev,
+			ProjectID: pj.ID,
+			Name:      "target-" + string(kind), Environment: model.EnvDev,
 			DatabaseName: dbName, Tags: []string{}, Enabled: true,
 		})
 	if err != nil {

@@ -33,7 +33,8 @@ func assignEnv(t *testing.T) (*testEnv, *model.Connection, *store.Migration) {
 		t.Fatalf("create server: %v", err)
 	}
 	conn, err := e.st.CreateConnection(ctx, store.SaveConnectionParams{
-		ServerID: srv.ID, Name: "pg / appdb", Environment: model.EnvDev,
+		ProjectID: e.project.ID,
+		ServerID:  srv.ID, Name: "pg / appdb", Environment: model.EnvDev,
 		DatabaseName: "appdb", Enabled: true,
 	})
 	if err != nil {
@@ -72,6 +73,9 @@ func member(t *testing.T, e *testEnv, name string, connID string, level model.Le
 	if err != nil {
 		t.Fatalf("create user %s: %v", name, err)
 	}
+	// 프로젝트에는 언제나 넣는다. 등급이 없다는 것은 "이 DB를 못 본다"는 뜻이지
+	// "이 팀 사람이 아니다"는 뜻이 아니다 — 둘을 섞으면 거부 이유가 뒤바뀐다.
+	e.join(t, u.ID)
 	if level == "" {
 		return u
 	}

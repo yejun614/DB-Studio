@@ -130,10 +130,32 @@ func mkServer(t *testing.T, ctx context.Context, st *Store, name string) *model.
 	return srv
 }
 
+// testProject는 이 시험 DB의 프로젝트를 하나 만들어 두고 그것을 계속 쓴다.
+//
+// 자원은 모두 프로젝트 안에 있으므로(0037) 커넥션을 만들려면 먼저 하나가 있어야
+// 한다. 시험마다 새로 만들면 "같은 서버, 다른 프로젝트"가 되어 이름 중복 규칙이
+// 시험하려던 것과 달라진다.
+func testProject(t *testing.T, ctx context.Context, st *Store) *Project {
+	t.Helper()
+	list, err := st.ListProjects(ctx, "")
+	if err != nil {
+		t.Fatalf("list projects: %v", err)
+	}
+	if len(list) > 0 {
+		return list[0]
+	}
+	p, err := st.CreateProject(ctx, SaveProjectParams{Name: "테스트 프로젝트"})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	return p
+}
+
 func addDB(t *testing.T, ctx context.Context, st *Store, srv *model.Server, db string) *model.Connection {
 	t.Helper()
 	conn, err := st.CreateConnection(ctx, SaveConnectionParams{
-		ServerID: srv.ID, Name: srv.Name + " / " + db, Environment: model.EnvDev,
+		ProjectID: testProject(t, ctx, st).ID,
+		ServerID:  srv.ID, Name: srv.Name + " / " + db, Environment: model.EnvDev,
 		DatabaseName: db, Enabled: true,
 	})
 	if err != nil {
@@ -220,7 +242,8 @@ func TestDuplicateDatabaseInSameServerIsRejected(t *testing.T) {
 	addDB(t, ctx, st, srv, "appdb")
 
 	_, err := st.CreateConnection(ctx, SaveConnectionParams{
-		ServerID: srv.ID, Name: "다른 이름", Environment: model.EnvDev,
+		ProjectID: testProject(t, ctx, st).ID,
+		ServerID:  srv.ID, Name: "다른 이름", Environment: model.EnvDev,
 		DatabaseName: "appdb", Enabled: true,
 	})
 	if !errors.Is(err, ErrDuplicateName) {
@@ -229,7 +252,8 @@ func TestDuplicateDatabaseInSameServerIsRejected(t *testing.T) {
 	// 다른 서버의 같은 이름 DB는 막지 않는다 — 서로 다른 대상이다.
 	other := mkServer(t, ctx, st, "dev-pg")
 	if _, err := st.CreateConnection(ctx, SaveConnectionParams{
-		ServerID: other.ID, Name: "dev-pg / appdb", Environment: model.EnvDev,
+		ProjectID: testProject(t, ctx, st).ID,
+		ServerID:  other.ID, Name: "dev-pg / appdb", Environment: model.EnvDev,
 		DatabaseName: "appdb", Enabled: true,
 	}); err != nil {
 		t.Fatalf("다른 서버의 같은 이름 DB가 막혔다: %v", err)

@@ -26,7 +26,8 @@ func structureFixture(t *testing.T, e *testEnv, name string) (*model.Connection,
 			Enabled: true, Password: &pw,
 		},
 		store.SaveConnectionParams{
-			Name: name, Environment: model.EnvDev, DatabaseName: name,
+			ProjectID: e.project.ID,
+			Name:      name, Environment: model.EnvDev, DatabaseName: name,
 			Tags: []string{}, Enabled: true,
 		})
 	if err != nil {
@@ -122,6 +123,8 @@ func TestStructureDocumentIsSharedPerConnection(t *testing.T) {
 	if err := e.st.SetAccessPolicy(context.Background(), &model.AccessPolicy{
 		UserID: bob.ID, Mode: model.AccessAll, DefaultLevel: model.LevelERD,
 		Items: []string{}, Capabilities: map[string]model.Level{},
+		// 전체 허용이어도 프로젝트에 참여하지 않으면 아무것도 보이지 않는다.
+		Projects: []string{e.project.ID},
 	}); err != nil {
 		t.Fatalf("set access policy: %v", err)
 	}

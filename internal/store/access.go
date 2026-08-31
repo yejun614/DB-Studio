@@ -27,6 +27,7 @@ func (s *Store) GetAccessPolicy(ctx context.Context, userID string) (*model.Acce
 		ServerItems:        []string{},
 		ServerCapabilities: map[string]model.Level{},
 		ServerCapOverrides: map[string][]model.Capability{},
+		Projects:           []string{},
 	}
 
 	var mode, level, defaultCaps, updatedAt string
@@ -67,6 +68,12 @@ func (s *Store) GetAccessPolicy(ctx context.Context, userID string) (*model.Acce
 	}
 	if p.ServerCapOverrides, err = s.accessCaps(ctx,
 		`SELECT server_id, caps FROM user_server_data_caps WHERE user_id = ?`, userID); err != nil {
+		return nil, err
+	}
+	// 참여 프로젝트. 다른 목록과 달리 이 표는 프로젝트 화면에서도 고쳐지므로
+	// (프로젝트의 참여자 명단), 여기서 읽는 것이 언제나 최신이다.
+	if p.Projects, err = s.accessIDs(ctx,
+		`SELECT project_id FROM project_members WHERE user_id = ?`, userID); err != nil {
 		return nil, err
 	}
 	return p, nil
@@ -188,6 +195,22 @@ func (s *Store) SetAccessPolicy(ctx context.Context, p *model.AccessPolicy) erro
 				p.UserID, id, model.CapsToString(caps), now); err != nil {
 				return fmt.Errorf("insert into %s: %w", w.table, err)
 			}
+		}
+	}
+
+	// 참여 프로젝트.
+	//
+	// 위의 표들과 나란히 두지 않은 이유: 저 표들은 (user_id, id) 뿐이지만 여기에는
+	// added_at 이 있고, 무엇보다 이 표는 프로젝트 화면에서도 고쳐진다. 같은 표를
+	// 두 화면이 쓴다는 사실을 코드에서 보이게 두는 편이 낫다.
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM project_members WHERE user_id = ?`, p.UserID); err != nil {
+		return fmt.Errorf("clear project members: %w", err)
+	}
+	for _, id := range p.Projects {
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO project_members
+			(project_id, user_id, added_at) VALUES (?, ?, ?)`, id, p.UserID, now); err != nil {
+			return fmt.Errorf("insert project member: %w", err)
 		}
 	}
 

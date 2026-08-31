@@ -80,7 +80,8 @@ func storageFixture(t *testing.T, e *testEnv, name string, kind model.DBKind, ta
 			Tags: []string{}, Enabled: true, Username: "hdfs", Password: &pw,
 		},
 		store.SaveConnectionParams{
-			Name: name, Environment: model.EnvDev, Tags: []string{}, Enabled: true,
+			ProjectID: e.project.ID,
+			Name:      name, Environment: model.EnvDev, Tags: []string{}, Enabled: true,
 		})
 	if err != nil {
 		t.Fatalf("create connection: %v", err)
@@ -141,6 +142,8 @@ func TestStorageWriteNeedsCapability(t *testing.T) {
 		UserID: bob.ID, Mode: model.AccessAllowlist, DefaultLevel: model.LevelNone,
 		Items:        []string{conn.ID},
 		Capabilities: map[string]model.Level{conn.ID: model.LevelMonitor},
+		// 프로젝트 참여가 등급보다 앞선 관문이다.
+		Projects: []string{e.project.ID},
 	}); err != nil {
 		t.Fatalf("save access: %v", err)
 	}

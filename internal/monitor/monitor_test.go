@@ -36,6 +36,11 @@ func newTestStore(t *testing.T) *store.Store {
 
 func newTestConnection(t *testing.T, st *store.Store, name string, env model.Environment) *model.Connection {
 	t.Helper()
+	pj, err := st.CreateProject(context.Background(),
+		store.SaveProjectParams{Name: "테스트 " + name})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
 	pw := "pw"
 	_, conn, err := st.CreateServerWithDatabase(context.Background(),
 		store.SaveServerParams{
@@ -45,7 +50,8 @@ func newTestConnection(t *testing.T, st *store.Store, name string, env model.Env
 			Username: "root", Password: &pw,
 		},
 		store.SaveConnectionParams{
-			Name: name, Environment: env, DatabaseName: "appdb",
+			ProjectID: pj.ID,
+			Name:      name, Environment: env, DatabaseName: "appdb",
 			Tags: []string{}, Enabled: true,
 		})
 	if err != nil {
@@ -1151,4 +1157,22 @@ func eventMessages(events []*store.Event) []string {
 		out[i] = e.Message
 	}
 	return out
+}
+
+// testProjectID는 이 시험 DB의 프로젝트 아이디를 준다(없으면 만든다).
+// 자원은 모두 프로젝트 안에 있으므로(0037) 커넥션보다 먼저 있어야 한다.
+func testProjectID(t *testing.T, ctx context.Context, st *store.Store) string {
+	t.Helper()
+	list, err := st.ListProjects(ctx, "")
+	if err != nil {
+		t.Fatalf("list projects: %v", err)
+	}
+	if len(list) > 0 {
+		return list[0].ID
+	}
+	p, err := st.CreateProject(ctx, store.SaveProjectParams{Name: "테스트 프로젝트"})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	return p.ID
 }

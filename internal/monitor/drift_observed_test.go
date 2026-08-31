@@ -92,7 +92,8 @@ func TestObservedStructureIsNotDrift(t *testing.T) {
 			Host: "127.0.0.1", Port: 6379, Enabled: true,
 		},
 		store.SaveConnectionParams{
-			Name: "fake-redis", Environment: model.EnvDev, DatabaseName: "0", Enabled: true,
+			ProjectID: testProjectID(t, ctx, st),
+			Name:      "fake-redis", Environment: model.EnvDev, DatabaseName: "0", Enabled: true,
 		})
 	if err != nil {
 		t.Fatalf("create connection: %v", err)
@@ -158,7 +159,8 @@ func TestFingerprintChangeWithoutStructuralDiff(t *testing.T) {
 			Enabled: true,
 		},
 		store.SaveConnectionParams{
-			Name: "fake-sql", Environment: model.EnvDev, DatabaseName: "x.db", Enabled: true,
+			ProjectID: testProjectID(t, ctx, st),
+			Name:      "fake-sql", Environment: model.EnvDev, DatabaseName: "x.db", Enabled: true,
 		})
 	if err != nil {
 		t.Fatalf("create connection: %v", err)

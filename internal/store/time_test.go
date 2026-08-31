@@ -106,6 +106,10 @@ func TestTimeRangeQueryAtSecondBoundary(t *testing.T) {
 	}
 	defer st.Close()
 
+	pj, err := st.CreateProject(ctx, SaveProjectParams{Name: "테스트 프로젝트"})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
 	pw := "pw"
 	_, conn, err := st.CreateServerWithDatabase(ctx,
 		SaveServerParams{
@@ -114,7 +118,8 @@ func TestTimeRangeQueryAtSecondBoundary(t *testing.T) {
 			Enabled: true, Password: &pw,
 		},
 		SaveConnectionParams{
-			Name: "c", Environment: model.EnvDev, DatabaseName: "d",
+			ProjectID: pj.ID,
+			Name:      "c", Environment: model.EnvDev, DatabaseName: "d",
 			Tags: []string{}, Enabled: true,
 		})
 	if err != nil {

@@ -21,11 +21,12 @@ const connColumns = `c.id, c.name, s.kind, c.environment, s.host, s.port, c.data
 	s.options, c.tags, c.note, c.enabled, s.enabled,
 	c.last_check_at, c.last_check_ok, c.last_check_msg,
 	c.created_by, c.created_at, c.updated_at, COALESCE(sec.username, ''),
-	c.server_id, s.name, c.node_id`
+	c.server_id, s.name, c.node_id, c.project_id, COALESCE(pj.name, '')`
 
 const connFrom = ` FROM connections c
 	JOIN servers s ON s.id = c.server_id
-	LEFT JOIN server_secrets sec ON sec.server_id = c.server_id`
+	LEFT JOIN server_secrets sec ON sec.server_id = c.server_id
+	LEFT JOIN projects pj ON pj.id = c.project_id`
 
 func scanConnection(row interface{ Scan(...any) error }) (*model.Connection, error) {
 	var c model.Connection
@@ -37,7 +38,7 @@ func scanConnection(row interface{ Scan(...any) error }) (*model.Connection, err
 		&options, &tags, &c.Note, &enabled, &serverEnabled,
 		&lastCheckAt, &lastCheckOK, &c.LastCheckMsg,
 		&createdBy, &createdAt, &updatedAt, &c.Username,
-		&c.ServerID, &c.ServerName, &c.NodeID)
+		&c.ServerID, &c.ServerName, &c.NodeID, &c.ProjectID, &c.ProjectName)
 	if err != nil {
 		return nil, err
 	}
@@ -63,6 +64,9 @@ func scanConnection(row interface{ Scan(...any) error }) (*model.Connection, err
 //
 // 접속 정보와 자격증명이 없는 것이 요점이다 — 그것들은 서버가 갖는다.
 type SaveConnectionParams struct {
+	// ProjectID는 이 DB가 속할 프로젝트다. 생성에는 반드시 있어야 한다 —
+	// 어디에도 속하지 않은 커넥션은 목록에도 권한 판정에도 나타나지 않는다.
+	ProjectID    string
 	ServerID     string
 	Name         string
 	Environment  model.Environment
@@ -84,10 +88,10 @@ func (s *Store) CreateConnection(ctx context.Context, p SaveConnectionParams) (*
 	}
 
 	_, err := s.db.ExecContext(ctx, `INSERT INTO connections
-		(id, server_id, name, name_lower, environment, database_name, tags, note,
+		(id, project_id, server_id, name, name_lower, environment, database_name, tags, note,
 		 enabled, created_by, created_at, updated_at, node_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, p.ServerID, p.Name, strings.ToLower(p.Name), string(p.Environment),
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, p.ProjectID, p.ServerID, p.Name, strings.ToLower(p.Name), string(p.Environment),
 		p.DatabaseName, model.TagsToString(p.Tags), p.Note,
 		boolInt(p.Enabled), createdBy, now, now, p.NodeID)
 	if err != nil {

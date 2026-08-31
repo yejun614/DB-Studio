@@ -248,6 +248,13 @@ type Connection struct {
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
 
+	// ProjectID/ProjectName은 이 DB가 속한 프로젝트다.
+	//
+	// 서버(물리적 위치)와는 다른 축이다. 한 서버에 여러 프로젝트의 DB가 함께 있을
+	// 수 있고, 한 프로젝트의 DB가 여러 서버에 흩어져 있을 수도 있다.
+	ProjectID   string `json:"projectId"`
+	ProjectName string `json:"projectName,omitempty"`
+
 	// ServerID/ServerName은 이 DB가 속한 서버다.
 	ServerID   string `json:"serverId"`
 	ServerName string `json:"serverName"`
@@ -333,6 +340,16 @@ type AccessPolicy struct {
 	ServerCapabilities map[string]Level        `json:"serverCapabilities"`
 	ServerCapOverrides map[string][]Capability `json:"serverCapOverrides"`
 
+	// ---- 프로젝트 ----
+	//
+	// 위의 두 층보다 앞에 오는 **관문**이다. 참여하지 않은 프로젝트의 DB는 등급이
+	// 무엇으로 적혀 있든 보이지 않는다.
+	//
+	// 등급과 합치지 않고 목록 하나로 둔 이유: 프로젝트는 "무엇을 할 수 있는가"가
+	// 아니라 "무엇이 내 일인가"다. 여기에 등급을 얹으면 같은 것을 두 곳에서 정하게
+	// 되고, 두 곳이 어긋나면 어느 쪽이 참인지 화면이 답하지 못한다.
+	Projects []string `json:"projects"`
+
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
@@ -344,13 +361,16 @@ type AccessPolicy struct {
 type Scope struct {
 	ConnectionID string
 	ServerID     string
+	// ProjectID는 판정의 첫 관문이다. 비어 있으면 어느 프로젝트에 속하는지 알 수
+	// 없다는 뜻이고, 그때는 참여 여부를 확인할 방법이 없으므로 막는다.
+	ProjectID string
 }
 
 func (c *Connection) Scope() Scope {
 	if c == nil {
 		return Scope{}
 	}
-	return Scope{ConnectionID: c.ID, ServerID: c.ServerID}
+	return Scope{ConnectionID: c.ID, ServerID: c.ServerID, ProjectID: c.ProjectID}
 }
 
 // EffectiveAccess는 특정 커넥션에 대한 판정 결과다.

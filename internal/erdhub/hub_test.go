@@ -39,6 +39,11 @@ func fixture(t *testing.T) (context.Context, *store.Store, *Hub, string) {
 	// erd_ops.actor_id 외래키가 깨지고, 증상은 "가끔 다른 시험이 실패한다"가 된다.
 	t.Cleanup(func() { forgetUsers(st) })
 
+	pj, err := st.CreateProject(ctx, store.SaveProjectParams{Name: "테스트 프로젝트"})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
 	pw := "pw"
 	_, conn, err := st.CreateServerWithDatabase(ctx,
 		store.SaveServerParams{
@@ -47,7 +52,8 @@ func fixture(t *testing.T) (context.Context, *store.Store, *Hub, string) {
 			Enabled: true, Password: &pw,
 		},
 		store.SaveConnectionParams{
-			Name: "c", Environment: model.EnvDev, DatabaseName: "d",
+			ProjectID: pj.ID,
+			Name:      "c", Environment: model.EnvDev, DatabaseName: "d",
 			Tags: []string{}, Enabled: true,
 		})
 	if err != nil {

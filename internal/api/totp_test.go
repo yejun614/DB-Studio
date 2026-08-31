@@ -32,6 +32,26 @@ type testEnv struct {
 	st   *store.Store
 	clk  *clock.Clock
 	user *model.User
+	// project는 이 시험이 쓰는 프로젝트다. 자원은 모두 프로젝트 안에 있으므로
+	// (0037) 커넥션을 만들려면 먼저 하나가 있어야 한다.
+	project *store.Project
+}
+
+// join은 사용자를 시험용 프로젝트에 넣는다.
+//
+// 프로젝트 참여는 등급보다 앞선 관문이라, 이것을 빼먹으면 등급을 아무리 줘도
+// 거부된다 — 그리고 그 거부 이유는 "권한 없음"이라 원인을 짚기 어렵다.
+func (e *testEnv) join(t *testing.T, userID string) {
+	t.Helper()
+	ctx := context.Background()
+	p, err := e.st.GetAccessPolicy(ctx, userID)
+	if err != nil {
+		t.Fatalf("policy: %v", err)
+	}
+	p.Projects = append(p.Projects, e.project.ID)
+	if err := e.st.SetAccessPolicy(ctx, p); err != nil {
+		t.Fatalf("join project: %v", err)
+	}
 }
 
 const testPassword = "correct-horse-9"
@@ -66,13 +86,20 @@ func newTestEnv(t *testing.T) *testEnv {
 		t.Fatalf("create user: %v", err)
 	}
 
+	pj, err := st.CreateProject(ctx, store.SaveProjectParams{
+		Name: "테스트 프로젝트", ActorID: u.ID,
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
 	clk := clock.New(0)
 	authn := auth.NewService(st, time.Hour, clk)
 	authz := auth.NewAuthorizer(st)
 	mon := monitor.NewManager(st, monitor.DefaultConfig())
 	srv := New(cfg, st, authn, authz, mon, os.DirFS(dir))
 
-	return &testEnv{srv: srv, st: st, clk: clk, user: u}
+	return &testEnv{srv: srv, st: st, clk: clk, user: u, project: pj}
 }
 
 // client는 쿠키를 들고 다니는 최소 클라이언트다.

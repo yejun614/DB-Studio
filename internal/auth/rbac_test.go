@@ -88,7 +88,11 @@ func TestResolveKeepsLevelAndCapsIndependent(t *testing.T) {
 			if tc.policy.CapOverrides == nil {
 				tc.policy.CapOverrides = map[string][]model.Capability{}
 			}
-			d := resolveWithPolicy(tc.policy, model.Scope{ConnectionID: tc.conn, ServerID: tc.server})
+			// 프로젝트 관문은 이 표의 관심사가 아니다. 모든 대상을 한 프로젝트에
+			// 두고 거기에 참여시켜 두어, 등급·능력 규칙만 남긴다.
+			tc.policy.Projects = []string{"p1"}
+			d := resolveWithPolicy(tc.policy,
+				model.Scope{ProjectID: "p1", ConnectionID: tc.conn, ServerID: tc.server})
 			if d.Allowed != tc.allowed {
 				t.Fatalf("Allowed = %v, want %v (%s)", d.Allowed, tc.allowed, d.Reason)
 			}
@@ -141,9 +145,10 @@ func TestServerScopeIsOverriddenByConnection(t *testing.T) {
 			ServerItems:        []string{"srv1"},
 			ServerCapabilities: map[string]model.Level{"srv1": model.LevelMonitor},
 			ServerCapOverrides: map[string][]model.Capability{"srv1": {model.CapDataRead}},
+			Projects:           []string{"p1"},
 		}
 	}
-	appdb := model.Scope{ConnectionID: "appdb", ServerID: "srv1"}
+	appdb := model.Scope{ProjectID: "p1", ConnectionID: "appdb", ServerID: "srv1"}
 
 	t.Run("서버 항목만으로 허용 목록을 통과한다", func(t *testing.T) {
 		d := resolveWithPolicy(base(), appdb)
@@ -171,14 +176,14 @@ func TestServerScopeIsOverriddenByConnection(t *testing.T) {
 	t.Run("DB 오버라이드로 예외를 뺄 수 있다", func(t *testing.T) {
 		p := base()
 		p.Capabilities["billing"] = model.LevelNone
-		d := resolveWithPolicy(p, model.Scope{ConnectionID: "billing", ServerID: "srv1"})
+		d := resolveWithPolicy(p, model.Scope{ProjectID: "p1", ConnectionID: "billing", ServerID: "srv1"})
 		if d.Allowed {
 			t.Errorf("예외가 적용되지 않았다: %+v", d)
 		}
 	})
 
 	t.Run("다른 서버의 DB는 여전히 범위 밖", func(t *testing.T) {
-		d := resolveWithPolicy(base(), model.Scope{ConnectionID: "other", ServerID: "srv2"})
+		d := resolveWithPolicy(base(), model.Scope{ProjectID: "p1", ConnectionID: "other", ServerID: "srv2"})
 		if d.Allowed {
 			t.Errorf("서버 부여가 다른 서버로 샜다: %+v", d)
 		}
@@ -193,7 +198,7 @@ func TestServerScopeIsOverriddenByConnection(t *testing.T) {
 			t.Errorf("차단 목록의 서버가 통과했다: %+v", d)
 		}
 		// 그 서버에 속하지 않은 DB는 영향받지 않는다.
-		if other := resolveWithPolicy(p, model.Scope{ConnectionID: "x", ServerID: "srv2"}); !other.Allowed {
+		if other := resolveWithPolicy(p, model.Scope{ProjectID: "p1", ConnectionID: "x", ServerID: "srv2"}); !other.Allowed {
 			t.Errorf("무관한 DB까지 막혔다: %+v", other)
 		}
 	})
@@ -202,9 +207,58 @@ func TestServerScopeIsOverriddenByConnection(t *testing.T) {
 		p := base()
 		p.Items = []string{"loose"}
 		p.Capabilities["loose"] = model.LevelERD
-		d := resolveWithPolicy(p, model.Scope{ConnectionID: "loose"})
+		d := resolveWithPolicy(p, model.Scope{ProjectID: "p1", ConnectionID: "loose"})
 		if !d.Allowed || d.Level != model.LevelERD {
 			t.Fatalf("서버 없는 대상 판정이 틀렸다: %+v", d)
+		}
+	})
+}
+
+// 프로젝트는 등급보다 앞선 관문이다.
+//
+// 참여하지 않은 프로젝트의 DB는 등급이 무엇으로 적혀 있든 보이지 않아야 한다.
+// 반대로 두면(등급을 먼저 보면) 옛 권한 설정이 남아 있는 사람에게 새 프로젝트의
+// DB가 그대로 열린다 — 프로젝트를 나눈 이유가 사라진다.
+func TestProjectGatesEverything(t *testing.T) {
+	wide := func() *model.AccessPolicy {
+		return &model.AccessPolicy{
+			Mode:         model.AccessAll,
+			DefaultLevel: model.LevelMigrate,
+			DefaultCaps:  model.AllCapabilities(),
+			Capabilities: map[string]model.Level{},
+			CapOverrides: map[string][]model.Capability{},
+			Projects:     []string{"mine"},
+		}
+	}
+
+	t.Run("참여한 프로젝트는 지금까지처럼 판정한다", func(t *testing.T) {
+		d := resolveWithPolicy(wide(), model.Scope{ProjectID: "mine", ConnectionID: "c1"})
+		if !d.Allowed || d.Level != model.LevelMigrate {
+			t.Fatalf("참여한 프로젝트가 막혔다: %+v", d)
+		}
+	})
+
+	t.Run("참여하지 않은 프로젝트는 전체 허용이어도 막힌다", func(t *testing.T) {
+		d := resolveWithPolicy(wide(), model.Scope{ProjectID: "theirs", ConnectionID: "c1"})
+		if d.Allowed {
+			t.Fatalf("남의 프로젝트가 열렸다: %+v", d)
+		}
+	})
+
+	t.Run("DB별 등급을 따로 준 것도 프로젝트 밖이면 막힌다", func(t *testing.T) {
+		p := wide()
+		p.Capabilities["c9"] = model.LevelMigrate
+		p.CapOverrides["c9"] = model.AllCapabilities()
+		d := resolveWithPolicy(p, model.Scope{ProjectID: "theirs", ConnectionID: "c9"})
+		if d.Allowed {
+			t.Fatalf("옛 등급 설정이 관문을 넘었다: %+v", d)
+		}
+	})
+
+	t.Run("프로젝트를 알 수 없는 대상은 막는다", func(t *testing.T) {
+		d := resolveWithPolicy(wide(), model.Scope{ConnectionID: "c1"})
+		if d.Allowed {
+			t.Fatalf("소속을 모르는 DB가 열렸다: %+v", d)
 		}
 	})
 }

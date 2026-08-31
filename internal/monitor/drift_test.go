@@ -267,7 +267,8 @@ func newIsolatedMySQL(t *testing.T, ctx context.Context, st *store.Store, name s
 			Username: "root", Password: &pw,
 		},
 		store.SaveConnectionParams{
-			Name: name, Environment: env, DatabaseName: dbName,
+			ProjectID: testProjectID(t, ctx, st),
+			Name:      name, Environment: env, DatabaseName: dbName,
 			Tags: []string{}, Enabled: true,
 		})
 	if err != nil {
