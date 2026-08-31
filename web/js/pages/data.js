@@ -5,6 +5,7 @@
 // 두 화면이 한 곳에 있으면 "여기까지는 보이는데 저기부터 안 보이는" 이유를
 // 사용자가 짐작해야 한다.
 import { api } from '../core/api.js';
+import { withProject } from '../core/project.js';
 import { state, kindLabel } from '../core/store.js';
 import {
   h, mount, icon, select, input, textarea, spinner, emptyState, pageHeader,
@@ -136,8 +137,8 @@ export async function renderData(outlet, params, query) {
     // DB가 이름만 다른 항목으로 반복되어, 목록이 길어질수록 "어느 서버의 것인가"가
     // 사라진다. 서버를 먼저 고르고 그 안에서 DB를 고르는 편이 실제 순서와 같다.
     [conns, servers] = await Promise.all([
-      api.get('/connections/'),
-      api.get('/servers/'),
+      api.get(withProject('/connections/')),
+      api.get(withProject('/servers/')),
     ]);
   } catch (err) {
     mount(outlet, errorPanel(err));

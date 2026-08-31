@@ -3,6 +3,7 @@
 // SSE 읽기는 core/aistream.js에 있다 — ERD 설계 화면의 AI 세션도 같은
 // 엔드포인트를 쓰므로 파싱이 두 벌이면 한쪽만 낡는다.
 import { api } from '../core/api.js';
+import { withProject } from '../core/project.js';
 import { streamAIChat } from '../core/aistream.js';
 import { state } from '../core/store.js';
 import {
@@ -111,7 +112,7 @@ export async function mountAssistant(outlet, {
   try {
     [data, conns] = await Promise.all([
       api.get('/ai/sessions'),
-      api.get('/connections/'),
+      api.get(withProject('/connections/')),
     ]);
   } catch (err) {
     mount(outlet, errorPanel(err));

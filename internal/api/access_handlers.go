@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"slices"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
 
@@ -39,11 +40,18 @@ func (s *Server) handleGetAccess(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	// 프로젝트 전체를 함께 준다. 이 화면을 여는 사람은 슈퍼 어드민이고, 참여를
+	// 정하려면 있는 프로젝트를 다 볼 수 있어야 한다.
+	projects, err := s.st.ListProjects(c.Context(), "")
+	if err != nil {
+		return err
+	}
 	return c.JSON(fiber.Map{
 		"user":        target,
 		"policy":      policy,
 		"connections": conns,
 		"servers":     servers,
+		"projects":    projects,
 		"effective":   effective,
 	})
 }
@@ -61,6 +69,14 @@ type putAccessRequest struct {
 	ServerItems        []string                      `json:"serverItems"`
 	ServerCapabilities map[string]model.Level        `json:"serverCapabilities"`
 	ServerCapOverrides map[string][]model.Capability `json:"serverCapOverrides"`
+
+	// Projects는 참여 프로젝트다. 등급보다 앞선 관문이라 이 화면에서 함께 정한다 —
+	// 등급을 아무리 줘도 참여하지 않았으면 아무것도 보이지 않고, 그 사실이 권한
+	// 화면 어디에도 적혀 있지 않으면 원인을 짚을 수 없다.
+	//
+	// 포인터인 이유는 Perms와 같다: nil이면 손대지 않는다. 이 필드를 모르는 옛
+	// 호출이 참여를 통째로 지우면 그 사람은 앱에서 아무것도 못 보게 된다.
+	Projects *[]string `json:"projects"`
 
 	// Perms는 전역 권한(매크로·셸·외부 호출)이다. 커넥션에 매이지 않지만
 	// "권한을 바꾸려면 한 화면만 보면 된다"가 되도록 여기서 함께 받는다.
@@ -226,8 +242,33 @@ func (s *Server) handlePutAccess(c *fiber.Ctx) error {
 		serverCaps = map[string]model.Level{}
 	}
 
+	// 참여 프로젝트. 실재하는 것만 남긴다.
+	projects, err := s.st.ListProjects(c.Context(), "")
+	if err != nil {
+		return err
+	}
+	knownProjects := make(map[string]bool, len(projects))
+	for _, p := range projects {
+		knownProjects[p.ID] = true
+	}
+	joined, err := s.st.ProjectIDsForUser(c.Context(), id)
+	if err != nil {
+		return err
+	}
+	if req.Projects != nil {
+		joined = []string{}
+		for _, pid := range *req.Projects {
+			if !knownProjects[pid] {
+				return failDetail(c, fiber.StatusBadRequest, "unknown_project",
+					"존재하지 않는 프로젝트가 포함되어 있습니다", pid)
+			}
+			joined = append(joined, pid)
+		}
+	}
+
 	policy := &model.AccessPolicy{
 		UserID:             id,
+		Projects:           joined,
 		Mode:               req.Mode,
 		DefaultLevel:       req.DefaultLevel,
 		Items:              items,
@@ -264,6 +305,9 @@ func (s *Server) handlePutAccess(c *fiber.Ctx) error {
 		// 서버 단위 부여는 한 번에 여러 DB를 여는 설정이므로 따로 센다.
 		"serverItems":     len(serverItems),
 		"serverOverrides": len(serverCaps) + len(serverCapOverrides),
+		// 참여 프로젝트는 개수만으로 부족하다. 어느 팀의 자원에 손이 닿게 되었는지가
+		// 사고 조사에서 먼저 필요한 값이다.
+		"projects": strings.Join(joined, ","),
 	}
 	// 셸 실행·외부 호출은 값 그대로 남긴다. 데이터 능력과 같은 이유다.
 	if req.Perms != nil {

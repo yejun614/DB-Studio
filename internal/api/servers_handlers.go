@@ -119,9 +119,20 @@ func (s *Server) handleListServers(c *fiber.Ctx) error {
 		access[e.ConnectionID] = e
 	}
 
+	// 서버는 프로젝트 밖에 있지만(한 대에 여러 프로젝트의 DB가 함께 산다) 그 아래
+	// 걸리는 DB는 보고 있는 프로젝트의 것만이다. 관리자 예외도 여기서는 프로젝트를
+	// 넘지 못한다 — 넘으면 참여하지 않은 팀의 DB 이름이 이 화면에 그대로 뜬다.
+	scope, err := s.projectFilter(c)
+	if err != nil {
+		return err
+	}
+
 	canManage := u.Role.CanManageConnections()
 	byServer := map[string][]fiber.Map{}
 	for _, conn := range conns {
+		if !inProjects(scope, conn.ProjectID) {
+			continue
+		}
 		e := access[conn.ID]
 		if !e.Accessible && !canManage {
 			continue
@@ -345,6 +356,9 @@ func (s *Server) handleListServerDatabases(c *fiber.Ctx) error {
 
 // addDatabasesRequest는 서버에 DB 여러 개를 한 번에 등록하는 요청이다.
 type addDatabasesRequest struct {
+	// ProjectID는 등록할 DB들이 들어갈 프로젝트다. 서버는 프로젝트 밖에 있으므로
+	// 여기서 받아야 한다 — 서버에서 물려받을 수 있는 값이 아니다.
+	ProjectID   string            `json:"projectId"`
 	Databases   []string          `json:"databases"`
 	Environment model.Environment `json:"environment"`
 	// NamePrefix가 비면 "<서버명> / <DB명>"으로 짓는다.
@@ -383,6 +397,10 @@ func (s *Server) handleAddServerDatabases(c *fiber.Ctx) error {
 	if req.Tags == nil {
 		req.Tags = []string{}
 	}
+	project, perr := s.requireProject(c, req.ProjectID)
+	if perr != nil {
+		return perr
+	}
 
 	prefix := strings.TrimSpace(req.NamePrefix)
 	if prefix == "" {
@@ -398,7 +416,8 @@ func (s *Server) handleAddServerDatabases(c *fiber.Ctx) error {
 			continue
 		}
 		conn, err := s.st.CreateConnection(c.Context(), store.SaveConnectionParams{
-			ServerID: srv.ID, Name: prefix + " / " + name, Environment: env,
+			ProjectID: project.ID,
+			ServerID:  srv.ID, Name: prefix + " / " + name, Environment: env,
 			DatabaseName: name, Tags: req.Tags, Enabled: true, ActorID: actor.ID,
 		})
 		if err != nil {

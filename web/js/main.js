@@ -8,6 +8,9 @@ import * as router from './core/router.js';
 import * as theme from './core/theme.js';
 import { avatarNode } from './core/avatars.js';
 import * as sidebar from './core/sidebar.js';
+import {
+  loadProjects, projects, currentProjectID, setCurrentProject, onProjectChange,
+} from './core/project.js';
 import { bindPalette, openPalette } from './core/palette.js';
 import { renderLogin, renderPasswordChange, renderChangePasswordPage } from './pages/login.js';
 import { renderDashboard } from './pages/dashboard.js';
@@ -15,6 +18,7 @@ import { renderUsers } from './pages/users.js';
 import { renderProfile } from './pages/profile.js';
 import { renderAccess } from './pages/access.js';
 import { renderConnections } from './pages/connections.js';
+import { renderProjects } from './pages/projects.js';
 import { renderSchema } from './pages/schema.js';
 import { renderMonitor, renderEvents } from './pages/monitor.js';
 import { renderRules } from './pages/rules.js';
@@ -49,6 +53,7 @@ const appRoot = document.getElementById('app');
 // ---------- 라우트 정의 ----------
 
 router.define('/', renderDashboard);
+router.define('/projects', renderProjects);
 router.define('/connections', renderConnections);
 router.define('/schema', renderSchema);
 router.define('/nosql', renderNoSQL);
@@ -110,6 +115,7 @@ const NAV = [
     section: '개요',
     items: [
       { path: '/', label: '대시보드', icon: 'shield' },
+      { path: '/projects', label: '프로젝트', icon: 'box' },
       { path: '/connections', label: 'DB 커넥션', icon: 'database' },
     ],
   },
@@ -203,6 +209,49 @@ function paletteButton() {
   h('kbd', {}, mac ? '⌘K' : 'Ctrl K'));
 }
 
+// projectSwitcher는 사이드바 맨 위에서 보고 있는 프로젝트를 고른다.
+//
+// 고르는 자리를 여기 하나만 두는 이유: 자원은 모두 프로젝트 안에 있다. 화면마다
+// 고르게 하면 같은 사람이 같은 시간에 서로 다른 프로젝트를 보게 되고, "왜 여기엔
+// 없지"가 끝없이 생긴다. 브랜드 바로 아래에 두어 "지금 어디를 보고 있는가"가 다른
+// 무엇보다 먼저 읽히게 한다.
+let unsubscribeProject = null;
+
+function projectSwitcher() {
+  // 셸을 다시 만들 때(로그아웃 후 재로그인) 이전 구독을 버린다.
+  unsubscribeProject?.();
+  const box = h('div.project-switch');
+
+  const render = () => {
+    const list = projects();
+    if (list.length === 0) {
+      // 프로젝트가 없으면 고를 것도 없다. 그 자리에 만드는 입구를 둔다 —
+      // 자원을 만들려면 프로젝트가 먼저라는 사실을 처음 만나는 자리다.
+      mount(box, h('a.project-switch-empty', { href: '/projects' },
+        icon('box', 15), h('span', {}, '프로젝트 만들기')));
+      return;
+    }
+    const sel = h('select.project-select', {
+      title: '보고 있는 프로젝트',
+      onchange: async (e) => {
+        if (!setCurrentProject(e.currentTarget.value)) return;
+        // 프로젝트가 바뀌면 지금 화면의 내용이 통째로 달라진다. 다시 그리지
+        // 않으면 남의 프로젝트 자료를 그대로 보고 있게 된다.
+        await router.render();
+        highlightNav();
+      },
+    }, list.map((p) => h('option', { value: p.id }, p.name)));
+    sel.value = currentProjectID() ?? '';
+    mount(box, icon('box', 15), sel,
+      h('a.project-switch-more', { href: '/projects', title: '프로젝트 관리' },
+        icon('settings', 14)));
+  };
+
+  render();
+  unsubscribeProject = onProjectChange(render);
+  return box;
+}
+
 // versionLine은 사이드바 아래에 지금 돌고 있는 버전을 적는다.
 //
 // 값을 /meta 에서 가져오는 이유: 셸을 그리기 전에 이미 한 번 받아 두는 응답이다.
@@ -251,6 +300,7 @@ function buildShell() {
     sidebar.createTopbar(),
     h('aside#sidebar.sidebar', {},
       h('a.brand', { href: '/' }, icon('database', 22), h('span', {}, 'DB Studio')),
+      projectSwitcher(),
       paletteButton(),
       nav,
       h('div.sidebar-foot', {},
@@ -469,6 +519,9 @@ async function enterApp() {
   }
   try {
     await loadMeta();
+    // 프로젝트를 셸보다 먼저 읽는다. 사이드바의 고르개와 첫 화면이 같은 답을
+    // 써야 하고, 나중에 읽으면 첫 화면이 "프로젝트 없음"으로 한 번 깜빡인다.
+    await loadProjects();
   } catch (err) {
     toastError(err);
     return;

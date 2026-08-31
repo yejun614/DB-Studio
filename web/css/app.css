@@ -299,6 +299,45 @@ body.is-resizing { cursor: col-resize; user-select: none; }
 }
 .brand:hover { text-decoration: none; }
 
+/* 프로젝트 고르개. 브랜드 바로 아래, 다른 무엇보다 먼저 읽히는 자리다.
+ *
+ * 자원은 모두 프로젝트 안에 있어서, "지금 어디를 보고 있는가"가 목록을 읽는 전제가
+ * 된다. 아래쪽에 두면 남의 프로젝트를 보면서 "왜 없지"를 먼저 겪게 된다. */
+.project-switch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 12px 8px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-alt);
+  color: var(--text-mute);
+}
+.project-select {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  appearance: none;
+}
+.project-select:focus { outline: none; }
+.project-switch-more {
+  display: inline-flex;
+  color: var(--text-mute);
+  opacity: 0.7;
+}
+.project-switch-more:hover { opacity: 1; }
+.project-switch-empty {
+  display: flex; align-items: center; gap: 6px;
+  color: var(--text-mute); font-size: 13px;
+}
+
 .nav { display: flex; flex-direction: column; gap: 2px; flex: 1; overflow-y: auto; }
 
 /* 묶음 제목. 항목보다 눈에 띄면 안 된다 — 찾는 것은 항목이고 제목은 그 위치를
@@ -4733,3 +4772,31 @@ tr.is-clickable:focus-visible { outline: 2px solid var(--primary); outline-offse
 .storage-fact { align-items: baseline; }
 .storage-fact-label { white-space: nowrap; }
 .storage-fact-value { text-align: right; }
+
+/* ---------- 프로젝트 ---------- */
+
+/* 카드로 늘어놓는다. 표로 두면 이름과 숫자만 남는데, 프로젝트를 고르는 사람이
+   보는 것은 "얼마나 큰가"와 "내가 지금 어디 있는가"다. */
+.project-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 14px;
+}
+.project-card { display: flex; flex-direction: column; gap: 12px; padding: 16px 18px; }
+/* 보고 있는 프로젝트는 테두리로 표시한다. 카드가 여럿일 때 배지 하나만으로는
+   눈이 먼저 가지 않는다. */
+.project-card.is-current { border-color: var(--accent); }
+.project-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.project-head h3 { margin: 0 0 4px; font-size: 15px; }
+.project-head p { margin: 0; }
+.project-stats { display: flex; gap: 18px; }
+.project-stat { display: flex; flex-direction: column; gap: 1px; }
+.project-stat strong { font-size: 17px; line-height: 1.1; }
+.project-foot {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; flex-wrap: wrap;
+  padding-top: 10px; border-top: 1px solid var(--border-soft);
+}
+.project-actions { display: flex; gap: 6px; margin-left: auto; }
+.plain-list { margin: 8px 0 0; padding-left: 18px; }
+.plain-list li { margin-bottom: 4px; }

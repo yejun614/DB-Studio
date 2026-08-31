@@ -4,6 +4,7 @@
 // 함께 쓴다. 평평한 목록으로 두면 같은 호스트가 열 줄 반복되고, 비밀번호를 어디서
 // 고쳐야 하는지가 보이지 않는다.
 import { api } from '../core/api.js';
+import { withProject, currentProjectID, hasProjects } from '../core/project.js';
 import { state, kindInfo, kindLabel } from '../core/store.js';
 import {
   h, mount, icon, field, input, select, textarea, checkbox, spinner, emptyState,
@@ -12,15 +13,22 @@ import {
 } from '../core/ui.js';
 import { dbLogo } from '../core/dblogo.js';
 import { errorPanel } from './users.js';
+import { projectGuard } from './projects.js';
 
 // 접힌 서버를 기억한다. 다시 그릴 때마다 전부 펴지면 방금 접은 것이 되살아난다.
 const collapsed = new Set();
 
 export async function renderConnections(outlet) {
+  // 프로젝트가 없으면 DB를 등록할 곳도 없다. "커넥션이 없습니다"라고만 말하면
+  // 없는 이유가 어디에도 드러나지 않는다.
+  if (!hasProjects()) {
+    mount(outlet, projectGuard('DB 커넥션'));
+    return;
+  }
   mount(outlet, spinner());
   let data;
   try {
-    data = await api.get('/servers/');
+    data = await api.get(withProject('/servers/'));
   } catch (err) {
     mount(outlet, errorPanel(err));
     return;
@@ -324,6 +332,10 @@ function openServerForm(existing, reload) {
         // 첫 DB와 함께 만든다. 커넥션 API가 서버까지 만들어 준다.
         await api.post('/connections/', {
           ...serverPayload(),
+          // 보고 있는 프로젝트에 넣는다. 어디에 넣을지 다시 묻지 않는 이유:
+          // 사이드바가 이미 그 답을 말하고 있고, 여기서 또 고르게 하면 두 답이
+          // 갈라지는 자리가 생긴다. 다른 곳에 넣으려면 프로젝트를 먼저 옮긴다.
+          projectId: currentProjectID(),
           environment: environment.value,
           databaseName: firstDB.value.trim(),
         });
@@ -439,6 +451,7 @@ function openAddDatabases(item, reload) {
     btn.disabled = true;
     try {
       const res = await api.post(`/servers/${srv.id}/databases`, {
+        projectId: currentProjectID(),
         databases: picked,
         environment: environment.value,
         tags: tags.value.split(',').map((t) => t.trim()).filter(Boolean),

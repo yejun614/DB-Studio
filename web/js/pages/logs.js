@@ -4,6 +4,7 @@
 // 누적 통계는 "무엇을 개선할까"를 고르는 데 쓴다. 목적이 달라 한 화면에 섞으면
 // 둘 다 읽기 어려워진다.
 import { api } from '../core/api.js';
+import { withProject } from '../core/project.js';
 import { kindInfo, kindLabel } from '../core/store.js';
 import {
   h, mount, icon, select, input, checkbox, spinner, emptyState, pageHeader,
@@ -32,9 +33,9 @@ export async function renderLogs(outlet, params, query) {
     // 서버 목록도 함께 받는다 — 커넥션을 평평하게 늘어놓으면 같은 서버의 DB가
     // 이름만 다른 항목으로 반복된다(데이터·스키마 화면과 같은 규칙).
     [conns, meta, servers] = await Promise.all([
-      api.get('/connections/'),
+      api.get(withProject('/connections/')),
       api.get('/logs/meta'),
-      api.get('/servers/'),
+      api.get(withProject('/servers/')),
     ]);
   } catch (err) {
     mount(outlet, errorPanel(err));

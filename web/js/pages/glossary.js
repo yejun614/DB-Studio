@@ -12,6 +12,8 @@ import {
   toast, toastError, openModal, confirmDialog, copyToClipboard,
 } from '../core/ui.js';
 import { suggestInput } from '../core/searchpick.js';
+import { withProject, currentProjectID, hasProjects } from '../core/project.js';
+import { projectGuard } from './projects.js';
 import { errorPanel } from './users.js';
 
 // 분류 이름의 층. 대·중·소 셋이고, 셋 다 비워 둘 수 있다.
@@ -26,6 +28,12 @@ const CAT_LEVELS = [
 ];
 
 export async function renderGlossary(outlet, params, query) {
+  // 사전은 프로젝트마다 하나다. 팀이 다르면 약속도 다르다 — "주문"이 한쪽에서는
+  // 장바구니이고 다른 쪽에서는 배송 지시서인 일은 실제로 있다.
+  if (!hasProjects()) {
+    mount(outlet, projectGuard('용어 사전'));
+    return;
+  }
   mount(outlet, spinner('용어 사전을 불러오는 중…'));
 
   const q = query.get('q') ?? '';
@@ -46,7 +54,7 @@ export async function renderGlossary(outlet, params, query) {
   const load = async (term = search.value) => {
     mount(box, spinner('불러오는 중…'));
     try {
-      const res = await api.get(`/glossary/?q=${encodeURIComponent(term.trim())}`);
+      const res = await api.get(withProject(`/glossary/?q=${encodeURIComponent(term.trim())}`));
       canManage = res.canManage === true;
       cats = res.categories ?? [];
       mount(box, listView(res.terms ?? [], canManage, load, term.trim(), pickCategory, () => cats));
@@ -81,7 +89,8 @@ export async function renderGlossary(outlet, params, query) {
   };
 
   mount(outlet,
-    pageHeader('용어 사전', '논리명과 물리명을 같은 규칙으로 쓰기 위한 팀의 약속입니다.'),
+    pageHeader('용어 사전',
+      '논리명과 물리명을 같은 규칙으로 쓰기 위한 팀의 약속입니다. 프로젝트마다 따로 있습니다.'),
     h('div.card', {},
       h('div.filter-bar', {},
         h('label.field.field-inline', {}, h('span.field-label', {}, '찾기'), search),
@@ -193,6 +202,7 @@ function openTermDialog(existing, reload, cats = []) {
         onclick: async (e) => {
           e.currentTarget.disabled = true;
           const body = {
+            projectId: currentProjectID(),
             term: termInput.value, physical: physicalInput.value, note: noteInput.value,
             ...cat.values(),
           };
@@ -307,7 +317,8 @@ function openBulkDialog(reload) {
         onclick: async (e) => {
           e.currentTarget.disabled = true;
           try {
-            const res = await api.post('/glossary/bulk', { text: text.value });
+            const res = await api.post('/glossary/bulk',
+              { projectId: currentProjectID(), text: text.value });
             mount(result, bulkResult(res));
             reload();
           } catch (err) {

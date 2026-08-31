@@ -49,9 +49,12 @@ func (s *Server) handleGetProject(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	u := currentUser(c)
 	return c.JSON(fiber.Map{
 		"project": p, "members": members,
-		"canManage": currentUser(c).Role.CanManageConnections(),
+		"canManage": u.Role.CanManageConnections(),
+		// 참여자 명단을 고치려면 사용자 목록을 볼 수 있어야 한다.
+		"canManageMembers": u.Role.CanManageUsers(),
 	})
 }
 

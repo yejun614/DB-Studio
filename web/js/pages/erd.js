@@ -1,5 +1,7 @@
 // ERD 문서 목록: 초안 만들기 / 열기 / 상태 전환 / 삭제.
 import { api } from '../core/api.js';
+import { withProject, currentProjectID, hasProjects } from '../core/project.js';
+import { projectGuard } from './projects.js';
 import { state, kindLabel } from '../core/store.js';
 import {
   h, mount, icon, select, input, textarea, spinner, emptyState,
@@ -23,14 +25,18 @@ export function statusBadge(status) {
 }
 
 export async function renderERDList(outlet) {
+  if (!hasProjects()) {
+    mount(outlet, projectGuard('ERD 초안'));
+    return;
+  }
   mount(outlet, spinner('ERD 문서를 불러오는 중…'));
 
   let docs;
   let conns;
   try {
     [docs, conns] = await Promise.all([
-      api.get('/erd/documents/'),
-      api.get('/connections/'),
+      api.get(withProject('/erd/documents/')),
+      api.get(withProject('/connections/')),
     ]);
   } catch (err) {
     mount(outlet, errorPanel(err));
@@ -218,6 +224,9 @@ function openCreateDialog(targets, reload) {
           try {
             const res = await api.post('/erd/documents/', {
               name: nameInput.value,
+              // 대상 DB가 없는 독립 초안에는 프로젝트가 유일한 울타리다.
+              // 커넥션이 붙은 초안은 서버가 커넥션 쪽 프로젝트로 맞춘다.
+              projectId: currentProjectID(),
               connectionId: mode === 'standalone' ? '' : connSelect.value,
               dialect: mode === 'standalone' ? dialectSelect.value : '',
               note: noteInput.value,

@@ -1,5 +1,6 @@
 // Git 연동: 저장소 설정 등록/확인, 푸시 이력.
 import { api } from '../core/api.js';
+import { withProject } from '../core/project.js';
 import {
   h, mount, icon, select, input, checkbox, spinner, emptyState, pageHeader,
   badge, envBadge, toast, toastError, relativeTime, formatDate, openModal, confirmDialog,
@@ -18,7 +19,7 @@ export async function renderVCS(outlet) {
   try {
     [res, conns, pushes] = await Promise.all([
       api.get('/vcs/integrations'),
-      api.get('/connections/'),
+      api.get(withProject('/connections/')),
       api.get('/vcs/pushes?limit=30'),
     ]);
   } catch (err) {

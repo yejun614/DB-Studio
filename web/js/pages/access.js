@@ -19,7 +19,7 @@ export async function renderAccess(outlet, params) {
     return;
   }
 
-  const { user, policy, connections, servers } = data;
+  const { user, policy, connections, servers, projects } = data;
   const levels = state.meta?.levels ?? [];
   const modes = state.meta?.accessModes ?? [];
   const caps = state.meta?.capabilities ?? [];
@@ -43,6 +43,9 @@ export async function renderAccess(outlet, params) {
     // 전역 권한. 커넥션에 매이지 않지만 권한을 두 화면에 나눠 두면 어느 쪽이
     // 최신인지 알 수 없으므로 여기서 함께 편집하고 함께 저장한다.
     perms: new Set(user.perms ?? []),
+    // 참여 프로젝트. 등급보다 앞선 관문이라 이 화면에서 함께 정한다 — 등급을
+    // 아무리 줘도 참여하지 않았으면 그 DB는 목록에조차 나오지 않는다.
+    projects: new Set(policy.projects ?? []),
   };
 
   // 서버별로 DB를 묶는다. 서버가 없는 DB는 없지만, 목록이 어긋난 경우에도
@@ -130,6 +133,7 @@ export async function renderAccess(outlet, params) {
         serverCapOverrides: Object.fromEntries(
           [...draft.serverCapOverrides].map(([id, set]) => [id, [...set]])),
         perms: [...draft.perms],
+        projects: [...draft.projects],
       });
       toast('권한을 저장했습니다. 해당 사용자의 세션이 초기화됩니다.', 'success');
       renderAccess(outlet, params);
@@ -155,7 +159,31 @@ export async function renderAccess(outlet, params) {
             '슈퍼 어드민은 모든 DB에 대해 마이그레이션까지 항상 허용되고 전역 권한도 모두 가집니다. '
             + '권한 설정 대상이 아닙니다.')
         : [
-            // 전역 권한을 맨 위에 둔다. DB에 매이지 않는 권한이므로 아래의
+            // 참여 프로젝트를 맨 위에 둔다. 아래의 모든 설정보다 앞선 관문이라
+            // 여기서 빠져 있으면 그 아래에 무엇을 적어도 효력이 없다.
+            h('div.field.access-global', {},
+              h('span.field-label', {}, '참여 프로젝트'),
+              h('div.cap-pick.cap-pick-stacked', {},
+                (projects ?? []).length === 0
+                  ? h('span.muted.small', {}, '아직 만들어진 프로젝트가 없습니다')
+                  : (projects ?? []).map((p) => h('label.cap-toggle', {},
+                    h('input', {
+                      type: 'checkbox',
+                      checked: draft.projects.has(p.id),
+                      disabled: isSuperadmin,
+                      onchange: (e) => {
+                        if (e.target.checked) draft.projects.add(p.id);
+                        else draft.projects.delete(p.id);
+                      },
+                    }),
+                    h('span', {}, p.name),
+                    h('span.field-help', {},
+                      `DB ${p.connections}개 · ERD ${p.documents}개`)))),
+              h('span.field-help', {},
+                '아래 설정보다 앞선 관문입니다. 참여하지 않은 프로젝트의 DB는 '
+                + '등급이 무엇으로 적혀 있든 목록에도 나오지 않습니다'),
+            ),
+            // 전역 권한을 그다음에 둔다. DB에 매이지 않는 권한이므로 아래의
             // "이 DB에 무엇을 허용할까"와 섞이면 커넥션별 설정으로 오해한다.
             h('div.field.access-global', {},
               h('span.field-label', {}, '전역 권한'),

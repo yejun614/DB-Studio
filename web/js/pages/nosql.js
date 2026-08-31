@@ -4,6 +4,7 @@
 // 쓰이지 않는 인덱스, 메모리 정책, TTL 없는 키, 큰 키)는 테이블·컬럼 모델에
 // 담을 자리가 없다. 억지로 같은 화면에 넣으면 양쪽 다 읽기 어려워진다.
 import { api } from '../core/api.js';
+import { withProject } from '../core/project.js';
 import { state, kindLabel } from '../core/store.js';
 import {
   h, mount, icon, input, spinner, emptyState, pageHeader,
@@ -19,7 +20,7 @@ export async function renderNoSQL(outlet, params, query) {
 
   let conns;
   try {
-    conns = await api.get('/connections/');
+    conns = await api.get(withProject('/connections/'));
   } catch (err) {
     mount(outlet, errorPanel(err));
     return;

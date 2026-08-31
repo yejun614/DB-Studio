@@ -29,9 +29,21 @@ func (s *Server) accessibleConnectionIDs(c *fiber.Ctx) ([]string, map[string]*mo
 	if err != nil {
 		return nil, nil, err
 	}
+	// 프로젝트로 한 번 더 좁힌다.
+	//
+	// 권한 판정이 이미 프로젝트를 관문으로 쓰므로 여기서 새로 막히는 것은 없다.
+	// 이것은 **보고 있는 프로젝트**로 목록을 맞추는 일이다 — 이 함수를 지나는
+	// 화면(ERD·마이그레이션·이벤트·로그·모니터링)이 모두 같은 답을 쓰게 된다.
+	scope, err := s.projectFilter(c)
+	if err != nil {
+		return nil, nil, err
+	}
 	ids := make([]string, 0, len(accessible))
 	byID := make(map[string]*model.Connection, len(accessible))
 	for _, conn := range accessible {
+		if !inProjects(scope, conn.ProjectID) {
+			continue
+		}
 		ids = append(ids, conn.ID)
 		byID[conn.ID] = conn
 	}

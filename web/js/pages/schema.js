@@ -1,5 +1,6 @@
 // 스키마 탐색기: 테이블 목록 → 상세(컬럼/인덱스/외래키/제약), DDL 스크립트, 두 DB 비교.
 import { api } from '../core/api.js';
+import { withProject } from '../core/project.js';
 import { state, kindLabel } from '../core/store.js';
 import {
   h, mount, icon, select, input, spinner, emptyState, pageHeader,
@@ -17,8 +18,8 @@ export async function renderSchema(outlet, params, query) {
   let servers;
   try {
     [conns, servers] = await Promise.all([
-      api.get('/connections/'),
-      api.get('/servers/'),
+      api.get(withProject('/connections/')),
+      api.get(withProject('/servers/')),
     ]);
   } catch (err) {
     mount(outlet, errorPanel(err));

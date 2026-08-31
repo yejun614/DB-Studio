@@ -5,6 +5,7 @@
 // 실행하기 전까지 몇 행이 바뀔지 아무도 모른다. 그래서 이 화면에는 기본적으로
 // **읽기 전용 스위치가 켜져 있고**, 끄는 것은 의식적인 동작이다.
 import { api } from '../core/api.js';
+import { withProject } from '../core/project.js';
 import { state, kindLabel } from '../core/store.js';
 import {
   h, mount, icon, select, spinner, emptyState, pageHeader,
@@ -29,8 +30,8 @@ export async function renderSQLConsole(outlet, params, query) {
   try {
     // 서버 → DB 두 단계로 고른다(데이터·스키마 화면과 같은 규칙).
     [conns, servers] = await Promise.all([
-      api.get('/connections/'),
-      api.get('/servers/'),
+      api.get(withProject('/connections/')),
+      api.get(withProject('/servers/')),
     ]);
   } catch (err) {
     mount(outlet, errorPanel(err));

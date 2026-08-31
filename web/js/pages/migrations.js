@@ -1,5 +1,6 @@
 // 마이그레이션: 목록 → 상세(변경 목록·SQL·리뷰) → 사전 검사 → 실행/롤백.
 import { api } from '../core/api.js';
+import { withProject } from '../core/project.js';
 import { state, kindLabel } from '../core/store.js';
 import {
   h, mount, icon, select, input, textarea, spinner, emptyState, pageHeader,
@@ -40,7 +41,8 @@ export async function renderMigrations(outlet, params, query) {
   const status = query.get('status') ?? '';
   let res;
   try {
-    res = await api.get(`/migrations/${status ? `?status=${encodeURIComponent(status)}` : ''}`);
+    res = await api.get(withProject(
+      `/migrations/${status ? `?status=${encodeURIComponent(status)}` : ''}`));
   } catch (err) {
     mount(outlet, errorPanel(err));
     return;
@@ -1442,8 +1444,8 @@ export async function renderVersions(outlet, params, query) {
     // 이름만 다른 항목으로 반복된다. 데이터·스키마 화면과 같은 두 단계 고르개를
     // 쓰려면 서버 정보가 필요하다.
     [conns, servers] = await Promise.all([
-      api.get('/connections/'),
-      api.get('/servers/'),
+      api.get(withProject('/connections/')),
+      api.get(withProject('/servers/')),
     ]);
   } catch (err) {
     mount(outlet, errorPanel(err));

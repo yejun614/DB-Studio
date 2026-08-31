@@ -1,5 +1,6 @@
 // 감시 룰 설정 화면.
 import { api } from '../core/api.js';
+import { withProject } from '../core/project.js';
 import {
   h, mount, icon, field, input, select, textarea, checkbox, spinner,
   emptyState, pageHeader, badge, envBadge, openModal, confirmDialog,
@@ -37,7 +38,7 @@ export async function renderRules(outlet) {
   try {
     [data, conns] = await Promise.all([
       api.get('/monitor/rules'),
-      api.get('/connections/'),
+      api.get(withProject('/connections/')),
     ]);
   } catch (err) {
     mount(outlet, errorPanel(err));

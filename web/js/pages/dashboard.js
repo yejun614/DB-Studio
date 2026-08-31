@@ -3,6 +3,7 @@
 // 구성 순서에 의도가 있다: 요약 숫자 → 지금 열린 문제 → DB별 부하 → 권한 → 기능 입구.
 // "문제가 있는가"를 먼저 답하고, 그다음에 "어디서 나는가"로 좁힌다.
 import { api } from '../core/api.js';
+import { withProject } from '../core/project.js';
 import { state, kindLabel } from '../core/store.js';
 import {
   h, mount, icon, spinner, pageHeader, badge, envBadge, levelBadge,
@@ -47,7 +48,7 @@ export async function renderDashboard(outlet) {
       // 세 요청은 서로 독립적이다. 모니터링 쪽이 실패해도 커넥션 목록과
       // 기능 입구는 보여준다 — 화면 전체가 하나의 실패에 묶이면 안 된다.
       const [conns, overview, events] = await Promise.all([
-        api.get('/connections/'),
+        api.get(withProject('/connections/')),
         api.get('/monitor/overview').catch((err) => ({ error: err })),
         api.get('/monitor/events?state=open&limit=6').catch(() => ({ events: [] })),
       ]);

@@ -3,6 +3,7 @@
 // 두 종류를 한 화면에서 다루는 이유: 사용자가 답하려는 질문은 하나다 —
 // "이 매크로가 언제 저절로 도는가". 시각이든 조건이든 그 답의 일부다.
 import { api } from '../core/api.js';
+import { withProject } from '../core/project.js';
 import { state } from '../core/store.js';
 import {
   h, mount, icon, input, select, spinner, badge, field, emptyState, pageHeader,
@@ -178,7 +179,7 @@ function describeTrigger(t, describe) {
 async function openTriggerDialog(macroID, macroParams, existing, reload) {
   let conns = { items: [] };
   try {
-    conns = await api.get('/connections/');
+    conns = await api.get(withProject('/connections/'));
   } catch {
     // 커넥션을 못 읽어도 스케줄 트리거는 만들 수 있다. 조건 트리거의 커넥션 선택만
     // "전체"로 제한된다.

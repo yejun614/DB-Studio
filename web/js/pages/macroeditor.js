@@ -8,6 +8,7 @@
 // 렌더링은 ERD 편집기와 같은 판단을 따른다 — 구조가 바뀌면 캔버스를 다시 그린다.
 // 예외는 드래그 중 좌표뿐이다(왕복이 없어도 재생성 비용이 눈에 띈다).
 import { api } from '../core/api.js';
+import { withProject } from '../core/project.js';
 import {
   h, mount, icon, input, textarea, select, checkbox, spinner, badge,
   toast, toastError, openModal, confirmDialog, field, formatDate, relativeTime,
@@ -41,7 +42,7 @@ export async function renderMacroEditor(outlet, params, query) {
     [data, meta, conns, macros] = await Promise.all([
       api.get(`/macros/${encodeURIComponent(macroID)}${version ? `?version=${version}` : ''}`),
       api.get('/macros/meta'),
-      api.get('/connections/'),
+      api.get(withProject('/connections/')),
       api.get('/macros/'),
     ]);
   } catch (err) {

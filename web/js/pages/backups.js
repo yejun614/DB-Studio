@@ -4,6 +4,7 @@
 // 복구는 **데이터를 덮어쓴다.** 그래서 만들기는 옵션을 고르는 폼이고, 복구는
 // 무엇이 어디로 가는지 확인시키는 대화상자다.
 import { api } from '../core/api.js';
+import { withProject } from '../core/project.js';
 import { state } from '../core/store.js';
 import {
   h, mount, icon, select, input, checkbox, spinner, emptyState, pageHeader,
@@ -48,8 +49,8 @@ export async function renderBackups(outlet, params, query) {
     // 서버 목록을 함께 받는 이유: 커넥션을 평평하게 늘어놓으면 같은 서버의 DB가
     // 이름만 다른 항목으로 반복된다. 다른 화면과 같은 두 단계 고르개를 쓴다.
     [conns, servers, res] = await Promise.all([
-      api.get('/connections/'),
-      api.get('/servers/'),
+      api.get(withProject('/connections/')),
+      api.get(withProject('/servers/')),
       api.get(`/backups/?conn=${encodeURIComponent(query.get('conn') ?? '')}`),
     ]);
   } catch (err) {

@@ -8,6 +8,7 @@
 // "쌓이고 있나"다. 큐 깊이·랙은 그 자체로 좋지도 나쁘지도 않다 — 소비자가 따라오고
 // 있으면 정상이고, 따라오지 못하면 장애의 전조다.
 import { api } from '../core/api.js';
+import { withProject } from '../core/project.js';
 import { state } from '../core/store.js';
 import {
   h, mount, icon, spinner, emptyState, pageHeader,
@@ -23,7 +24,7 @@ export async function renderBroker(outlet, params, query) {
 
   let conns;
   try {
-    conns = await api.get('/connections/');
+    conns = await api.get(withProject('/connections/'));
   } catch (err) {
     mount(outlet, errorPanel(err));
     return;

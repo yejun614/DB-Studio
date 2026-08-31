@@ -12,6 +12,7 @@
 // 과거 버전을 보는 중에는 방을 열지 않는다. 그 화면은 지금이 아니라 그때를 보는
 // 곳이라 함께 고칠 것이 없다.
 import { api } from '../core/api.js';
+import { withProject, currentProjectID } from '../core/project.js';
 import { state, kindLabel } from '../core/store.js';
 import {
   h, mount, icon, select, input, spinner, emptyState, pageHeader, badge, envBadge,
@@ -47,8 +48,8 @@ export async function renderStructure(outlet, params, query) {
   try {
     // 서버 → DB 두 단계로 고른다(데이터·스키마 화면과 같은 규칙).
     [conns, servers] = await Promise.all([
-      api.get('/connections/'),
-      api.get('/servers/'),
+      api.get(withProject('/connections/')),
+      api.get(withProject('/servers/')),
     ]);
   } catch (err) {
     mount(outlet, errorPanel(err));
@@ -971,7 +972,7 @@ class StructureView {
   // 잃는 것이 더 크다.
   async loadDrafts() {
     try {
-      const res = await api.get('/erd/documents/');
+      const res = await api.get(withProject('/erd/documents/'));
       // 목록은 {items: [{document, connection, ...}]} 모양이다.
       this.drafts = (res.items ?? [])
         .map((it) => it.document)
@@ -1058,6 +1059,7 @@ class StructureView {
             try {
               const res = await api.post('/erd/documents/', {
                 name: nameInput.value,
+                projectId: currentProjectID(),
                 connectionId: this.conn.id,
                 fromConnection: true,
               });

@@ -265,7 +265,9 @@ func (s *Server) routes() {
 	projects.Get("/:projectId", s.handleGetProject)
 	projects.Put("/:projectId", s.requireConnManager, s.handleUpdateProject)
 	projects.Delete("/:projectId", s.requireConnManager, s.handleDeleteProject)
-	projects.Put("/:projectId/members", s.requireConnManager, s.handleSetProjectMembers)
+	// 참여자 편집만 슈퍼 어드민이다. 명단을 고치려면 사용자 목록을 볼 수 있어야
+	// 하는데, 그것이 슈퍼 어드민의 일이기 때문이다(/users).
+	projects.Put("/:projectId/members", s.requireRole(model.RoleSuperadmin), s.handleSetProjectMembers)
 
 	// 커넥션: 조회는 접근 권한 기준으로 필터, 변경은 admin 이상
 	conns := authed.Group("/connections")

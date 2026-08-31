@@ -4,6 +4,7 @@
 // 운영자가 이 화면에서 답을 얻고 싶은 질문은 셋이다 — 클러스터는 괜찮은가, 무엇이
 // 자리를 차지하고 있는가, 지금 무슨 일이 돌고 있는가.
 import { api } from '../core/api.js';
+import { withProject } from '../core/project.js';
 import { state } from '../core/store.js';
 import {
   h, mount, icon, input, spinner, emptyState, pageHeader,
@@ -19,7 +20,7 @@ export async function renderStorage(outlet, params, query) {
 
   let conns;
   try {
-    conns = await api.get('/connections/');
+    conns = await api.get(withProject('/connections/'));
   } catch (err) {
     mount(outlet, errorPanel(err));
     return;
