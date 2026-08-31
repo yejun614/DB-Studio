@@ -37,6 +37,12 @@ type APIToken struct {
 	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
 	LastUsedIP string     `json:"lastUsedIp,omitempty"`
 	RevokedAt  *time.Time `json:"revokedAt,omitempty"`
+	// RotatedAt은 값만 다시 발급한 시각이다. 이름·범위·만료는 그대로다.
+	//
+	// CreatedAt과 따로 두는 이유: "언제부터 쓰던 토큰인가"와 "지금 값이 언제 나온
+	// 것인가"는 다른 사실이다. 뒤엣것을 모르면 클라이언트에 넣어 둔 값이 최신인지
+	// 확인할 방법이 없다.
+	RotatedAt *time.Time `json:"rotatedAt,omitempty"`
 }
 
 // Active는 지금 쓸 수 있는 토큰인지 반환한다.
@@ -77,20 +83,21 @@ func (s *Store) CreateAPIToken(ctx context.Context, p CreateTokenParams) (*APITo
 }
 
 const tokenColumns = `id, user_id, name, prefix, scope, created_at, expires_at,
-	last_used_at, last_used_ip, revoked_at`
+	last_used_at, last_used_ip, revoked_at, rotated_at`
 
 func scanToken(row interface{ Scan(...any) error }) (*APIToken, error) {
 	var t APIToken
 	var createdAt string
-	var expiresAt, lastUsedAt, revokedAt sql.NullString
+	var expiresAt, lastUsedAt, revokedAt, rotatedAt sql.NullString
 	if err := row.Scan(&t.ID, &t.UserID, &t.Name, &t.Prefix, &t.Scope, &createdAt,
-		&expiresAt, &lastUsedAt, &t.LastUsedIP, &revokedAt); err != nil {
+		&expiresAt, &lastUsedAt, &t.LastUsedIP, &revokedAt, &rotatedAt); err != nil {
 		return nil, err
 	}
 	t.CreatedAt = parseTime(createdAt)
 	t.ExpiresAt = parseTimePtr(expiresAt)
 	t.LastUsedAt = parseTimePtr(lastUsedAt)
 	t.RevokedAt = parseTimePtr(revokedAt)
+	t.RotatedAt = parseTimePtr(rotatedAt)
 	return &t, nil
 }
 
@@ -175,6 +182,32 @@ func (s *Store) RevokeAPIToken(ctx context.Context, id, userID string) error {
 		nowString(), id, userID)
 	if err != nil {
 		return fmt.Errorf("revoke api token: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// RotateAPIToken은 토큰의 **값만** 새로 바꾼다.
+//
+// 이름·범위·만료는 그대로다. 클라이언트 설정에서 이 토큰을 가리키는 것은 이름이고,
+// 값이 샜다고 해서 그 이름을 버릴 이유는 없다 — 새로 만들어 옮기면 설정을 고치는
+// 곳이 늘어나고, 그 사이 옛 토큰을 지우는 것을 잊는다.
+//
+// 마지막 사용 기록은 지운다. 그 기록은 이제 없는 값의 것이라서 남겨 두면 "새 값이
+// 잘 들어갔는가"를 볼 수 없다 — 재발급한 뒤 다시 찍히는 시각이 그 답이다.
+//
+// 폐기된 토큰은 되살리지 않는다. 되살리는 길을 열면 "폐기했다"는 기록이 무슨 뜻인지
+// 흐려진다. 그때는 지우고 새로 만드는 것이 맞다.
+func (s *Store) RotateAPIToken(ctx context.Context, id, userID, token, prefix string) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE api_tokens
+		 SET token_hash = ?, prefix = ?, rotated_at = ?, last_used_at = NULL, last_used_ip = ''
+		 WHERE id = ? AND user_id = ? AND revoked_at IS NULL`,
+		HashToken(token), prefix, nowString(), id, userID)
+	if err != nil {
+		return fmt.Errorf("rotate api token: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound

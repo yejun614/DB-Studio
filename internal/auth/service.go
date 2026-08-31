@@ -181,6 +181,23 @@ func (s *Service) IssueAPIToken(ctx context.Context, p store.CreateTokenParams) 
 	return saved, token, nil
 }
 
+// RotateAPIToken은 토큰의 값만 새로 만들고 **원문을 한 번만** 반환한다.
+//
+// 값 만드는 규칙(길이·접두사)을 발급과 한 곳에 두려고 여기에 있다. 두 곳에 적으면
+// 한쪽만 바뀌어, 재발급한 토큰만 접두사가 다른 날이 온다.
+func (s *Service) RotateAPIToken(ctx context.Context, id, userID string) (string, error) {
+	raw, err := crypto.RandomToken(32)
+	if err != nil {
+		return "", fmt.Errorf("generate api token: %w", err)
+	}
+	token := TokenPrefix + raw
+	prefix := token[:min(len(token), len(TokenPrefix)+8)]
+	if err := s.st.RotateAPIToken(ctx, id, userID, token, prefix); err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
 // AuthenticateToken은 API 토큰으로 사용자를 찾는다.
 //
 // 세션 인증(Authenticate)과 나란히 두는 이유: 두 경로 모두 "요청 → 사용자"를 만드는
