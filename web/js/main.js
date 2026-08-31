@@ -487,7 +487,14 @@ function showLogin() {
 function showPasswordChange() {
   appRoot.classList.remove('app-loading');
   router.setOutlet(null);
-  renderPasswordChange(appRoot, { onSuccess: enterApp });
+  renderPasswordChange(appRoot, {
+    onSuccess: enterApp,
+    // 이 화면은 앱 전체를 가리고 서 있다. 나갈 문이 없으면 임시 비밀번호를 받아 든
+    // 사람이 한 번 로그인한 컴퓨터에서, 그 컴퓨터의 주인이 자기 계정으로 들어갈
+    // 방법이 없어진다. 비밀번호를 바꾸지 않고 나가는 것은 강제를 우회하는 것이
+    // 아니다 — 그 계정으로 다시 들어오면 이 화면이 그대로 다시 선다.
+    onSwitchUser: logout,
+  });
 }
 
 // showTOTPSetup은 2단계 인증 의무화 상태에서 등록을 마칠 때까지 다른 화면을 막는다.

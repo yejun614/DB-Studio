@@ -237,6 +237,16 @@ code { font-family: var(--mono); font-size: 0.9em; }
 .auth-sub { color: var(--text-dim); margin: 6px 0 24px; font-size: 13.5px; }
 .auth-form { display: flex; flex-direction: column; gap: 14px; text-align: left; }
 
+/* 강제 화면에서 나가는 문. 본 동작(변경)과 섞이지 않게 선으로 가른다 —
+   같은 덩어리에 두면 "저장하지 않고 나가기"처럼 읽혀 손이 헷갈린다. */
+.auth-alt {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-soft);
+  text-align: left;
+}
+.auth-alt .field-help { margin: 8px 0 0; text-align: center; }
+
 /* ---------- 셸 레이아웃 ---------- */
 
 .shell {

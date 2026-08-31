@@ -203,7 +203,13 @@ function themeCorner() {
 }
 
 // renderPasswordChange는 must_change_password 상태에서 다른 화면 진입을 차단하는 전용 화면이다.
-export function renderPasswordChange(outlet, { onSuccess }) {
+// renderPasswordChange는 비밀번호 변경 화면이다.
+//
+// onSwitchUser가 주어지면 "다른 계정으로 로그인"이 함께 나온다. 강제 변경 화면에서만
+// 필요하다: 그 화면은 앱 전체를 가리고 서 있어서, 나갈 문이 없으면 임시 비밀번호를
+// 받아 든 사람의 화면에서 아무 일도 할 수 없게 된다 — 남의 컴퓨터에서 한 번 로그인한
+// 뒤, 그 컴퓨터의 주인은 자기 계정으로 들어갈 방법이 없다.
+export function renderPasswordChange(outlet, { onSuccess, onSwitchUser }) {
   const current = input({ type: 'password', autocomplete: 'current-password', required: true });
   const next = input({ type: 'password', autocomplete: 'new-password', required: true });
   const confirm = input({ type: 'password', autocomplete: 'new-password', required: true });
@@ -246,6 +252,18 @@ export function renderPasswordChange(outlet, { onSuccess }) {
         h('div.auth-brand', {}, icon('lock', 26), h('h1', {}, '비밀번호 변경 필요')),
         h('p.auth-sub', {}, `${state.user?.username ?? ''} 계정의 비밀번호를 변경해야 계속할 수 있습니다.`),
         form,
+        onSwitchUser
+          ? h('div.auth-alt', {},
+            h('button.btn.btn-block', {
+              type: 'button',
+              onclick: (e) => {
+                e.currentTarget.disabled = true;
+                onSwitchUser();
+              },
+            }, icon('logout'), '다른 계정으로 로그인'),
+            h('p.field-help', {},
+              '이 계정의 비밀번호는 그대로 남습니다. 다음에 로그인할 때 다시 물어봅니다.'))
+          : null,
       ),
     ),
   );
