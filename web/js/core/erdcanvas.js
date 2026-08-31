@@ -307,8 +307,12 @@ export class ErdCanvas {
       titleX = 28;
     }
     const { main, sub } = tableLabel(tbl, geom.layout, this.nameMode);
+    // 논리명일 때는 조금 작게 쓴다. 같은 크기로 두면 한글이 라틴 문자보다 크게
+    // 보여서(글자당 차지하는 면적이 넓다) 제목만 유독 큼직하게 튄다.
+    const isLogical = main !== (tbl.namespace ? `${tbl.namespace}.${tbl.name}` : tbl.name);
     g.appendChild(svgEl('text', {
-      class: 'erd-card-name', x: titleX, y: sub ? 17 : 20,
+      class: `erd-card-name${isLogical ? ' is-logical' : ''}`,
+      x: titleX, y: sub ? 17 : 20,
     }, truncate(main, iconName ? 27 : 30)));
     // 둘 다 보기에서는 물리명을 작은 글씨로 아래에 둔다. 나란히 쓰면 어느 쪽이
     // 진짜 이름인지 알 수 없고, 긴 한국어 이름에서 물리명이 먼저 잘린다.
