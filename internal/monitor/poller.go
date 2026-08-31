@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -222,7 +224,28 @@ func (m *Manager) Run(ctx context.Context) {
 	}
 }
 
+// pollTarget은 "실제로 같은 곳을 같은 계정으로 본다"를 나타내는 열쇠다.
+//
+// 프로젝트가 생기면서 같은 DB가 여러 번 등록될 수 있게 되었다. 프로젝트마다 서버를
+// 따로 등록하기 때문이다 — 두 팀이 같은 운영 DB를 각자 등록하면 커넥션 행이 둘이다.
+// 그것을 그대로 두면 폴러가 30초마다 같은 DB에 두 번 물어본다.
+//
+// **계정까지 열쇠에 넣는다.** 같은 서버라도 계정이 다르면 보이는 지표가 다를 수
+// 있고(권한에 따라 일부 뷰가 막힌다), 그때 한쪽 결과를 다른 쪽에 나눠 주면 자기
+// 계정으로는 볼 수 없는 값을 보게 된다. 노드도 넣는다 — 클러스터에서는 어느 노드가
+// 접속하느냐가 곧 다른 경로다.
+func pollTarget(conn *model.Connection) string {
+	return strings.Join([]string{
+		string(conn.Kind), conn.Host, strconv.Itoa(conn.Port),
+		conn.DatabaseName, conn.Username, conn.NodeID,
+	}, "\x00")
+}
+
 // pollAll은 활성 커넥션 전체를 폴링한다.
+//
+// 같은 대상을 가리키는 커넥션은 한 묶음으로 묶어 **한 번만** 수집하고, 결과를 그
+// 묶음의 모든 커넥션에 나눠 준다. 저장·룰 평가·드리프트 판단은 커넥션마다 따로 한다 —
+// 각 프로젝트가 자기 커넥션의 이력과 룰을 갖기 때문이다.
 func (m *Manager) pollAll(ctx context.Context) {
 	conns, err := m.st.ListConnections(ctx)
 	if err != nil {
@@ -230,10 +253,11 @@ func (m *Manager) pollAll(ctx context.Context) {
 		return
 	}
 
-	// 동시 실행 수를 세마포어로 제한한다.
-	sem := make(chan struct{}, max(1, m.cfg.MaxConcurrent))
-	var wg sync.WaitGroup
-
+	// 묶음의 차례를 유지한다. map 순회 순서는 매번 달라서, 그대로 두면 같은 대상을
+	// 어느 커넥션의 계정으로 수집했는지가 폴링마다 바뀐다.
+	groups := map[string][]*model.Connection{}
+	order := []string{}
+	adapters := map[string]dbx.Adapter{}
 	for _, conn := range conns {
 		if !conn.Enabled {
 			continue
@@ -242,19 +266,50 @@ func (m *Manager) pollAll(ctx context.Context) {
 		if err != nil || !adapter.Capabilities().Monitor {
 			continue
 		}
+		key := pollTarget(conn)
+		if groups[key] == nil {
+			order = append(order, key)
+			adapters[key] = adapter
+		}
+		groups[key] = append(groups[key], conn)
+	}
 
+	// 동시 실행 수를 세마포어로 제한한다.
+	sem := make(chan struct{}, max(1, m.cfg.MaxConcurrent))
+	var wg sync.WaitGroup
+
+	for _, key := range order {
 		wg.Add(1)
-		go func(conn *model.Connection, adapter dbx.Adapter) {
+		go func(group []*model.Connection, adapter dbx.Adapter) {
 			// 커넥션 하나에서 패닉이 나도 폴러 전체(=프로세스)가 죽지 않게 한다.
 			// 드라이버는 예상 못한 응답에 패닉할 수 있고, 그 대가가 서버 종료여서는 안 된다.
-			defer applog.Recover("monitor.poll:" + conn.Name)
+			defer applog.Recover("monitor.poll:" + group[0].Name)
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			m.pollOne(ctx, conn, adapter)
-		}(conn, adapter)
+			m.pollGroup(ctx, group, adapter)
+		}(groups[key], adapters[key])
 	}
 	wg.Wait()
+}
+
+// pollGroup은 같은 대상을 가리키는 커넥션들을 한 번의 수집으로 처리한다.
+func (m *Manager) pollGroup(ctx context.Context, group []*model.Connection, adapter dbx.Adapter) {
+	if len(group) == 1 {
+		m.pollOne(ctx, group[0], adapter)
+		return
+	}
+	// 수집은 첫 커넥션의 자격증명으로 한 번만 한다. 열쇠에 계정이 들어 있으므로
+	// 이 묶음의 계정은 모두 같다.
+	set, ok := m.collect(ctx, group[0], adapter)
+	if !ok {
+		return
+	}
+	for _, conn := range group {
+		// 커넥션마다 사본을 준다. 그대로 나눠 주면 첫 커넥션이 변화율을 계산하며
+		// 갈아 끼운 값을 다음 커넥션이 다시 변환하게 된다.
+		m.applyPoll(ctx, conn, adapter, set.Clone())
+	}
 }
 
 func (m *Manager) pollOneByID(ctx context.Context, connectionID string) {
@@ -277,17 +332,28 @@ func (m *Manager) pollOneByID(ctx context.Context, connectionID string) {
 
 // pollOne은 한 커넥션의 지표를 수집하고 룰을 평가한다.
 func (m *Manager) pollOne(ctx context.Context, conn *model.Connection, adapter dbx.Adapter) {
+	set, ok := m.collect(ctx, conn, adapter)
+	if !ok {
+		return
+	}
+	m.applyPoll(ctx, conn, adapter, set)
+}
+
+// collect는 대상 DB에 실제로 물어보는 부분이다(네트워크가 도는 유일한 자리).
+//
+// applyPoll과 나눈 이유: 같은 대상을 여러 커넥션이 가리킬 때 이 부분만 한 번 하고
+// 나머지는 커넥션마다 따로 하기 위해서다.
+func (m *Manager) collect(ctx context.Context, conn *model.Connection, adapter dbx.Adapter) (*metric.Set, bool) {
 	secret, err := m.st.GetSecret(ctx, conn.ID)
 	if err != nil {
 		slog.Error("자격증명 복호화 실패", "connection", conn.Name, "err", err)
-		return
+		return nil, false
 	}
 
 	pollCtx, cancel := context.WithTimeout(ctx, m.cfg.Timeout)
 	defer cancel()
 
-	target := dbx.Target{Conn: conn, Secret: secret}
-	set, err := adapter.Metrics(pollCtx, target)
+	set, err := adapter.Metrics(pollCtx, dbx.Target{Conn: conn, Secret: secret})
 	if err != nil {
 		// 설정 오류 등으로 수집 자체가 불가능한 경우다.
 		// up=0 샘플을 만들어 상태 화면에 이유를 표시한다.
@@ -295,6 +361,17 @@ func (m *Manager) pollOne(ctx context.Context, conn *model.Connection, adapter d
 		set.Gauge(metric.NameUp, 0, metric.UnitCount)
 		set.AddNote("지표 수집 불가: %v", err)
 	}
+	return set, true
+}
+
+// applyPoll은 수집 결과를 한 커넥션의 이력·상태·룰·드리프트에 반영한다.
+func (m *Manager) applyPoll(ctx context.Context, conn *model.Connection, adapter dbx.Adapter, set *metric.Set) {
+	secret, err := m.st.GetSecret(ctx, conn.ID)
+	if err != nil {
+		slog.Error("자격증명 복호화 실패", "connection", conn.Name, "err", err)
+		return
+	}
+	target := dbx.Target{Conn: conn, Secret: secret}
 
 	// 누적 카운터를 초당 변화율로 바꾼다.
 	m.deriveRates(conn.ID, set)

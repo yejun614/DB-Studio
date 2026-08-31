@@ -420,9 +420,22 @@ func (s *Server) handleListRules(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	// 특정 DB를 겨냥한 룰은 그 DB가 보이는 사람에게만 보인다.
+	//
+	// 룰 이름과 임계값에는 그 DB의 사정이 담긴다("결제-운영 커넥션 90% 초과").
+	// 대상이 안 보이는데 룰만 보이면 그 자체가 남의 프로젝트 이야기를 흘리는 셈이고,
+	// 고칠 수도 없는 줄이 목록에 남는다.
+	_, byID, err := s.accessibleConnectionIDs(c)
+	if err != nil {
+		return err
+	}
 	// 조건 설명을 함께 보내 목록 화면이 연산자 조합을 다시 조립하지 않게 한다.
 	described := make([]fiber.Map, 0, len(rules))
 	for _, r := range rules {
+		// 대상이 없는 룰은 전체에 걸리는 규칙이라 그대로 둔다.
+		if r.ConnectionID != "" && byID[r.ConnectionID] == nil {
+			continue
+		}
 		described = append(described, fiber.Map{"rule": r, "describe": r.Describe()})
 	}
 	return c.JSON(fiber.Map{"rules": described, "metrics": metric.Catalog()})

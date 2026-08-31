@@ -60,6 +60,28 @@ func NewSet() *Set {
 	return &Set{Samples: []Sample{}, CollectedAt: time.Now().UTC()}
 }
 
+// Clone은 샘플과 사유를 복사한 새 Set을 만든다.
+//
+// 폴러가 같은 대상을 가리키는 커넥션 여러 개에 한 번의 수집 결과를 나눠 줄 때
+// 쓴다. 그대로 나눠 주면 한쪽에서 변화율을 계산하며 Samples를 갈아 끼운 것이
+// 다른 쪽에도 보이고, 두 번째부터는 이미 변환된 값을 다시 변환하게 된다.
+func (s *Set) Clone() *Set {
+	if s == nil {
+		return nil
+	}
+	out := &Set{
+		Samples:     make([]Sample, len(s.Samples)),
+		CollectedAt: s.CollectedAt,
+		LatencyMs:   s.LatencyMs,
+	}
+	copy(out.Samples, s.Samples)
+	if s.Notes != nil {
+		out.Notes = make([]string, len(s.Notes))
+		copy(out.Notes, s.Notes)
+	}
+	return out
+}
+
 // Gauge는 게이지 지표를 추가한다.
 func (s *Set) Gauge(name string, value float64, unit Unit) {
 	s.Samples = append(s.Samples, Sample{Name: name, Value: value, Kind: Gauge, Unit: unit})

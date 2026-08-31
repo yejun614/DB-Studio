@@ -1,5 +1,6 @@
 // 모니터링 대시보드: 커넥션 상태 그리드 → 지표 차트 → 이벤트 타임라인.
 import { api } from '../core/api.js';
+import { withProject } from '../core/project.js';
 import { state, kindLabel } from '../core/store.js';
 import {
   h, mount, icon, select, spinner, emptyState, pageHeader,
@@ -39,7 +40,7 @@ export async function renderMonitor(outlet, params, query) {
 
   let data;
   try {
-    data = await api.get('/monitor/overview');
+    data = await api.get(withProject('/monitor/overview'));
   } catch (err) {
     mount(outlet, errorPanel(err));
     return;
@@ -67,7 +68,7 @@ export async function renderMonitor(outlet, params, query) {
   async function load(showSpinner = false) {
     if (showSpinner) mount(body, spinner());
     try {
-      const fresh = await api.get('/monitor/overview');
+      const fresh = await api.get(withProject('/monitor/overview'));
       if (selectedId) {
         refreshDetail = await renderDetail(body, fresh, selectedId);
       } else {
@@ -517,7 +518,7 @@ export async function renderEvents(outlet, params, query) {
     if (kindFilter.value) qs.set('kind', kindFilter.value);
     qs.set('limit', '100');
     try {
-      const res = await api.get(`/monitor/events?${qs}`);
+      const res = await api.get(withProject(`/monitor/events?${qs}`));
       mount(body, res.events.length
         ? h('div.card', {}, eventTable(res.events, res.connectionNames, load))
         : emptyState('조건에 맞는 이벤트가 없습니다'));

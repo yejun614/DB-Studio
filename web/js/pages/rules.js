@@ -37,7 +37,7 @@ export async function renderRules(outlet) {
   let conns;
   try {
     [data, conns] = await Promise.all([
-      api.get('/monitor/rules'),
+      api.get(withProject('/monitor/rules')),
       api.get(withProject('/connections/')),
     ]);
   } catch (err) {

@@ -49,8 +49,8 @@ export async function renderDashboard(outlet) {
       // 기능 입구는 보여준다 — 화면 전체가 하나의 실패에 묶이면 안 된다.
       const [conns, overview, events] = await Promise.all([
         api.get(withProject('/connections/')),
-        api.get('/monitor/overview').catch((err) => ({ error: err })),
-        api.get('/monitor/events?state=open&limit=6').catch(() => ({ events: [] })),
+        api.get(withProject('/monitor/overview')).catch((err) => ({ error: err })),
+        api.get(withProject('/monitor/events?state=open&limit=6')).catch(() => ({ events: [] })),
       ]);
       mount(body, ...dashboardView(conns, overview, events));
       // 스파크라인은 카드를 그린 뒤 채운다. 커넥션 수만큼 요청이 나가므로

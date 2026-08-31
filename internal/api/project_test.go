@@ -319,3 +319,55 @@ func TestServersAreScopedToProject(t *testing.T) {
 		t.Errorf("참여하지 않은 프로젝트의 서버가 %d개 보입니다", len(items))
 	}
 }
+
+// 모니터링도 프로젝트 안만 본다.
+//
+// 개요·이벤트·룰이 모두 같은 관문(accessibleConnectionIDs)을 지난다. 한 곳이라도
+// 새면 남의 팀 DB 이름과 부하가 그대로 보인다.
+func TestMonitoringStaysInsideProjects(t *testing.T) {
+	e, conn, _ := assignEnv(t)
+	alice := loginAs(t, e, "alice")
+
+	// 이 DB를 겨냥한 룰 하나.
+	if code, got := alice.do("POST", "/api/v1/monitor/rules", map[string]any{
+		"name": "결제-운영 연결 수", "connectionId": conn.ID,
+		"metric": "connections.active", "op": ">", "threshold": 100,
+		"severity": "warning",
+	}); code != 201 && code != 200 {
+		t.Fatalf("룰 생성 = %d: %v", code, got)
+	}
+
+	_, body := alice.do("POST", "/api/v1/projects/", map[string]any{"name": "물류"})
+	made, _ := body["project"].(map[string]any)
+	second, _ := made["id"].(string)
+
+	// 다른 프로젝트에서 보면 개요도 룰도 비어 있다.
+	_, overview := alice.do("GET", "/api/v1/monitor/overview?project="+second, nil)
+	if items, _ := overview["items"].([]any); len(items) != 0 {
+		t.Errorf("다른 프로젝트의 개요에 DB가 %d개 보입니다", len(items))
+	}
+	_, rules := alice.do("GET", "/api/v1/monitor/rules?project="+second, nil)
+	for _, row := range asList(rules["rules"]) {
+		r, _ := row["rule"].(map[string]any)
+		if r["connectionId"] == conn.ID {
+			t.Errorf("남의 프로젝트 DB를 겨냥한 룰이 보입니다: %v", r["name"])
+		}
+	}
+
+	// 원래 프로젝트에서는 그대로 보인다.
+	_, mine := alice.do("GET", "/api/v1/monitor/overview?project="+e.project.ID, nil)
+	if items, _ := mine["items"].([]any); len(items) != 1 {
+		t.Errorf("원래 프로젝트의 개요 = %d개, 1개여야 합니다", len(items))
+	}
+	found := false
+	_, myRules := alice.do("GET", "/api/v1/monitor/rules?project="+e.project.ID, nil)
+	for _, row := range asList(myRules["rules"]) {
+		r, _ := row["rule"].(map[string]any)
+		if r["connectionId"] == conn.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("원래 프로젝트에서 자기 룰이 보이지 않습니다")
+	}
+}
