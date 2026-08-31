@@ -230,6 +230,8 @@ func (s *Server) routes() {
 	users := authed.Group("/users", s.requireRole(model.RoleSuperadmin))
 	users.Get("/", s.handleListUsers)
 	users.Post("/", s.handleCreateUser)
+	// 여러 명을 같은 권한으로 한 번에. 팀이 들어오는 일은 한 명씩 오지 않는다.
+	users.Post("/bulk", s.handleBulkCreateUsers)
 	users.Get("/:id", s.handleGetUser)
 	users.Patch("/:id", s.handleUpdateUser)
 	users.Delete("/:id", s.handleDeleteUser)

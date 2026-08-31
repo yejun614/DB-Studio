@@ -2,7 +2,7 @@
 import { api } from '../core/api.js';
 import { state } from '../core/store.js';
 import {
-  h, mount, icon, field, input, select, spinner, emptyState, pageHeader,
+  h, mount, icon, field, input, select, textarea, spinner, emptyState, pageHeader,
   openModal, confirmDialog, toast, toastError, badge, roleBadge, formatDate,
   relativeTime, copyToClipboard,
 } from '../core/ui.js';
@@ -23,6 +23,8 @@ export async function renderUsers(outlet) {
 
   mount(outlet,
     pageHeader('사용자 관리', `${users.length}명의 계정`, [
+      h('button.btn', { type: 'button', onclick: () => openBulkUserForm(users, reload) },
+        icon('users'), '여러 명 추가'),
       h('button.btn.btn-primary', { type: 'button', onclick: () => openUserForm(null, reload) },
         icon('plus'), '사용자 추가'),
     ]),
@@ -199,6 +201,162 @@ function openUserForm(existing, reload) {
       h('button.btn', { type: 'button', onclick: close }, '취소'),
       h('button.btn.btn-primary', { type: 'button', onclick: () => submit(close) },
         isEdit ? '저장' : '생성'),
+    ],
+  });
+}
+
+// openBulkUserForm은 여러 사람을 같은 권한으로 한 번에 등록한다.
+//
+// 권한을 이 창에서 새로 정하지 않는다. 역할만 여기서 받고 나머지는 "이 사람과 같게"로
+// 받는다 — 접근 범위·등급·데이터 능력을 이 창에 다시 그리면 권한을 정하는 곳이 두
+// 곳이 되고, 두 곳이 어긋나면 어느 쪽이 참인지 화면이 답하지 못한다.
+//
+// 참여 프로젝트만 예외로 함께 받는다. 그것이 나머지 모두보다 앞선 관문이라, 비워
+// 두면 계정을 만들어 놓고 아무것도 못 보는 상태가 된다.
+async function openBulkUserForm(users, reload) {
+  const roles = state.meta?.roles ?? [];
+  let projects = [];
+  try {
+    ({ projects } = await api.get('/projects/'));
+  } catch (err) {
+    toastError(err);
+    return;
+  }
+
+  const list = textarea({
+    rows: 8,
+    placeholder: 'dev1, 홍길동, dev1@example.com\ndev2, 김철수\ndev3',
+    autofocus: true,
+  });
+  const role = select(roles.map((r) => ({ value: r.value, label: r.label })), { value: 'member' });
+  // 슈퍼 어드민은 원본이 될 수 없다. 그 권한은 역할에서 나오므로 정책에 적혀 있는
+  // 것이 없고, 복사해 놓고 "같은 권한"이라 하면 아무 권한도 없는 계정이 생긴다.
+  const copyFrom = select([
+    { value: '', label: '복사하지 않음 (기본값으로 시작)' },
+    ...users
+      .filter((u) => u.role !== 'superadmin')
+      .map((u) => ({ value: u.id, label: `${u.displayName || u.username} (${u.username})` })),
+  ], { value: '' });
+
+  const chosen = new Set();
+  const projectBoxes = projects.map((p) => h('label.cap-toggle', {},
+    h('input', {
+      type: 'checkbox',
+      onchange: (e) => {
+        if (e.target.checked) chosen.add(p.id);
+        else chosen.delete(p.id);
+      },
+    }),
+    h('span', {}, p.name),
+    h('span.field-help', {}, `서버 ${p.servers}개 · DB ${p.connections}개`)));
+
+  const submit = async (close, btn) => {
+    btn.disabled = true;
+    try {
+      const res = await api.post('/users/bulk', {
+        text: list.value,
+        role: role.value,
+        copyFrom: copyFrom.value || undefined,
+        projects: [...chosen],
+      });
+      close();
+      showBulkResult(res, reload);
+    } catch (err) {
+      toastError(err);
+      btn.disabled = false;
+    }
+  };
+
+  openModal({
+    title: '여러 명 추가',
+    width: 620,
+    body: () => [
+      h('p.modal-message', {},
+        '한 줄에 한 사람씩 적습니다: ', h('b', {}, '아이디, 이름, 이메일'), '. ',
+        '아이디만 있으면 됩니다. 엑셀에서 복사한 탭 구분도 그대로 됩니다.'),
+      list,
+      h('p.field-help', {},
+        '이미 있는 아이디는 건너뜁니다. 임시 비밀번호는 계정마다 다르게 생기고, '
+        + '올린 직후 한 번만 보여줍니다.'),
+      h('label.field', {}, h('span.field-label', {}, '역할'), role),
+      h('label.field', {},
+        h('span.field-label', {}, '권한 원본'), copyFrom,
+        h('span.field-help', {},
+          '고른 사람의 접근 범위·등급·데이터 능력·전역 권한을 그대로 복사합니다. '
+          + '복사하지 않으면 새 계정의 기본값(허용 목록 비어 있음)으로 시작합니다.')),
+      h('div.field', {},
+        h('span.field-label', {}, '참여 프로젝트'),
+        h('div.cap-pick.cap-pick-stacked', {},
+          projects.length === 0
+            ? h('span.muted.small', {}, '아직 만들어진 프로젝트가 없습니다')
+            : projectBoxes),
+        h('span.field-help', {},
+          '다른 모든 권한보다 앞선 관문입니다. 비워 두면 계정은 만들어지지만 '
+          + '아무 자원도 보이지 않습니다')),
+    ],
+    footer: (close) => {
+      const btn = h('button.btn.btn-primary', { type: 'button' }, icon('check'), '만들기');
+      btn.addEventListener('click', () => submit(close, btn));
+      return [h('button.btn', { type: 'button', onclick: close }, '취소'), btn];
+    },
+  });
+}
+
+// showBulkResult는 만들어진 계정과 임시 비밀번호를 한 번만 보여준다.
+//
+// 한 줄씩 복사하게 두지 않는다. 다섯 명을 만들었으면 다섯 번 복사해 다섯 번 전달해야
+// 하고, 그 과정에서 짝이 어긋난다. 전체를 한 덩어리로 복사할 수 있게 둔다.
+function showBulkResult(res, reload) {
+  const created = res.created ?? [];
+  const skipped = res.skipped ?? [];
+  const invalid = res.invalid ?? [];
+  const asText = created.map((c) => `${c.user.username}\t${c.temporaryPassword}`).join('\n');
+
+  openModal({
+    title: `계정 ${created.length}개를 만들었습니다`,
+    width: 620,
+    onClose: () => reload(),
+    body: () => [
+      created.length
+        ? h('p.modal-message', {},
+          '임시 비밀번호입니다. ', h('b', {}, '이 창을 닫으면 다시 볼 수 없습니다.'),
+          ' 각자에게 전달하세요 — 첫 로그인 때 변경이 강제됩니다.')
+        : h('p.modal-message', {}, '만들어진 계정이 없습니다.'),
+      created.length
+        ? h('div.table-wrap', {},
+          h('table.table', {},
+            h('thead', {}, h('tr', {}, h('th', {}, '아이디'), h('th', {}, '임시 비밀번호'))),
+            h('tbody', {}, created.map((c) => h('tr', {},
+              h('td', {}, c.user.username),
+              h('td', {},
+                h('button.glossary-copy', {
+                  type: 'button', title: '복사',
+                  onclick: () => copyToClipboard(c.temporaryPassword),
+                }, h('code', {}, c.temporaryPassword), icon('copy', 12))))))))
+        : null,
+      created.length
+        ? h('button.btn.btn-small', {
+          type: 'button', onclick: () => copyToClipboard(asText),
+        }, icon('copy'), '전체 복사 (아이디 · 비밀번호)')
+        : null,
+      skipped.length
+        ? h('p.notice.notice-warn', {}, icon('alert'),
+          h('div', {},
+            h('strong', {}, `이미 있어 건너뜀 ${skipped.length}개`),
+            h('p.muted', {}, skipped.join(', '))))
+        : null,
+      invalid.length
+        ? h('p.notice.notice-warn', {}, icon('alert'),
+          h('div', {},
+            h('strong', {}, `형식이 맞지 않아 넘어감 ${invalid.length}줄`),
+            h('p.muted', {}, '아이디는 영문/숫자/._- 조합 3~32자입니다: '
+              + invalid.slice(0, 5).join(' / '))))
+        : null,
+    ],
+    // 닫는 길이 여럿이다(확인·X·배경). 어느 쪽으로 닫아도 목록이 새로 그려져야
+    // 하므로 onClose 한 곳에만 둔다 — 단추에도 넣으면 두 번 그린다.
+    footer: (close) => [
+      h('button.btn.btn-primary', { type: 'button', onclick: close }, '확인'),
     ],
   });
 }
