@@ -12,9 +12,13 @@ import (
 
 // API 토큰 관리.
 //
-// 토큰은 **자기 것만** 만들고 지운다. 남의 토큰을 발급할 수 있으면 그것은 곧
-// 남의 권한으로 행동할 수단을 주는 것이고, 이 앱에는 그런 개념이 없다
-// (슈퍼 어드민도 예외가 아니다 — 대신 사용자를 비활성화하면 그 토큰도 함께 죽는다).
+// 토큰은 **자기 것만** 만들고, 값을 다시 발급하고, 지운다. 남의 토큰을 발급할 수
+// 있으면 그것은 곧 남의 권한으로 행동할 수단을 주는 것이고, 이 앱에는 그런 개념이
+// 없다(슈퍼 어드민도 예외가 아니다 — 대신 사용자를 비활성화하면 그 토큰도 함께 죽는다).
+//
+// 폐기(revoke)는 없앴다. 할 수 있는 일이 셋이면 "폐기와 삭제는 뭐가 다른가"를 매번
+// 생각해야 하는데, 값을 바꾸거나(재발급) 아예 지우거나(삭제) 둘로 충분하다.
+// 예전에 폐기해 둔 토큰은 그대로 거절된다 — 그 판정은 그대로 남아 있다.
 
 const (
 	maxTokenNameLen = 60
@@ -98,32 +102,6 @@ func (s *Server) handleCreateToken(c *fiber.Ctx) error {
 		"value": raw,
 		"note":  "이 값은 다시 표시되지 않습니다. 지금 복사해 두세요.",
 	})
-}
-
-func (s *Server) handleRevokeToken(c *fiber.Ctx) error {
-	u := currentUser(c)
-	id := c.Params("tokenId")
-
-	t, err := s.st.GetAPIToken(c.Context(), id)
-	if errors.Is(err, store.ErrNotFound) || (err == nil && t.UserID != u.ID) {
-		// 남의 토큰은 "없음"으로 답한다. 존재 여부를 알려주지 않는다.
-		return fail(c, fiber.StatusNotFound, "not_found", "토큰을 찾을 수 없습니다")
-	}
-	if err != nil {
-		return err
-	}
-
-	if err := s.st.RevokeAPIToken(c.Context(), id, u.ID); errors.Is(err, store.ErrNotFound) {
-		return fail(c, fiber.StatusBadRequest, "already_revoked", "이미 폐기된 토큰입니다")
-	} else if err != nil {
-		return err
-	}
-
-	s.audit(c, store.AuditParams{
-		Action: "token.revoked", TargetType: "api_token", TargetID: id,
-		Detail: map[string]any{"name": t.Name, "scope": t.Scope, "prefix": t.Prefix},
-	})
-	return c.JSON(fiber.Map{"ok": true})
 }
 
 // handleRotateToken은 토큰의 **값만** 다시 발급한다.

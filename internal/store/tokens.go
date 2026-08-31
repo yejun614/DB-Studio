@@ -176,6 +176,14 @@ func (s *Store) TouchAPIToken(ctx context.Context, t *APIToken, ip string, minIn
 
 // RevokeAPIToken은 토큰을 폐기한다. 행을 지우지 않고 표시만 하는 이유:
 // "이 토큰이 언제까지 살아 있었는가"가 사고 조사에 필요하다.
+//
+// **화면과 엔드포인트에서는 더 이상 부르지 않는다.** 할 수 있는 일이 셋이면
+// "폐기와 삭제는 뭐가 다른가"를 매번 생각해야 해서, 값 바꾸기(재발급)와 지우기
+// 둘만 남겼다.
+//
+// 그래도 이 함수를 지우지 않는 이유: 폐기된 토큰이 거절되는지 확인하려면 그 상태를
+// 만들 수 있어야 하고(시험이 이것으로 만든다), 예전에 폐기해 둔 행은 지금도 거절
+// 대상이다. 판정(Active)이 살아 있는 한 그 상태를 만드는 길도 하나는 있어야 한다.
 func (s *Store) RevokeAPIToken(ctx context.Context, id, userID string) error {
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE api_tokens SET revoked_at = ? WHERE id = ? AND user_id = ? AND revoked_at IS NULL`,

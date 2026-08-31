@@ -212,7 +212,6 @@ func (s *Server) routes() {
 	// API 토큰: 자기 것만 만들고 지운다.
 	authed.Get("/auth/tokens", s.handleListTokens)
 	authed.Post("/auth/tokens", s.handleCreateToken)
-	authed.Post("/auth/tokens/:tokenId/revoke", s.handleRevokeToken)
 	// 값만 다시 발급한다(이름·범위·만료는 그대로). 값이 샜을 때 할 일은 대개
 	// 토큰을 버리는 것이 아니라 값을 바꾸는 것이다.
 	authed.Post("/auth/tokens/:tokenId/rotate", s.handleRotateToken)
