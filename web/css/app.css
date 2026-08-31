@@ -2440,6 +2440,14 @@ tr.is-destructive td { background: hsl(var(--h-danger) / 0.08); }
   color: var(--text);
 }
 .erd-col-logical-input { flex: 1 1 90px; min-width: 0; }
+/* 패널 제목 옆의 논리명. 물리명이 제목이고 논리명은 곁말이다 — 반대로 두면
+   무엇을 고치는 창인지가 흐려진다. */
+.erd-panel-sub {
+  margin-left: 8px;
+  font-size: 12.5px;
+  font-weight: 400;
+  color: var(--text-dim);
+}
 
 /* ---------- API 토큰 ---------- */
 

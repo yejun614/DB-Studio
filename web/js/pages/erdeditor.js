@@ -1258,9 +1258,14 @@ class Editor {
 
   // panelHead는 인스펙터 머리글이다. 어느 대상을 고르든 같은 자리에 같은 모양으로
   // 제목과 선택 해제 버튼이 있어야 한다.
-  panelHead(title) {
+  // panelHead의 sub는 논리명이다.
+  //
+  // 카드가 물리명만 보이는 모드(기본값)에서는 논리명을 적어도 화면에 아무 변화가
+  // 없다 — 적은 사람에게는 "입력해도 반영이 안 된다"로 보인다. 적은 자리 바로 위에
+  // 값이 나타나면 그 오해가 생기지 않는다.
+  panelHead(title, sub = '') {
     return h('div.erd-panel-head', {},
-      h('h2', {}, truncate(title, 26)),
+      h('h2', {}, truncate(title, 26), sub ? h('span.erd-panel-sub', {}, truncate(sub, 20)) : null),
       h('button.icon-btn', {
         type: 'button', title: '선택 해제', onclick: () => this.select(null),
       }, icon('x')),
@@ -1434,7 +1439,7 @@ class Editor {
     commitOn(logicalInput, () => this.sendBox(ref, { logical: logicalInput.value }));
 
     return [
-      this.panelHead(tbl.name),
+      this.panelHead(tbl.name, box.logical ?? ''),
       h('div.erd-panel-body', {},
         h('label.field', {}, h('span.field-label', {}, '테이블 이름 (물리명)'), nameInput),
         field('논리명', logicalInput,
