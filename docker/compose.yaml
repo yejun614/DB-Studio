@@ -3,15 +3,22 @@
 #   docker compose -f docker/compose.yaml up -d
 #   docker compose -f docker/compose.yaml logs | head -20   # 첫 계정과 임시 비밀번호
 #
-# 이 파일과 같은 디렉터리의 .env 에서 값을 읽는다. 시작 전에 키를 만들어 둔다:
+# 이 파일과 같은 디렉터리의 .env 에서 값을 읽는다. 견본을 복사해 채운다:
 #
-#   echo "DBSTUDIO_MASTER_KEY=$(openssl rand -base64 32)" > docker/.env
+#   cp docker/.env.example docker/.env
+#   # DBSTUDIO_MASTER_KEY 와 MYSQL_ROOT_PASSWORD 를 채운다
 #
 # 셸에서 export 하는 것보다 .env 에 넣는 편이 낫다. compose 는 up 뿐 아니라
 # down·logs·config 에서도 이 값을 요구하므로(값 치환이 먼저 일어난다), 셸에만
 # 두면 새 터미널에서 `down` 이 실패한다.
 #
-# (테스트용 DB 컨테이너는 compose.test.yaml 이다 — 이 파일과 목적이 다르다.)
+# 이 파일에는 셋이 들어 있다.
+#
+#   dbstudio  앱
+#   mysql     이 앱이 관리할 DB 하나. 바로 등록해 볼 수 있게 함께 띄운다.
+#   ngrok     밖에서 접속하기 위한 터널. **기본으로는 뜨지 않는다**(profile).
+#
+# (시험용 DB 컨테이너 묶음은 compose.test.yaml 이다 — 이 파일과 목적이 다르다.)
 name: dbstudio
 
 services:
@@ -50,12 +57,19 @@ services:
       # 값이 없으면 여기서 멈춘다(뜬 뒤에 알게 되는 것보다 낫다).
       DBSTUDIO_MASTER_KEY: ${DBSTUDIO_MASTER_KEY:?docker/.env 에 DBSTUDIO_MASTER_KEY 를 넣으세요 — openssl rand -base64 32}
 
-      # ── 프록시 뒤에 둘 때 ──────────────────────────────────────────
-      # HTTPS로 서비스하면 세션 쿠키에 Secure 를 붙인다.
-      # DBSTUDIO_SECURE_COOKIE: "true"
-      # X-Forwarded-For 를 클라이언트 IP로 쓴다(감사 로그의 IP가 프록시 주소로
-      # 통일되면 "누가 어디서 했는가"가 사라진다).
-      # DBSTUDIO_TRUST_PROXY: "true"
+      # ── 프록시·터널 뒤에 둘 때 ────────────────────────────────────
+      # ngrok 이나 리버스 프록시를 앞에 두면 .env 에서 둘 다 true 로 바꾼다.
+      # 값을 여기 박지 않고 .env 로 뺀 이유: 터널을 켜는 사람과 이 파일을 읽는
+      # 사람이 다를 수 있고, 그때 켜야 할 것이 한 곳에 모여 있어야 한다.
+      #
+      #   SECURE_COOKIE: HTTPS 로 서비스하므로 세션 쿠키에 Secure 를 붙인다.
+      #   TRUST_PROXY:   X-Forwarded-For 를 클라이언트 IP 로 쓴다. 켜지 않으면
+      #                  감사 로그의 IP 가 전부 프록시 주소로 통일되어
+      #                  "누가 어디서 했는가"가 사라진다.
+      DBSTUDIO_SECURE_COOKIE: ${DBSTUDIO_SECURE_COOKIE:-false}
+      DBSTUDIO_TRUST_PROXY: ${DBSTUDIO_TRUST_PROXY:-false}
+      # 신뢰할 프록시 대역. 비워 두면 루프백과 사설 대역이 기본이라, 같은 compose
+      # 네트워크 안의 ngrok 컨테이너는 그대로 들어온다.
       # DBSTUDIO_TRUSTED_PROXIES: "10.0.0.0/8"
 
       # ── 관측 ───────────────────────────────────────────────────────
@@ -92,6 +106,95 @@ services:
     #   retries: 3
     #   start_period: 20s
 
+  # ── 관리 대상 DB 하나 ─────────────────────────────────────────────
+  #
+  # 이 앱은 DB를 관리하는 도구라서, 관리할 것이 하나도 없으면 띄워 놓고 할 수 있는
+  # 일이 없다. 그래서 MySQL 하나를 함께 둔다. 앱에서 커넥션을 등록할 때 주소는
+  # 호스트가 아니라 **컨테이너 이름**이다:
+  #
+  #   호스트 mysql   포트 3306   사용자 root   비밀번호 .env 의 MYSQL_ROOT_PASSWORD
+  #
+  # 관리할 DB가 이미 있다면 이 서비스는 통째로 지워도 된다(볼륨도 함께).
+  mysql:
+    image: mysql:8.4
+    container_name: dbstudio-mysql
+    restart: unless-stopped
+
+    # 호스트 포트를 열지 않는다. 앱은 같은 네트워크 안에서 mysql:3306 으로 닿으므로
+    # 밖으로 낼 이유가 없다 — 3306 을 여는 순간 이 DB는 인터넷에서 두드릴 수 있는
+    # 것이 된다. 로컬 클라이언트로 붙어 봐야 한다면 그때만 켠다.
+    # ports:
+    #   - "127.0.0.1:3306:3306"
+
+    networks:
+      - dbstudio
+
+    volumes:
+      - dbstudio-mysql:/var/lib/mysql
+
+    environment:
+      # 기본값을 주지 않는다. rootpw123 같은 것이 박혀 있으면 그대로 뜨는 배치가
+      # 반드시 생기고, 그것은 관리하려던 DB 자체가 열려 있다는 뜻이다.
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?docker/.env 에 MYSQL_ROOT_PASSWORD 를 넣으세요}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-appdb}
+      # 앱 계정을 함께 만들려면 .env 에서 둘 다 채운다. 비어 있으면 만들지 않는다.
+      MYSQL_USER: ${MYSQL_USER:-}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-}
+
+    # 비밀번호를 compose 파일에 적지 않으려고 컨테이너 안의 환경변수를 쓴다.
+    # $$ 는 compose 가 치환하지 말라는 표시다(컨테이너 셸이 풀어 준다).
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+    security_opt:
+      - no-new-privileges:true
+
+  # ── 밖에서 접속하기 ───────────────────────────────────────────────
+  #
+  # ngrok 터널. 공인 IP나 프록시 없이 이 앱을 밖에서 열어야 할 때 쓴다
+  # (원격 근무, 시연, 웹훅 받기).
+  #
+  #   docker compose -f docker/compose.yaml --profile tunnel up -d
+  #   docker compose -f docker/compose.yaml logs ngrok    # 주소가 여기 찍힌다
+  #
+  # **profile 로 둔 이유**: 이 앱은 등록된 모든 DB의 열쇠를 들고 있다. 실수로 한
+  # `up -d` 가 그 화면을 인터넷에 열어 놓는 일은 없어야 한다. 켜는 것은 언제나
+  # 사람이 한 번 더 적어야 하는 일이어야 한다.
+  #
+  # 켜기 전에 할 것: 첫 임시 비밀번호를 바꾸고, 2단계 인증을 켜고,
+  # .env 의 DBSTUDIO_SECURE_COOKIE·DBSTUDIO_TRUST_PROXY 를 true 로 둔다.
+  ngrok:
+    image: ngrok/ngrok:3
+    container_name: dbstudio-ngrok
+    restart: unless-stopped
+    profiles: ["tunnel"]
+
+    # 앱 컨테이너 이름으로 붙는다. 호스트 포트를 열지 않아도 터널은 선다.
+    command: ["http", "dbstudio:8080"]
+    # 예약해 둔 도메인이 있으면 이 줄로 바꾼다(뜰 때마다 주소가 바뀌지 않는다).
+    # command: ["http", "--domain=${NGROK_DOMAIN:-}", "dbstudio:8080"]
+
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN:?docker/.env 에 NGROK_AUTHTOKEN 을 넣으세요 — https://dashboard.ngrok.com}
+
+    ports:
+      # 터널 상태와 지나간 요청을 보는 ngrok 자체 화면이다. 127.0.0.1 에만 묶는다 —
+      # 이 화면에는 요청 본문이 그대로 남으므로 밖에서 닿아서는 안 된다.
+      - "127.0.0.1:4040:4040"
+
+    networks:
+      - dbstudio
+
+    depends_on:
+      - dbstudio
+
+    security_opt:
+      - no-new-privileges:true
+
 networks:
   # 이름을 정해 두는 이유: 정의하지 않으면 compose 가 <프로젝트>_default 를 만든다.
   # 그 이름은 프로젝트 이름에 딸린 것이어서, 다른 컴포즈 파일(프록시·대상 DB)에서
@@ -118,3 +221,6 @@ networks:
 
 volumes:
   dbstudio-data:
+  # 관리 대상 MySQL 의 데이터. 앱의 볼륨과 따로 두어야 한쪽을 지울 때 다른 쪽이
+  # 함께 사라지지 않는다.
+  dbstudio-mysql:

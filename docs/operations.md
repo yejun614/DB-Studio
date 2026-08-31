@@ -109,12 +109,41 @@ docker run -v ./our-ca.crt:/usr/local/share/ca-certificates/our-ca.crt:ro \
 않으므로 환경변수가 그대로 먹는다.
 
 예시 파일이 저장소에 있다 — [`docker/compose.yaml`](../docker/compose.yaml).
+값은 같은 디렉터리의 `.env` 에서 읽으며, 무엇을 채워야 하는지는
+[`docker/.env.example`](../docker/.env.example) 에 적어 두었다.
 
 ```bash
-echo "DBSTUDIO_MASTER_KEY=$(openssl rand -base64 32)" > docker/.env
+cp docker/.env.example docker/.env
+# DBSTUDIO_MASTER_KEY 와 MYSQL_ROOT_PASSWORD 를 채운다
 docker compose -f docker/compose.yaml up -d
 docker compose -f docker/compose.yaml logs | head -20   # 첫 계정과 임시 비밀번호
 ```
+
+예시에는 셋이 들어 있다.
+
+| 서비스 | 하는 일 |
+| --- | --- |
+| `dbstudio` | 앱 |
+| `mysql` | 이 앱이 관리할 DB 하나. 앱에서 `mysql:3306` 으로 등록하면 바로 붙는다 |
+| `ngrok` | 밖에서 접속하기 위한 터널. **기본으로는 뜨지 않는다** |
+
+관리할 DB가 이미 있다면 `mysql` 서비스는 통째로 지워도 된다. 호스트 포트는 열어 두지
+않았다 — 앱은 같은 네트워크 안에서 닿으므로 3306 을 밖으로 낼 이유가 없고, 여는 순간
+그 DB는 인터넷에서 두드릴 수 있는 것이 된다.
+
+터널은 profile 로 묶여 있어 따로 켜야 한다.
+
+```bash
+docker compose -f docker/compose.yaml --profile tunnel up -d
+docker compose -f docker/compose.yaml logs ngrok    # 주소가 여기 찍힌다
+```
+
+**켜기 전에 할 것이 있다.** 이 앱은 등록된 모든 DB의 열쇠를 들고 있으므로, 터널을
+켠다는 것은 그 열쇠 꾸러미의 로그인 화면을 인터넷에 내놓는다는 뜻이다. 첫 임시
+비밀번호를 바꾸고, 2단계 인증을 켜고, `.env` 의 `DBSTUDIO_SECURE_COOKIE` 와
+`DBSTUDIO_TRUST_PROXY` 를 `true` 로 둔다(터널이 TLS를 끊고 오므로, 켜지 않으면 감사
+로그의 IP가 전부 터널 주소로 통일되어 "누가 어디서 했는가"가 사라진다).
+실수로 한 `up -d` 가 그 화면을 열어 놓는 일이 없도록 profile 뒤에 두었다.
 
 키를 환경변수로 주면 볼륨에 `master.key` 파일을 만들지 않는다 — 키와 데이터가 한곳에
 있지 않게 된다. 그 예시 파일은 `read_only`·`cap_drop: ALL`·`no-new-privileges` 까지
