@@ -2,15 +2,17 @@ package api
 
 import (
 	"testing"
+
+	"dbstudio/internal/model"
 )
 
-// 사전은 누구나 보고, 커넥션 관리자만 고친다.
+// 사전은 참여자가 함께 쓴다.
 //
-// 팀의 약속이라 아무나 바꾸면 약속이 아니게 되지만, 아무나 볼 수 없으면 지킬 수도
-// 없다 — 설계하는 사람이 찾아보는 것이 이 표의 유일한 쓸모다.
-func TestGlossaryReadAllWriteManagers(t *testing.T) {
+// 사전에 말을 올리는 사람은 설계하는 사람이고, 그때마다 관리자를 찾아야 하면 사전은
+// 쓰이지 않는다 — 그러면 사전 밖의 약속이 생기고, 그것이 사전이 있는 것보다 나쁘다.
+func TestGlossaryMembersCanWrite(t *testing.T) {
 	e := newTestEnv(t)
-	member(t, e, "dana", "", "")
+	member(t, e, "dana", "", "") // 등급은 없지만 프로젝트 참여자다
 
 	alice := loginAs(t, e, "alice") // 슈퍼 어드민
 	if code, body := alice.do("POST", "/api/v1/glossary/",
@@ -21,25 +23,89 @@ func TestGlossaryReadAllWriteManagers(t *testing.T) {
 	dana := loginAs(t, e, "dana")
 	code, body := dana.do("GET", "/api/v1/glossary/?project="+e.project.ID, nil)
 	if code != 200 {
-		t.Fatalf("일반 사용자 읽기 = %d: %v", code, body)
+		t.Fatalf("참여자 읽기 = %d: %v", code, body)
 	}
-	terms, _ := body["terms"].([]any)
-	if len(terms) != 1 {
+	if terms, _ := body["terms"].([]any); len(terms) != 1 {
 		t.Errorf("읽은 용어 = %d개, 1개여야 합니다", len(terms))
 	}
-	// 화면이 단추를 그릴지 판단할 수 있어야 한다. 눌러 보고서야 거부되는 단추는
-	// "왜 안 되지"를 남기고, 그 답은 화면 어디에도 없다.
+	// 화면이 단추를 그릴지 판단할 수 있어야 한다. 올리기와 지우기는 문턱이 달라서
+	// 두 값으로 나뉘어 있다 — 하나로 두면 참여자에게 지우기까지 보이거나 올리기가
+	// 사라진다.
+	if body["canWrite"] != true {
+		t.Errorf("canWrite = %v, 참여자에게는 true 여야 합니다", body["canWrite"])
+	}
 	if body["canManage"] != false {
 		t.Errorf("canManage = %v, 일반 사용자에게는 false 여야 합니다", body["canManage"])
 	}
 
-	if code, _ := dana.do("POST", "/api/v1/glossary/",
-		map[string]any{"projectId": e.project.ID, "term": "주문", "physical": "order"}); code != 403 {
-		t.Errorf("일반 사용자 추가 = %d, 403이어야 합니다", code)
+	// 올리고, 고친다.
+	code, made := dana.do("POST", "/api/v1/glossary/",
+		map[string]any{"projectId": e.project.ID, "term": "주문", "physical": "order"})
+	if code != 201 {
+		t.Fatalf("참여자 추가 = %d: %v", code, made)
 	}
-	if code, _ := dana.do("POST", "/api/v1/glossary/bulk",
-		map[string]any{"projectId": e.project.ID, "text": "주문, order"}); code != 403 {
-		t.Errorf("일반 사용자 여러 줄 = %d, 403이어야 합니다", code)
+	mine, _ := made["term"].(map[string]any)
+	mineID, _ := mine["id"].(string)
+
+	if code, got := dana.do("PUT", "/api/v1/glossary/"+mineID, map[string]any{
+		"term": "주문", "physical": "order_hdr", "note": "주문 머리",
+	}); code != 200 {
+		t.Errorf("참여자 수정 = %d: %v", code, got)
+	}
+	if code, got := dana.do("POST", "/api/v1/glossary/bulk",
+		map[string]any{"projectId": e.project.ID, "text": "번호, no"}); code != 200 {
+		t.Errorf("참여자 여러 줄 = %d: %v", code, got)
+	}
+
+	// 참여하지 않은 사람은 여전히 아무것도 못 한다(프로젝트가 관문이다).
+	outsider := mkUserRole(t, e, "eve", model.RoleMember)
+	_ = outsider
+	eve := loginAs(t, e, "eve")
+	if code, _ := eve.do("GET", "/api/v1/glossary/?project="+e.project.ID, nil); code != 404 {
+		t.Errorf("비참여자 읽기 = %d, 404여야 합니다", code)
+	}
+	if code, _ := eve.do("POST", "/api/v1/glossary/",
+		map[string]any{"projectId": e.project.ID, "term": "몰래", "physical": "sneak"}); code != 404 {
+		t.Errorf("비참여자 추가 = %d, 404여야 합니다", code)
+	}
+}
+
+// 지우기만 좁다: 자기가 올린 말과, 관리자면 남의 것까지.
+//
+// 올리고 고치는 것은 함께 하는 일이지만 지우는 것은 되돌릴 수 없다. 되돌릴 수 없는
+// 동작과 함께 하는 동작을 같은 문턱에 두면, 함께 쓰게 열어 준 대가로 사고가 따라온다.
+func TestGlossaryDeleteIsNarrower(t *testing.T) {
+	e := newTestEnv(t)
+	member(t, e, "dana", "", "")
+	alice := loginAs(t, e, "alice")
+	dana := loginAs(t, e, "dana")
+
+	add := func(c *client, term string) string {
+		t.Helper()
+		code, body := c.do("POST", "/api/v1/glossary/",
+			map[string]any{"projectId": e.project.ID, "term": term, "physical": term})
+		if code != 201 {
+			t.Fatalf("%s 추가 = %d: %v", term, code, body)
+		}
+		row, _ := body["term"].(map[string]any)
+		id, _ := row["id"].(string)
+		return id
+	}
+	adminTerm := add(alice, "adminword")
+	myTerm := add(dana, "myword")
+
+	// 남이 올린 말은 못 지운다. 그 이유를 말해 준다 — "고치거나 관리자에게".
+	code, body := dana.do("DELETE", "/api/v1/glossary/"+adminTerm, nil)
+	if code != 403 {
+		t.Errorf("남의 용어 지우기 = %d, 403이어야 합니다: %v", code, body)
+	}
+	// 자기가 올린 것은 거둘 수 있다. 못 지우면 틀린 약속이 사전에 남는다.
+	if code, got := dana.do("DELETE", "/api/v1/glossary/"+myTerm, nil); code != 200 {
+		t.Errorf("내 용어 지우기 = %d: %v", code, got)
+	}
+	// 관리자는 남의 것도 지운다.
+	if code, got := alice.do("DELETE", "/api/v1/glossary/"+adminTerm, nil); code != 200 {
+		t.Errorf("관리자 지우기 = %d: %v", code, got)
 	}
 }
 

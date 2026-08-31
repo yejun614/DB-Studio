@@ -15,7 +15,12 @@ import (
 // "주문"이 한쪽에서는 결제 전 장바구니이고 다른 쪽에서는 배송 지시서인 일은 실제로
 // 있다. 앱 하나에 사전이 하나뿐이면 그 둘 중 하나는 사전에 적지 못한 채로 쓰게 된다.
 //
-// 읽기는 참여자 누구나, 고치기는 커넥션 관리자만이다. 이것은 팀의 약속이라 아무나 바꾸면
+// 읽기도 쓰기도 **참여자 누구나** 한다. 사전에 말을 올리는 사람은 설계하는 사람이고,
+// 그때마다 관리자를 찾아야 하면 사전은 쓰이지 않는다 — 그러면 사전 밖의 약속이
+// 생기고, 그것이 사전이 있는 것보다 나쁘다.
+//
+// 지우기만 좁다: 만든 사람과 커넥션 관리자다. 되돌릴 수 없는 동작과 함께 하는 동작을
+// 같은 문턱에 두면, 함께 쓰게 열어 준 대가로 사고가 따라온다. 이것은 팀의 약속이라 아무나 바꾸면
 // 약속이 아니게 되지만, 아무나 볼 수 없으면 지킬 수도 없다 — 설계하는 사람이
 // 찾아보는 것이 이 표의 유일한 쓸모다.
 
@@ -47,13 +52,21 @@ func (s *Server) handleListGlossary(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	u := currentUser(c)
 	return c.JSON(fiber.Map{
 		"project":    project,
 		"terms":      terms,
 		"categories": cats,
-		// 고칠 수 있는 사람인지 화면이 알아야 한다. 눌러 보고서야 거부되는 버튼은
+		// 화면이 단추를 그릴지 판단할 수 있어야 한다. 눌러 보고서야 거부되는 단추는
 		// "왜 안 되지"를 남기고, 그 답은 화면 어디에도 없다.
-		"canManage": currentUser(c).Role.CanManageConnections(),
+		//
+		// 둘로 나눈 이유: 올리고 고치는 것은 참여자 누구나(여기까지 왔다면 참여자다),
+		// 남이 올린 말을 지우는 것은 관리자다. 하나로 두면 그 차이를 화면이 그릴 수
+		// 없어서, 참여자에게 지우기 단추까지 보이거나 올리기 단추까지 사라진다.
+		"canWrite":  true,
+		"canManage": u.Role.CanManageConnections(),
+		// 내 것인지 판단할 기준. 자기가 올린 말은 자기가 지울 수 있다.
+		"userId": u.ID,
 	})
 }
 
@@ -142,6 +155,16 @@ func (s *Server) handleDeleteGlossaryTerm(c *fiber.Ctx) error {
 	}
 	if _, perr := s.requireProject(c, before.ProjectID); perr != nil {
 		return perr
+	}
+	// 남이 올린 말은 관리자만 지운다.
+	//
+	// 올리고 고치는 것은 함께 하는 일이지만 지우는 것은 되돌릴 수 없다. 자기가 올린
+	// 것을 거두는 길은 열어 둔다 — 잘못 올린 사람이 그것을 치울 수 없으면, 치워
+	// 달라고 부탁하는 동안 틀린 약속이 사전에 남는다.
+	u := currentUser(c)
+	if before.CreatedBy != u.ID && !u.Role.CanManageConnections() {
+		return fail(c, fiber.StatusForbidden, "forbidden",
+			"남이 올린 용어는 관리자만 지울 수 있습니다. 뜻이 틀렸다면 고치거나, 관리자에게 알려 주세요")
 	}
 	if err := s.st.DeleteGlossaryTerm(c.Context(), id); err != nil {
 		return err

@@ -4,8 +4,12 @@
 // member_no 로, 누구는 mbr_num 으로 적으면 같은 것이 두 이름을 갖고, 그 뒤로는
 // 조인 한 번에 두 이름을 다 외워야 한다.
 //
-// 앱 전체에 하나만 둔다(ERD 문서마다 두지 않는다). 문서마다 사전이 따로 있으면
+// 프로젝트마다 하나 둔다(ERD 문서마다 두지 않는다). 문서마다 사전이 따로 있으면
 // 문서마다 다른 약속이 생기는데, 그러면 사전이 있는 것이 없는 것보다 나쁘다.
+//
+// 올리고 고치는 것은 참여자 누구나 한다. 사전에 말을 올리는 사람은 설계하는
+// 사람이고, 그때마다 관리자를 찾아야 하면 사전은 쓰이지 않는다. 지우기만 좁다 —
+// 자기가 올린 말과, 관리자면 남의 것까지.
 import { api } from '../core/api.js';
 import {
   h, mount, icon, input, textarea, field, spinner, badge, emptyState, pageHeader,
@@ -43,7 +47,11 @@ export async function renderGlossary(outlet, params, query) {
     autocomplete: 'off',
   });
 
+  // canWrite: 올리고 고치기(참여자 누구나). canManage: 남이 올린 말 지우기.
+  // 하나로 두면 그 차이를 화면이 그릴 수 없다.
+  let canWrite = false;
   let canManage = false;
+  let myID = '';
   // 실제로 쓰인 분류 조합. 새 용어를 넣을 때 이미 쓰던 이름을 다시 쓰게 한다 —
   // "회원"과 "회원관리"가 따로 생기면 분류가 분류 노릇을 못 한다.
   let cats = [];
@@ -55,9 +63,12 @@ export async function renderGlossary(outlet, params, query) {
     mount(box, spinner('불러오는 중…'));
     try {
       const res = await api.get(withProject(`/glossary/?q=${encodeURIComponent(term.trim())}`));
+      canWrite = res.canWrite === true;
       canManage = res.canManage === true;
+      myID = res.userId ?? '';
       cats = res.categories ?? [];
-      mount(box, listView(res.terms ?? [], canManage, load, term.trim(), pickCategory, () => cats));
+      mount(box, listView(res.terms ?? [], { canWrite, canManage, myID },
+        load, term.trim(), pickCategory, () => cats));
       head();
     } catch (err) {
       mount(box, errorPanel(err));
@@ -75,12 +86,12 @@ export async function renderGlossary(outlet, params, query) {
   const actions = h('div.filter-actions');
   const head = () => {
     mount(actions,
-      canManage
+      canWrite
         ? h('button.btn', {
           type: 'button', onclick: () => openBulkDialog(load),
         }, icon('database'), '여러 줄 올리기')
         : null,
-      canManage
+      canWrite
         ? h('button.btn.btn-primary', {
           type: 'button', onclick: () => openTermDialog(null, load, cats),
         }, icon('plus'), '용어 추가')
@@ -102,7 +113,8 @@ export async function renderGlossary(outlet, params, query) {
   await load(q);
 }
 
-function listView(terms, canManage, reload, q, pickCategory, cats) {
+function listView(terms, rights, reload, q, pickCategory, cats) {
+  const { canWrite, canManage, myID } = rights;
   if (terms.length === 0) {
     return emptyState(q
       ? `"${q}" 에 해당하는 용어가 없습니다.`
@@ -127,7 +139,7 @@ function listView(terms, canManage, reload, q, pickCategory, cats) {
         h('th', {}, '용어'),
         h('th', {}, '물리명'),
         h('th', {}, '설명'),
-        canManage ? h('th', {}) : null)),
+        canWrite ? h('th', {}) : null)),
       h('tbody', {}, terms.map((t) => h('tr', {},
         categoryCell(t, pickCategory),
         h('td', {}, h('strong', {}, t.term)),
@@ -141,16 +153,20 @@ function listView(terms, canManage, reload, q, pickCategory, cats) {
             ? badge('겹침', 'warn')
             : null),
         h('td.muted', {}, t.note || '—'),
-        canManage
+        canWrite
           ? h('td.nowrap', {},
             h('button.icon-btn', {
               type: 'button', title: '고치기',
               onclick: () => openTermDialog(t, reload, cats()),
             }, icon('edit', 13)),
-            h('button.icon-btn.danger', {
-              type: 'button', title: '지우기',
-              onclick: () => removeTerm(t, reload),
-            }, icon('trash', 13)))
+            // 지우기는 자기가 올린 말과, 관리자면 남의 것까지. 눌러 보고서야
+            // 거부되는 단추를 두지 않는다.
+            canManage || t.createdBy === myID
+              ? h('button.icon-btn.danger', {
+                type: 'button', title: '지우기',
+                onclick: () => removeTerm(t, reload),
+              }, icon('trash', 13))
+              : null)
           : null,
       ))),
     ),
@@ -200,7 +216,11 @@ function openTermDialog(existing, reload, cats = []) {
       h('button.btn.btn-primary', {
         type: 'button',
         onclick: async (e) => {
-          e.currentTarget.disabled = true;
+          // currentTarget 은 이벤트가 끝나면 null 이 된다. await 뒤에서 다시 만지면
+          // 그 자리에서 예외가 나고, 그러면 실패를 알리는 토스트조차 뜨지 않는다 —
+          // 눌렀는데 아무 일도 일어나지 않은 것처럼 보인다.
+          const pressed = e.currentTarget;
+          pressed.disabled = true;
           const body = {
             projectId: currentProjectID(),
             term: termInput.value, physical: physicalInput.value, note: noteInput.value,
@@ -214,7 +234,7 @@ function openTermDialog(existing, reload, cats = []) {
             reload();
           } catch (err) {
             toastError(err);
-            e.currentTarget.disabled = false;
+            pressed.disabled = false;
           }
         },
       }, icon('check'), '저장'),
@@ -315,7 +335,11 @@ function openBulkDialog(reload) {
       h('button.btn.btn-primary', {
         type: 'button',
         onclick: async (e) => {
-          e.currentTarget.disabled = true;
+          // currentTarget 은 이벤트가 끝나면 null 이 된다. await 뒤에서 다시 만지면
+          // 그 자리에서 예외가 나고, 그러면 실패를 알리는 토스트조차 뜨지 않는다 —
+          // 눌렀는데 아무 일도 일어나지 않은 것처럼 보인다.
+          const pressed = e.currentTarget;
+          pressed.disabled = true;
           try {
             const res = await api.post('/glossary/bulk',
               { projectId: currentProjectID(), text: text.value });
@@ -324,7 +348,7 @@ function openBulkDialog(reload) {
           } catch (err) {
             toastError(err);
           } finally {
-            e.currentTarget.disabled = false;
+            pressed.disabled = false;
           }
         },
       }, icon('check'), '올리기'),

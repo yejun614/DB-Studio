@@ -435,12 +435,22 @@ func (s *Server) routes() {
 
 	// 용어 사전. 읽기는 누구나, 고치기는 커넥션 관리자만이다 — 팀의 약속이라
 	// 아무나 바꾸면 약속이 아니게 되지만, 아무나 볼 수 없으면 지킬 수도 없다.
+	// 사전은 **참여자가 함께 쓴다.** 관문은 프로젝트 참여뿐이고, 각 핸들러가
+	// requireProject 로 확인한다(내려받은 프로젝트가 아니라 그 용어가 든 프로젝트로).
+	//
+	// 커넥션 관리자만 쓸 수 있게 두었던 것이 잘못이었다. 사전에 말을 올리는 사람은
+	// 설계하는 사람이고, 그때마다 관리자를 찾아야 하면 사전은 쓰이지 않는다 —
+	// 그러면 사전 밖의 약속이 생기고, 그것이 사전이 있는 것보다 나쁘다.
+	//
+	// 지우기만 좁다(만든 사람과 관리자). 되돌릴 수 없는 동작과 함께 하는 동작을 같은
+	// 문턱에 두면, 함께 쓰게 열어 준 대가로 사고가 따라온다 — 독립 ERD 초안에 쓴
+	// 것과 같은 규칙이다.
 	glossary := authed.Group("/glossary")
 	glossary.Get("/", s.handleListGlossary)
-	glossary.Post("/", s.requireConnManager, s.handleCreateGlossaryTerm)
-	glossary.Post("/bulk", s.requireConnManager, s.handleBulkGlossary)
-	glossary.Put("/:termId", s.requireConnManager, s.handleUpdateGlossaryTerm)
-	glossary.Delete("/:termId", s.requireConnManager, s.handleDeleteGlossaryTerm)
+	glossary.Post("/", s.handleCreateGlossaryTerm)
+	glossary.Post("/bulk", s.handleBulkGlossary)
+	glossary.Put("/:termId", s.handleUpdateGlossaryTerm)
+	glossary.Delete("/:termId", s.handleDeleteGlossaryTerm)
 
 	// 마이그레이션: 여러 커넥션에 걸친 목록이 필요하므로 별도 그룹이다.
 	migs := authed.Group("/migrations")
