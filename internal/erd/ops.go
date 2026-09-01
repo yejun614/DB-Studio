@@ -675,6 +675,11 @@ func applyTableMove(doc *Document, op *Op) error {
 		doc.Layout[tbl.Key()] = box
 	}
 	box.X, box.Y = p.X, p.Y
+	// 폭은 보낸 경우에만 바꾼다. 옮기기만 하는 op가 폭을 0으로 되돌리면, 넓혀 둔
+	// 카드가 남이 한 번 끌 때마다 기본 폭으로 돌아간다.
+	if p.Width != nil {
+		box.W = clampCardWidth(*p.Width)
+	}
 	if p.Collapsed != nil {
 		box.Collapsed = *p.Collapsed
 	}

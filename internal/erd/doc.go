@@ -76,6 +76,11 @@ const (
 type Box struct {
 	X float64 `json:"x"`
 	Y float64 `json:"y"`
+	// W는 카드의 가로 폭이다. 0이면 화면의 기본값(260)을 쓴다.
+	//
+	// 이름이 긴 표가 하나 있다고 모든 카드를 넓힐 이유가 없어 카드마다 따로 둔다.
+	// 높이는 두지 않는다 — 그것은 컬럼 수로 정해지는 값이라 사람이 정할 것이 아니다.
+	W float64 `json:"w,omitempty"`
 	// Collapsed면 컬럼 목록을 접어 제목만 보여준다. 테이블이 많은 ERD에서 필요하다.
 	Collapsed bool `json:"collapsed,omitempty"`
 	// Color는 사용자가 지정한 강조색(그룹 구분용)이다. 비어 있으면 기본 색.
@@ -194,6 +199,12 @@ const (
 	layoutOriginX = 80.0
 	layoutOriginY = 80.0
 
+	// 카드 폭의 한계. 화면(erdcanvas.js)도 같은 값으로 막지만, 여기서 한 번 더
+	// 자른다 — 화면을 거치지 않는 길(AI 툴·API·다른 클라이언트)로 들어온 값이
+	// 문서에 남으면 그 카드는 아무도 읽을 수 없는 폭이 된다.
+	cardMinW = 180.0
+	cardMaxW = 720.0
+
 	// 카드 치수. web/js/core/erdcanvas.js 의 상수와 같아야 한다.
 	//
 	// 두 벌로 두는 것이 마음에 걸리지만, 서버가 좌표를 정하려면 카드가 얼마나
@@ -205,6 +216,22 @@ const (
 	// 카드 사이에 남기는 세로 여백.
 	cardGapY = 40.0
 )
+
+// clampCardWidth는 카드 폭을 읽을 수 있는 범위로 자른다.
+//
+// 0은 "정하지 않음"이라 그대로 둔다 — 화면이 기본값을 쓴다.
+func clampCardWidth(w float64) float64 {
+	if w <= 0 {
+		return 0
+	}
+	if w < cardMinW {
+		return cardMinW
+	}
+	if w > cardMaxW {
+		return cardMaxW
+	}
+	return w
+}
 
 // CardHeight는 컬럼 n개짜리 카드의 높이다.
 //

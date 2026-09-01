@@ -60,3 +60,41 @@ func TestCardHeightMatchesCanvas(t *testing.T) {
 		}
 	}
 }
+
+// 카드 폭은 보낸 경우에만 바뀌고, 읽을 수 있는 범위로 잘린다.
+//
+// 옮기기만 하는 op가 폭을 0으로 되돌리면, 넓혀 둔 카드가 남이 한 번 끌 때마다 기본
+// 폭으로 돌아간다 — 같은 문서를 함께 보는 사람에게는 "자꾸 좁아진다"로 보인다.
+func TestTableMoveKeepsWidthUnlessSent(t *testing.T) {
+	doc := NewDocument("d", "문서", "", "mysql")
+	apply(t, doc, OpTableAdd, `{"name":"users"}`)
+
+	// 폭을 넓힌다.
+	apply(t, doc, OpTableMove, `{"key":"users","x":10,"y":20,"width":420}`)
+	box := doc.Layout["users"]
+	if box == nil || box.W != 420 {
+		t.Fatalf("폭이 저장되지 않았습니다: %+v", box)
+	}
+
+	// 그냥 옮기기만 하면 폭은 그대로다.
+	apply(t, doc, OpTableMove, `{"key":"users","x":50,"y":60}`)
+	if doc.Layout["users"].W != 420 {
+		t.Errorf("옮기기가 폭을 지웠습니다: %v", doc.Layout["users"].W)
+	}
+
+	// 범위 밖은 잘린다. 화면을 거치지 않는 길(AI 툴·API)로도 들어올 수 있다.
+	apply(t, doc, OpTableMove, `{"key":"users","x":50,"y":60,"width":5}`)
+	if got := doc.Layout["users"].W; got != cardMinW {
+		t.Errorf("너무 좁은 폭 = %v, %v로 잘려야 합니다", got, cardMinW)
+	}
+	apply(t, doc, OpTableMove, `{"key":"users","x":50,"y":60,"width":9000}`)
+	if got := doc.Layout["users"].W; got != cardMaxW {
+		t.Errorf("너무 넓은 폭 = %v, %v로 잘려야 합니다", got, cardMaxW)
+	}
+
+	// 0은 "정하지 않음"이라 그대로 둔다(화면이 기본값을 쓴다).
+	apply(t, doc, OpTableMove, `{"key":"users","x":50,"y":60,"width":0}`)
+	if got := doc.Layout["users"].W; got != 0 {
+		t.Errorf("0 = %v, 기본값으로 되돌아가야 합니다", got)
+	}
+}
