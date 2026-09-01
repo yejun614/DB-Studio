@@ -183,8 +183,14 @@ func (s *Server) createStructureDocument(c *fiber.Ctx, conn *model.Connection, s
 // 새 카드를 놓을 때 기존 카드와 겹쳤다고 볼 거리.
 // 카드 폭(260)과 격자 간격(320×260) 사이의 값이라, 격자 위의 이웃끼리는 겹치지 않고
 // 손으로 옮겨 둔 카드 위에는 놓이지 않는다.
+//
+// 가로는 카드 폭(260)에 여유를 둔 값이다. 세로는 카드마다 다르다 — 컬럼을 전부
+// 그리므로 컬럼 마흔 개짜리 표는 800픽셀이 넘는다. 그래서 세로는 상수 대신
+// erd.CardHeight 로 그 표의 실제 높이를 쓴다.
 const (
 	placeClearX = 280.0
+	// placeClearY는 높이를 알 수 없을 때의 최소 간격이다(좌표만 있고 스키마에
+	// 없는 카드 — 방금 지운 표의 좌표가 남아 있는 경우).
 	placeClearY = 200.0
 )
 
@@ -197,13 +203,38 @@ func placeMissing(sc *schema.Schema, layout map[string]*erd.Box) int {
 	if layout == nil {
 		return 0
 	}
-	taken := make([][2]float64, 0, len(layout))
-	for _, b := range layout {
-		taken = append(taken, [2]float64{b.X, b.Y})
+	// 이미 놓인 카드의 자리와 **높이**를 함께 들고 간다.
+	cols := make(map[string]int, len(sc.Tables))
+	for _, t := range sc.Tables {
+		cols[t.Key()] = len(t.Columns)
 	}
-	overlaps := func(x, y float64) bool {
+	clearY := func(key string) float64 {
+		n, ok := cols[key]
+		if !ok {
+			return placeClearY
+		}
+		if h := erd.CardHeight(n); h > placeClearY {
+			return h
+		}
+		return placeClearY
+	}
+
+	type spot struct {
+		x, y, h float64
+	}
+	taken := make([]spot, 0, len(layout))
+	for key, b := range layout {
+		taken = append(taken, spot{b.X, b.Y, clearY(key)})
+	}
+	// 놓으려는 카드의 높이도 함께 본다. 위쪽 카드가 짧아도 새 카드가 길면
+	// 아래로 흘러내려 그 카드를 덮는다.
+	overlaps := func(x, y, h float64) bool {
 		for _, p := range taken {
-			if math.Abs(p[0]-x) < placeClearX && math.Abs(p[1]-y) < placeClearY {
+			gap := p.h
+			if h > gap {
+				gap = h
+			}
+			if math.Abs(p.x-x) < placeClearX && math.Abs(p.y-y) < gap {
 				return true
 			}
 		}
@@ -219,15 +250,16 @@ func placeMissing(sc *schema.Schema, layout map[string]*erd.Box) int {
 		}
 		// erd.AutoLayout과 같은 격자를 쓴다. 두 화면의 초기 배치가 같아야
 		// 설계 화면과 구조 화면을 오갈 때 같은 그림으로 읽힌다.
+		h := clearY(key)
 		for {
 			x, y := erd.SlotAt(slot)
 			slot++
 			// 상한을 두어 어떤 배치에서도 반드시 끝난다. 격자를 다 뒤졌는데도
 			// 빈 자리가 없으면 겹치더라도 놓는다 — 안 보이는 것보다 낫다.
-			if overlaps(x, y) && slot < 4096 {
+			if overlaps(x, y, h) && slot < 4096 {
 				continue
 			}
-			taken = append(taken, [2]float64{x, y})
+			taken = append(taken, spot{x, y, h})
 			layout[key] = &erd.Box{X: x, Y: y}
 			break
 		}

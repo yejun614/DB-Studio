@@ -21,7 +21,15 @@ export const CARD_W = 260;
 const HEAD_H = 30;
 const ROW_H = 20;
 const CARD_PAD = 8;
-const MAX_VISIBLE_ROWS = 14; // 이보다 많으면 "…N개 더"로 접는다
+
+// 컬럼은 전부 그린다.
+//
+// 예전에는 14줄에서 끊고 "…N개 더"로 접었다. 카드 높이를 고르게 유지하려던 것인데,
+// 도면을 보는 이유가 "이 표에 무엇이 있는가"라서 그 접힘은 정작 알고 싶은 것을
+// 가렸다 — 열다섯 번째 컬럼을 확인하려면 속성 창을 따로 열어야 했고, 그러면 도면은
+// 목차 노릇밖에 하지 않는다.
+//
+// 카드 하나가 길어지는 것은 카드를 접어 두는 것(collapsed)으로 사람이 정한다.
 
 export class ErdCanvas {
   // wrap은 캔버스를 담을 요소다. 이 클래스가 그 안에 svg를 만든다.
@@ -221,12 +229,11 @@ export class ErdCanvas {
     for (const tbl of this.doc.schema?.tables ?? []) {
       const key = tableKey(tbl);
       const layout = this.doc.layout?.[key] ?? { x: 80, y: 80 };
-      const rows = layout.collapsed ? 0 : Math.min(tbl.columns?.length ?? 0, MAX_VISIBLE_ROWS);
-      const extra = !layout.collapsed && (tbl.columns?.length ?? 0) > MAX_VISIBLE_ROWS ? 1 : 0;
+      const rows = layout.collapsed ? 0 : (tbl.columns?.length ?? 0);
       out.set(key, {
         x: layout.x, y: layout.y, w: CARD_W,
-        h: HEAD_H + (rows + extra) * ROW_H + (layout.collapsed ? 0 : CARD_PAD),
-        rows, extra, layout, table: tbl,
+        h: HEAD_H + rows * ROW_H + (layout.collapsed ? 0 : CARD_PAD),
+        rows, layout, table: tbl,
       });
     }
     return out;
@@ -328,7 +335,7 @@ export class ErdCanvas {
     }, `${count}`));
 
     if (!geom.layout.collapsed) {
-      const cols = (tbl.columns ?? []).slice(0, MAX_VISIBLE_ROWS);
+      const cols = tbl.columns ?? [];
       cols.forEach((col, i) => {
         const y = HEAD_H + i * ROW_H + 14;
         const isPK = (tbl.primaryKey?.columns ?? []).some((c) => eqName(c, col.name));
@@ -377,11 +384,6 @@ export class ErdCanvas {
           x: geom.w - 10, y, 'text-anchor': 'end',
         }, `${truncate(typeText, 16)}${col.nullable ? '' : ' *'}`));
       });
-      if (geom.extra) {
-        g.appendChild(svgEl('text', {
-          class: 'erd-col-more', x: 26, y: HEAD_H + MAX_VISIBLE_ROWS * ROW_H + 14,
-        }, `… ${count - MAX_VISIBLE_ROWS}개 더`));
-      }
     }
 
     // 테두리는 **맨 위에** 얹는다.

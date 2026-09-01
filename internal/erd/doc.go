@@ -193,7 +193,29 @@ const (
 	layoutStepY   = 260.0
 	layoutOriginX = 80.0
 	layoutOriginY = 80.0
+
+	// 카드 치수. web/js/core/erdcanvas.js 의 상수와 같아야 한다.
+	//
+	// 두 벌로 두는 것이 마음에 걸리지만, 서버가 좌표를 정하려면 카드가 얼마나
+	// 높은지 알아야 하고 그 값은 그리는 쪽에 있다. 어긋나면 초기 배치에서 카드가
+	// 겹치므로, 한쪽을 고칠 때 다른 쪽도 고쳐야 한다는 것을 여기 적어 둔다.
+	cardHeadH = 30.0
+	cardRowH  = 20.0
+	cardPadH  = 8.0
+	// 카드 사이에 남기는 세로 여백.
+	cardGapY = 40.0
 )
+
+// CardHeight는 컬럼 n개짜리 카드의 높이다.
+//
+// 컬럼을 전부 그리기로 하면서(접지 않는다) 카드 높이가 표마다 크게 달라졌다.
+// 고정 격자에 놓으면 컬럼이 열두 개만 넘어도 아래 줄 카드를 덮는다.
+func CardHeight(columns int) float64 {
+	if columns < 0 {
+		columns = 0
+	}
+	return cardHeadH + float64(columns)*cardRowH + cardPadH
+}
 
 // SlotAt은 n번째 격자점의 좌표다.
 //
@@ -209,13 +231,30 @@ func SlotAt(n int) (float64, float64) {
 // 참조 관계를 고려한 배치(force-directed 등)를 서버에서 하지 않는 이유: 좌표는
 // 사용자가 옮기면 그 값이 정답이 되고, 서버가 다시 계산할 근거가 없다. 초기 배치는
 // "겹치지 않고 예측 가능하게" 만으로 충분하며, 정렬은 사용자가 캔버스에서 한다.
+//
+// 세로는 격자가 아니라 **쌓기**다. 컬럼을 전부 그리므로 카드 높이가 표마다 다르고,
+// 고정 간격으로 놓으면 컬럼 많은 표가 아래 카드를 덮는다. 가로는 그대로 격자다 —
+// 폭은 모든 카드가 같아서 어긋날 일이 없고, 열이 가지런해야 눈이 따라간다.
 func AutoLayout(sc *schema.Schema) map[string]*Box {
 	out := make(map[string]*Box, len(sc.Tables))
+	// 열마다 다음 카드가 놓일 y를 들고 간다.
+	next := make([]float64, layoutColumns)
+	for i := range next {
+		next[i] = layoutOriginY
+	}
 	for i, t := range sc.Tables {
+		col := i % layoutColumns
 		out[t.Key()] = &Box{
-			X: layoutOriginX + float64(i%layoutColumns)*layoutStepX,
-			Y: layoutOriginY + float64(i/layoutColumns)*layoutStepY,
+			X: layoutOriginX + float64(col)*layoutStepX,
+			Y: next[col],
 		}
+		// 최소 간격은 옛 격자와 같게 둔다. 컬럼이 적은 표들만 있는 문서에서
+		// 배치가 예전과 달라지면, 쓰던 사람에게는 이유 없이 흐트러진 것으로 보인다.
+		step := CardHeight(len(t.Columns)) + cardGapY
+		if step < layoutStepY {
+			step = layoutStepY
+		}
+		next[col] += step
 	}
 	return out
 }
