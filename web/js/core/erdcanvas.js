@@ -14,6 +14,7 @@ import { h, mount, icon } from './dom.js';
 import { columnIcon, chosenIconFor } from './colicon.js';
 import { NAME_MODES, tableLabel, columnLabel } from './logical.js';
 import { fitText, measure, cssFont } from './textfit.js';
+import { makeRouter, oneMarker } from './erdroute.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -203,6 +204,12 @@ export class ErdCanvas {
       groups: svgEl('g', { class: 'erd-layer-groups' }),
       links: svgEl('g', { class: 'erd-layer-links' }),
       cards: svgEl('g', { class: 'erd-layer-cards' }),
+      // 카드 위로 올려 그리는 관계선. 두 경우에 쓴다.
+      //   - 돌아갈 길이 없어 카드를 지나가야 하는 선. 배경색 테두리를 깔아
+      //     "덮고 지나간다"로 읽히게 한다 — 안 보이는 선보다는 낫다.
+      //   - 고른 선, 고른 카드에 붙은 선, 마우스를 올린 선. 어디로 가는지
+      //     따라가려는 순간에는 카드보다 선이 중요하다.
+      linksTop: svgEl('g', { class: 'erd-layer-links-top' }),
       notes: svgEl('g', { class: 'erd-layer-notes' }),
       cursors: svgEl('g', { class: 'erd-layer-cursors' }),
       // 범위 선택 사각형은 맨 위에 그린다. 카드 밑에 깔리면 무엇을 훑고 있는지
@@ -213,13 +220,14 @@ export class ErdCanvas {
     svg.appendChild(layers.links);
     svg.appendChild(layers.notes);
     svg.appendChild(layers.cards);
+    svg.appendChild(layers.linksTop);
     svg.appendChild(layers.cursors);
     svg.appendChild(layers.band);
     this.layers = layers;
 
     const boxes = this.boxes();
     for (const group of this.doc.groups ?? []) layers.groups.appendChild(this.groupEl(group));
-    for (const link of this.links(boxes)) layers.links.appendChild(link);
+    this.links(boxes);
     for (const note of this.doc.notes ?? []) layers.notes.appendChild(this.noteEl(note));
     for (const tbl of this.doc.schema?.tables ?? []) {
       const geom = boxes.get(tableKey(tbl));
@@ -251,45 +259,119 @@ export class ErdCanvas {
     return out;
   }
 
-  // links는 외래키 관계선을 만든다.
-  links(boxes) {
-    const out = [];
-    for (const tbl of this.doc.schema?.tables ?? []) {
-      const from = boxes.get(tableKey(tbl));
-      if (!from) continue;
-      for (const fk of tbl.foreignKeys ?? []) {
-        const to = boxes.get(refKey(tbl, fk));
-        if (!to) continue;
-        const a = anchor(from, to);
-        const b = anchor(to, from);
-        // 곡선으로 그리면 여러 관계선이 겹쳐도 구분된다.
-        const mx = (a.x + b.x) / 2;
-        const d = `M${a.x},${a.y} C${mx},${a.y} ${mx},${b.y} ${b.x},${b.y}`;
-        const fkID = `${tableKey(tbl)}.${fk.name}`;
+  // routes는 관계선의 길을 찾아 캐시한다.
+  //
+  // 캐시하는 이유: 길찾기는 카드 기하만 보고 정해지는데, 다시 그리기는 고르기가
+  // 바뀔 때마다 일어난다. 카드를 건드리지도 않았는데 매번 다시 찾을 이유가 없다.
+  routes(boxes, quick = false) {
+    let sig = `${quick ? 'q' : 'f'}|${this.nameMode ?? ''}`;
+    for (const [key, g] of boxes) {
+      sig += `|${key}:${round1(g.x)},${round1(g.y)},${round1(g.w)},${round1(g.h)}`;
+    }
+    if (this.routeCache?.sig === sig) return this.routeCache.map;
 
-        // 선을 누를 수 있게 만든다. 보이는 선은 1~2px이라 마우스로 맞히기 어려우므로,
-        // 같은 경로를 투명한 굵은 선으로 한 겹 더 깔아 그것으로 받는다.
-        // 보이는 선을 굵게 하면 그림이 지저분해진다.
-        const hit = svgEl('path', { class: 'erd-link-hit', d, 'data-fk': fkID });
-        hit.addEventListener('pointerdown', (e) => {
-          e.stopPropagation();
-          this.selection = { kind: 'link', id: fkID };
-          this.opts.onSelectLink?.(fkID);
-          this.render();
-        });
-        out.push(hit);
-        out.push(svgEl('path', {
-          class: `erd-link${this.isSelected('link', fkID) ? ' is-selected' : ''}`,
-          d, 'data-fk': fkID,
-        }));
-        // 참조하는 쪽(다수)에 점, 참조되는 쪽(하나)에 짧은 막대를 둔다.
-        out.push(svgEl('circle', { class: 'erd-link-many', cx: a.x, cy: a.y, r: 3.5 }));
-        out.push(svgEl('rect', {
-          class: 'erd-link-one', x: b.x - 1, y: b.y - 5, width: 2, height: 10, rx: 1,
-        }));
+    const route = makeRouter(boxes, { quick });
+    const map = new Map();
+    for (const tbl of this.doc.schema?.tables ?? []) {
+      const fromKey = tableKey(tbl);
+      if (!boxes.has(fromKey)) continue;
+      for (const fk of tbl.foreignKeys ?? []) {
+        const toKey = refKey(tbl, fk);
+        if (!boxes.has(toKey)) continue;
+        const r = route(fromKey, toKey);
+        if (r) map.set(`${fromKey}.${fk.name}`, { ...r, fromKey, toKey });
       }
     }
+    this.routeCache = { sig, map };
+    return map;
+  }
+
+  // links는 외래키 관계선을 두 레이어에 그린다.
+  links(boxes, quick = false) {
+    const layer = this.layers?.links;
+    if (!layer) return;
+    while (layer.firstChild) layer.removeChild(layer.firstChild);
+
+    const routed = this.routes(boxes, quick);
+    this.linkSpots = new Map();
+    for (const [fkID, r] of routed) {
+      const selected = this.isSelected('link', fkID);
+      const fkClass = `erd-link${selected ? ' is-selected' : ''}`;
+
+      // 선을 누를 수 있게 만든다. 보이는 선은 1.4px이라 마우스로 맞히기 어려우므로,
+      // 같은 경로를 투명한 굵은 선으로 한 겹 더 깔아 그것으로 받는다.
+      // 보이는 선을 굵게 하면 그림이 지저분해진다.
+      const hit = svgEl('path', { class: 'erd-link-hit', d: r.d, 'data-fk': fkID });
+      hit.addEventListener('pointerdown', (e) => {
+        e.stopPropagation();
+        this.selection = { kind: 'link', id: fkID };
+        this.opts.onSelectLink?.(fkID);
+        this.render();
+      });
+      // 마우스를 올린 선은 카드 위로 올린다. 카드 밑으로 들어가 사라지는 선을
+      // 따라가는 방법이 "카드를 옮겨 본다"뿐이면 그건 도구가 아니다.
+      hit.addEventListener('pointerenter', () => this.setHoverLink(fkID));
+      hit.addEventListener('pointerleave', () => this.setHoverLink(null));
+      this.layers.links.appendChild(hit);
+
+      this.layers.links.appendChild(svgEl('path', {
+        class: fkClass, d: r.d, 'data-fk': fkID,
+      }));
+      // 참조하는 쪽(다수)에 점, 참조되는 쪽(하나)에 짧은 막대를 둔다.
+      this.layers.links.appendChild(svgEl('circle', {
+        class: 'erd-link-many', cx: r.a.x, cy: r.a.y, r: 3.5,
+      }));
+      this.layers.links.appendChild(svgEl('rect', {
+        class: 'erd-link-one', ...oneMarker(r.b, r.sb),
+      }));
+      this.linkSpots.set(fkID, r);
+    }
+    this.syncLiftedLinks();
+  }
+
+  // liftedLinks는 지금 카드 위로 올려 그려야 하는 관계선들이다.
+  liftedLinks() {
+    const out = new Set();
+    for (const [fkID, r] of this.linkSpots ?? []) {
+      if (r.blocked) out.add(fkID);
+      if (this.hoverLink === fkID) out.add(fkID);
+      if (this.isSelected('link', fkID)) out.add(fkID);
+      // 고른 카드에 붙은 선도 함께 올린다. 표 하나를 눌러 "이 표가 무엇과
+      // 엮여 있나"를 보는 것이 관계선을 보는 가장 흔한 이유다.
+      if (this.isSelected('table', r.fromKey) || this.isSelected('table', r.toKey)) out.add(fkID);
+    }
     return out;
+  }
+
+  // syncLiftedLinks는 위 레이어만 다시 만든다. 마우스를 올릴 때마다 도면 전체를
+  // 다시 그리면 큰 문서에서 손이 뻑뻑해진다.
+  syncLiftedLinks() {
+    const layer = this.layers?.linksTop;
+    if (!layer) return;
+    while (layer.firstChild) layer.removeChild(layer.firstChild);
+
+    for (const fkID of this.liftedLinks()) {
+      const r = this.linkSpots.get(fkID);
+      if (!r) continue;
+      // 잠깐 올린 선(마우스를 올렸거나 고른 것)은 **그림 파일에서 뺀다**.
+      // 아래 레이어에 같은 선이 이미 있어서, 내보낸 그림에 두 번 그려진다.
+      // 지날 데가 없어 올린 선(blocked)은 그것이 유일한 선이므로 남긴다.
+      const temp = r.blocked ? '' : ' erd-link-temp';
+      // 배경색 테두리를 먼저 깐다. 이것이 없으면 카드 글자 위에 선이 겹쳐
+      // 둘 다 못 읽는다.
+      layer.appendChild(svgEl('path', { class: `erd-link-halo${temp}`, d: r.d }));
+      layer.appendChild(svgEl('path', {
+        class: `erd-link is-lifted${r.blocked ? ' is-over' : ''}`
+          + `${this.isSelected('link', fkID) ? ' is-selected' : ''}${temp}`,
+        d: r.d, 'data-fk': fkID,
+      }));
+    }
+  }
+
+  setHoverLink(fkID) {
+    if (this.hoverLink === fkID) return;
+    this.hoverLink = fkID;
+    this.syncLiftedLinks();
   }
 
   cardEl(tbl, geom) {
@@ -1015,9 +1097,7 @@ export class ErdCanvas {
     this.linkFrame = requestAnimationFrame(() => {
       this.linkFrame = 0;
       if (!this.layers?.links) return;
-      const layer = this.layers.links;
-      while (layer.firstChild) layer.removeChild(layer.firstChild);
-      for (const link of this.links(this.boxes())) layer.appendChild(link);
+      this.links(this.boxes(), Boolean(this.drag));
     });
   }
 
@@ -1292,16 +1372,6 @@ export function refKey(tbl, fk) {
 
 export function eqName(a, b) {
   return String(a).toLowerCase() === String(b).toLowerCase();
-}
-
-// anchor는 from 카드에서 to 카드를 향하는 변의 접점을 고른다.
-function anchor(from, to) {
-  const fc = { x: from.x + from.w / 2, y: from.y + from.h / 2 };
-  const tc = { x: to.x + to.w / 2, y: to.y + to.h / 2 };
-  if (Math.abs(tc.x - fc.x) > Math.abs(tc.y - fc.y)) {
-    return { x: tc.x > fc.x ? from.x + from.w : from.x, y: fc.y };
-  }
-  return { x: fc.x, y: tc.y > fc.y ? from.y + from.h : from.y };
 }
 
 export function svgEl(tag, attrs = {}, text) {

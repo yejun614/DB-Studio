@@ -38,7 +38,10 @@ const MAX_PIXELS = 16000;
 // 관계선의 투명한 굵은 선(누르기 쉬우라고 겹쳐 둔 것)도 보이지는 않지만 파일만
 // 키우고, 벡터 편집기에서 열면 정체를 알 수 없는 도형으로 걸린다.
 const CHROME_ONLY = [
-  'erd-group-grip', 'erd-note-grip', 'erd-link-hit', 'erd-card-outline',
+  'erd-group-grip', 'erd-note-grip', 'erd-card-grip', 'erd-link-hit', 'erd-card-outline',
+  // 마우스를 올렸거나 골라서 잠깐 카드 위로 올려 둔 관계선. 같은 선이 아래
+  // 레이어에 이미 있어서 남기면 한 선이 두 번 그려진다.
+  'erd-link-temp',
   // 다른 참여자가 고르고 있다는 표시와 커서, 빈 화면 안내문.
   'erd-card-holder', 'erd-cursor', 'erd-hint',
 ];
@@ -62,6 +65,16 @@ export function diagramBounds(canvas, pad = 40) {
   for (const b of canvas.boxes().values()) put(b.x, b.y, b.w, b.h);
   for (const n of canvas.doc.notes ?? []) put(n.x, n.y, n.w || 200, n.h || 80);
   for (const g of canvas.doc.groups ?? []) put(g.x, g.y, g.w || 320, g.h || 240);
+  // 관계선도 센다. 길찾기가 카드를 피해 돌아가면 선은 카드 밖으로 나간다 —
+  // 카드만 보고 자르면 돌아간 부분이 잘려 나가, 그림만 받은 사람에게는 선이
+  // 허공에서 끊긴 것으로 보인다.
+  const links = canvas.svg?.querySelector('.erd-layer-links');
+  if (links?.firstChild) {
+    try {
+      const bb = links.getBBox();
+      if (bb.width || bb.height) put(bb.x, bb.y, bb.width, bb.height);
+    } catch { /* 화면에 붙어 있지 않으면 getBBox가 안 된다 */ }
+  }
   if (minX === Infinity) return { x: 0, y: 0, w: 400, h: 300 };
   return {
     x: Math.round(minX - pad),

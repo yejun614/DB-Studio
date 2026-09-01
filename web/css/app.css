@@ -2005,6 +2005,21 @@ option { background: var(--surface); color: var(--text); }
 /* 관계선 */
 .erd-link { fill: none; stroke: var(--text-mute); stroke-width: 1.4; pointer-events: none; }
 .erd-link.is-selected { stroke: var(--primary); stroke-width: 2.4; }
+/* 카드 위로 올려 그리는 선. 돌아갈 길이 없어 카드를 지나야 하는 선과, 마우스를
+ * 올렸거나 고른 선이 여기로 온다. 카드보다 위에 있으므로 마우스는 받지 않는다 —
+ * 받으면 선 아래에 있는 카드를 누를 수 없다. */
+.erd-layer-links-top { pointer-events: none; }
+/* 배경색 테두리. 카드 글자 위를 지나는 선에 이것이 없으면 글자와 선이 뒤엉켜
+ * 둘 다 못 읽는다. 회로도에서 넘어가는 선을 그리는 방식과 같다. */
+.erd-link-halo {
+  fill: none; stroke: var(--surface); stroke-width: 5; stroke-linecap: round;
+  opacity: 0.9; pointer-events: none;
+}
+/* 지날 데가 없어 카드를 덮고 지나가는 선. 조금 진하게 — 덮고 지나가는 것이
+ * 실수가 아니라 그렇게 그린 것으로 보여야 한다. */
+.erd-link.is-over { stroke: var(--text-dim); }
+/* 마우스를 올린 선. 어디서 어디로 가는지 끝까지 따라가는 순간이다. */
+.erd-link.is-lifted:not(.is-over):not(.is-selected) { stroke: var(--text); }
 /* 누르기용 투명 선. 보이는 선은 1.4px이라 마우스로 맞히기 어렵다 —
  * 보이는 선을 굵게 하는 대신 잡는 면적만 넓힌다. */
 .erd-link-hit {
