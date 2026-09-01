@@ -22,6 +22,7 @@ import { ErdCanvas, newLocalID, tableDisplay } from '../core/erdcanvas.js';
 import { navigate } from '../core/router.js';
 import { serverDbPicker } from '../core/connpick.js';
 import { panelResizeHandle, attachPanelResize } from '../core/panelresize.js';
+import { TINTS, tintPicker } from '../core/tints.js';
 import { errorPanel } from './users.js';
 import { ErdSession } from '../core/erdsocket.js';
 import { columnIcon, chosenIconFor } from '../core/colicon.js';
@@ -30,15 +31,6 @@ import { roomChatView, scrollChatToBottom } from '../core/roomchat.js';
 // 구조 화면과 ERD 편집기는 같은 op를 주고받는다. 반영 규칙을 두 벌로 두면
 // 언젠가 어긋나고, 그때 조용히 사라지는 것은 남의 편집이다.
 import { applyLightOp } from './erdeditor.js';
-
-// 메모와 그룹에 쓸 색. ERD 편집기와 같은 팔레트여야 두 화면이 같은 언어로 읽힌다.
-const TINTS = [
-  { value: '#eab308', label: '노랑', className: 'tint-yellow' },
-  { value: '#3b82f6', label: '파랑', className: 'tint-blue' },
-  { value: '#22c55e', label: '초록', className: 'tint-green' },
-  { value: '#ec4899', label: '분홍', className: 'tint-pink' },
-  { value: '#a1a1aa', label: '회색', className: 'tint-gray' },
-];
 
 export async function renderStructure(outlet, params, query) {
   mount(outlet, spinner('커넥션 목록을 불러오는 중…'));
@@ -870,29 +862,24 @@ class StructureView {
     ];
   }
 
-  // tintPicker는 색 고르개다. 메모와 그룹이 같은 것을 쓴다.
+  // tintPicker는 색 고르개다. 메모와 그룹이 같은 것을 쓰고, 목록은 ERD 편집기와
+  // 한 벌이다(core/tints.js).
   tintPicker(current, onPick) {
-    return h('div.tint-picker', {}, TINTS.map((c) => h('button.tint-swatch', {
-      type: 'button',
-      class: `${c.className}${(current || '') === c.value ? ' is-on' : ''}`,
-      title: c.label,
-      onclick: () => onPick(c.value),
-    })));
+    return tintPicker({ current, onPick, withDefault: false }).node;
   }
 
   addGroup() {
     const nameInput = input({ placeholder: '예: 주문 도메인', autofocus: true });
-    let color = TINTS[1].value;
-    const swatches = h('div.tint-picker', {}, TINTS.map((c) => h('button.tint-swatch', {
-      type: 'button',
-      class: `${c.className}${c.value === color ? ' is-on' : ''}`,
-      title: c.label,
-      onclick: (e) => {
-        color = c.value;
-        for (const b of e.currentTarget.parentElement.children) b.classList.remove('is-on');
-        e.currentTarget.classList.add('is-on');
+    let color = TINTS[7].value; // 파랑
+    const picker = tintPicker({
+      current: color,
+      withDefault: false,
+      onPick: (next) => {
+        color = next;
+        picker.set(next);
       },
-    })));
+    });
+    const swatches = picker.node;
 
     openModal({
       title: '그룹 추가',

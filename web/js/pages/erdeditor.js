@@ -22,6 +22,7 @@ import { codeBlock, codeEditor } from '../core/highlight.js';
 import { versionSourceLabel } from './migrations.js';
 import { runDryRun } from '../core/dryrun.js';
 import { NAME_MODES, logicalOf } from '../core/logical.js';
+import { tintPicker } from '../core/tints.js';
 import {
   ErdCanvas, CARD_W, tableKey, tableDisplay, refKey, newLocalID, truncate, NOTE_W, noteHeight,
 } from '../core/erdcanvas.js';
@@ -45,16 +46,6 @@ const TABLE_ICONS = [
   // 저건 결제 쪽"이 보이려면 종류가 이 정도는 있어야 한다.
   'cart', 'box', 'money', 'chat', 'mail', 'bell', 'calendar', 'chart',
   'file', 'tag', 'location', 'truck', 'star', 'flag', 'shield', 'code', 'link',
-];
-
-// 카드 강조색. Box.color에 그대로 담기므로 CSS 변수가 아니라 실제 색을 쓴다.
-const TABLE_COLORS = [
-  { value: '', label: '기본', className: 'tint-none' },
-  { value: '#eab308', label: '노랑', className: 'tint-yellow' },
-  { value: '#3b82f6', label: '파랑', className: 'tint-blue' },
-  { value: '#22c55e', label: '초록', className: 'tint-green' },
-  { value: '#ec4899', label: '분홍', className: 'tint-pink' },
-  { value: '#a1a1aa', label: '회색', className: 'tint-gray' },
 ];
 
 // 새 컬럼의 기본 타입. 방언마다 "가장 흔한 문자열"이 다르다.
@@ -1375,13 +1366,7 @@ class Editor {
   // 여럿을 골랐을 때 필요하다: 색이 서로 다른데 '기본'에 불이 들어와 있으면 화면이
   // 사실이 아닌 말을 하게 된다("지금 모두 기본색이다").
   tintPicker(current, onPick, ro) {
-    return h('div.tint-picker', {}, TABLE_COLORS.map((c) => h('button.tint-swatch', {
-      type: 'button',
-      class: `${c.className}${current != null && (current || '') === c.value ? ' is-on' : ''}`,
-      title: c.label,
-      disabled: ro,
-      onclick: () => onPick(c.value),
-    })));
+    return tintPicker({ current, onPick, disabled: ro }).node;
   }
 
   // tableRef는 인스펙터가 쓰는 **살아 있는 테이블 참조**다.
@@ -2021,12 +2006,10 @@ class Editor {
       onclick: () => patch({ icon: name }),
     }, name === '' ? h('span.erd-icon-none', {}, '—') : icon(name, 15))));
 
-    const colors = h('div.tint-picker', {}, TABLE_COLORS.map((c) => h('button.tint-swatch', {
-      type: 'button',
-      class: `${c.className}${(box.color || '') === c.value ? ' is-on' : ''}`,
-      title: c.label,
-      onclick: () => patch({ color: c.value }),
-    })));
+    const colors = tintPicker({
+      current: box.color || '',
+      onPick: (color) => patch({ color }),
+    }).node;
 
     return h('div.field', {},
       h('span.field-label', {}, '표시'),
@@ -2347,17 +2330,15 @@ class Editor {
   addGroup() {
     const nameInput = input({ placeholder: '예: 주문 도메인', autofocus: true });
     let color = '#3b82f6';
-    const swatches = h('div.tint-picker', {}, TABLE_COLORS.filter((c) => c.value).map((c) =>
-      h('button.tint-swatch', {
-        type: 'button',
-        class: `${c.className}${c.value === color ? ' is-on' : ''}`,
-        title: c.label,
-        onclick: (e) => {
-          color = c.value;
-          for (const b of e.currentTarget.parentElement.children) b.classList.remove('is-on');
-          e.currentTarget.classList.add('is-on');
-        },
-      })));
+    const picker = tintPicker({
+      current: color,
+      withDefault: false,
+      onPick: (next) => {
+        color = next;
+        picker.set(next);
+      },
+    });
+    const swatches = picker.node;
 
     openModal({
       title: '그룹 추가',
