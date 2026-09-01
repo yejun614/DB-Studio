@@ -203,6 +203,12 @@ class Editor {
       onCursorMove: (point) => this.sendCursor(point),
       onManualPan: () => this.stopFollow(),
       onTableMove: (key, x, y) => this.send('table.move', { key, x, y }),
+      // 폭도 table.move 로 보낸다. 좌표와 같은 Box에 담기는 표시 정보라,
+      // op를 따로 만들면 같은 것을 두 갈래로 저장하게 된다.
+      onTableResize: (key, width) => {
+        const box = this.doc.layout?.[key] ?? {};
+        this.send('table.move', { key, x: box.x ?? 0, y: box.y ?? 0, width });
+      },
       onNoteMove: (id, x, y) => this.send('note.update', { id, x, y }),
       onNoteResize: (id, w, h) => this.send('note.update', { id, w, h }),
       onGroupMove: (id, x, y) => this.send('group.update', { id, x, y }),

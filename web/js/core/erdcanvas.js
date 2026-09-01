@@ -13,11 +13,23 @@
 import { h, mount, icon } from './dom.js';
 import { columnIcon, chosenIconFor } from './colicon.js';
 import { NAME_MODES, tableLabel, columnLabel } from './logical.js';
+import { fitText, measure, cssFont } from './textfit.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 // 카드 치수. 서버의 자동 배치 격자(320×260)와 어긋나면 초기 화면에서 겹친다.
+//
+// CARD_W는 **기본값**이다. 카드마다 Box.w로 폭을 따로 정할 수 있다(오른쪽 아래
+// 손잡이를 끌면 바뀐다) — 이름이 긴 표가 하나 있다고 모든 카드를 넓힐 이유는 없다.
 export const CARD_W = 260;
+export const CARD_MIN_W = 180;
+export const CARD_MAX_W = 720;
+
+// 카드 안쪽 여백. 이름이 시작하는 자리(26)와 오른쪽 끝(10), 그리고 이름과 타입
+// 사이에 반드시 남길 틈(12)이다. 이 틈이 없으면 두 글자가 서로 닿아 한 낱말처럼 읽힌다.
+const NAME_X = 26;
+const PAD_R = 10;
+const GAP = 12;
 const HEAD_H = 30;
 const ROW_H = 20;
 const CARD_PAD = 8;
@@ -231,7 +243,7 @@ export class ErdCanvas {
       const layout = this.doc.layout?.[key] ?? { x: 80, y: 80 };
       const rows = layout.collapsed ? 0 : (tbl.columns?.length ?? 0);
       out.set(key, {
-        x: layout.x, y: layout.y, w: CARD_W,
+        x: layout.x, y: layout.y, w: cardWidth(layout),
         h: HEAD_H + rows * ROW_H + (layout.collapsed ? 0 : CARD_PAD),
         rows, layout, table: tbl,
       });
@@ -317,16 +329,18 @@ export class ErdCanvas {
     // 논리명일 때는 조금 작게 쓴다. 같은 크기로 두면 한글이 라틴 문자보다 크게
     // 보여서(글자당 차지하는 면적이 넓다) 제목만 유독 큼직하게 튄다.
     const isLogical = main !== (tbl.namespace ? `${tbl.namespace}.${tbl.name}` : tbl.name);
+    // 제목이 오른쪽 컬럼 수 위로 올라가지 않게 그 자리를 빼고 맞춘다.
+    const titleMax = geom.w - titleX - PAD_R - 22;
     g.appendChild(svgEl('text', {
       class: `erd-card-name${isLogical ? ' is-logical' : ''}`,
       x: titleX, y: sub ? 17 : 20,
-    }, truncate(main, iconName ? 27 : 30)));
+    }, fitText(main, titleMax, cssFont(`erd-card-name${isLogical ? ' is-logical' : ''}`))));
     // 둘 다 보기에서는 물리명을 작은 글씨로 아래에 둔다. 나란히 쓰면 어느 쪽이
     // 진짜 이름인지 알 수 없고, 긴 한국어 이름에서 물리명이 먼저 잘린다.
     if (sub) {
       g.appendChild(svgEl('text', {
         class: 'erd-card-sub', x: titleX, y: 28,
-      }, truncate(sub, iconName ? 30 : 33)));
+      }, fitText(sub, titleMax, cssFont('erd-card-sub'))));
     }
 
     const count = tbl.columns?.length ?? 0;
@@ -355,18 +369,35 @@ export class ErdCanvas {
         }
         const label = columnLabel(col, geom.layout, this.nameMode);
         const nameText = svgEl('text', {
-          class: `erd-col${isPK ? ' is-pk' : ''}`, x: 26, y,
+          class: `erd-col${isPK ? ' is-pk' : ''}`, x: NAME_X, y,
         });
-        nameText.appendChild(svgEl('tspan', {}, truncate(label.main, label.sub ? 12 : 20)));
-        // 컬럼 줄은 좁아 위아래로 나눌 수 없다. 물리명을 옆에 옅게 이어 붙인다.
+
+        // 자리를 나눈다: 타입이 먼저 자기 폭을 가져가고, 남는 것이 이름 몫이다.
         //
-        // 같은 <text> 안의 tspan 으로 잇는다. 글자 폭을 계산해 x를 따로 주면
-        // 한글에서 어긋난다 — 한글 한 자는 영문 한 자보다 넓어서, 추정한 자리에
-        // 물리명을 놓으면 논리명 위에 겹쳐 찍힌다(실제로 그랬다).
+        // 글자 수로 자르면(예전) 한글에서 넘친다 — 한글 한 자는 라틴 한 자보다
+        // 두 배 가까이 넓어서, 같은 "20자"가 영문에서는 남고 한국어에서는 타입
+        // 위로 올라탔다. 논리명과 물리명을 함께 보여 줄 때는 늘 겹쳤다.
+        const domain = (col.domain ?? '').trim();
+        const rawType = domain || (col.rawType || col.type?.base || '');
+        const typeFont = cssFont(`erd-col-type${domain ? ' is-domain' : ''}`);
+        // 타입은 카드의 절반을 넘지 않는다. 이름이 무엇인지 모르게 되면 도면이
+        // 아니라 타입 목록이 된다.
+        const typeStr = fitText(rawType, (geom.w - NAME_X - PAD_R) * 0.5, typeFont)
+          + (col.nullable ? '' : ' *');
+        const room = geom.w - NAME_X - PAD_R - measure(typeStr, typeFont) - GAP;
+
+        const nameFont = cssFont(`erd-col${isPK ? ' is-pk' : ''}`);
         if (label.sub) {
-          nameText.appendChild(svgEl('tspan', {
-            class: 'erd-col-sub', dx: 6,
-          }, truncate(label.sub, 12)));
+          // 논리명과 물리명을 함께 보여 줄 때: 남는 폭을 6:4로 나눈다. 물리명은
+          // 작은 글씨라 그 비율에서 대개 다 들어간다.
+          const subFont = cssFont('erd-col-sub');
+          const subStr = fitText(label.sub, room * 0.4, subFont);
+          const mainRoom = room - measure(subStr, subFont) - 6;
+          nameText.appendChild(svgEl('tspan', {}, fitText(label.main, mainRoom, nameFont)));
+          // 같은 <text> 안의 tspan 으로 잇는다. x를 따로 주면 한글에서 어긋난다.
+          nameText.appendChild(svgEl('tspan', { class: 'erd-col-sub', dx: 6 }, subStr));
+        } else {
+          nameText.appendChild(svgEl('tspan', {}, fitText(label.main, room, nameFont)));
         }
         g.appendChild(nameText);
         // 도메인이 걸린 컬럼은 도메인 이름을 보여준다.
@@ -377,12 +408,10 @@ export class ErdCanvas {
         // 놓고도 도면에는 원시 타입만 보이면, 도메인은 아무도 보지 않는 목록이 된다.
         //
         // 실제 타입과 헷갈리지 않게 다른 색으로 그린다(erd-col-domain).
-        const domain = (col.domain ?? '').trim();
-        const typeText = domain || (col.rawType || col.type?.base || '');
         g.appendChild(svgEl('text', {
           class: `erd-col-type${domain ? ' is-domain' : ''}`,
-          x: geom.w - 10, y, 'text-anchor': 'end',
-        }, `${truncate(typeText, 16)}${col.nullable ? '' : ' *'}`));
+          x: geom.w - PAD_R, y, 'text-anchor': 'end',
+        }, typeStr));
       });
     }
 
@@ -406,7 +435,23 @@ export class ErdCanvas {
       }));
     }
 
-    g.addEventListener('pointerdown', (e) => this.onCardPointerDown(e, key, geom));
+    // 폭 손잡이. 오른쪽 가장자리를 잡아 끈다.
+    //
+    // 그룹·메모는 모서리에서 가로세로를 함께 잡지만 카드는 높이가 컬럼 수로 정해진다.
+    // 모서리에 두면 세로도 바뀔 것처럼 보이고, 끌어 본 사람은 높이가 안 변하는 것을
+    // 고장으로 읽는다. 오른쪽 변이 "여기서 폭만 바뀐다"를 말해 준다.
+    if (this.canEdit && !geom.layout.collapsed) {
+      const grip = svgEl('rect', {
+        class: 'erd-card-grip', x: geom.w - 4, y: HEAD_H, width: 8, height: Math.max(16, geom.h - HEAD_H),
+      });
+      grip.addEventListener('pointerdown', (e) => this.onCardResizeDown(e, key, geom));
+      g.appendChild(grip);
+    }
+
+    g.addEventListener('pointerdown', (e) => {
+      if (e.target.classList.contains('erd-card-grip')) return;
+      this.onCardPointerDown(e, key, geom);
+    });
     g.addEventListener('dblclick', () => {
       this.opts.onToggleCollapse?.(key, geom);
     });
@@ -594,6 +639,21 @@ export class ErdCanvas {
         }
         return;
       }
+      if (this.drag.mode === 'card-resize') {
+        const w = Math.max(CARD_MIN_W,
+          Math.min(CARD_MAX_W, round1(this.drag.width + (point.x - this.drag.start.x))));
+        this.drag.lastWidth = w;
+        const el = this.dragEl();
+        if (!el) return;
+        // 끌고 있는 동안에는 사각형과 손잡이만 옮긴다. 글자는 놓을 때 다시 그린다 —
+        // 폭이 바뀔 때마다 컬럼마다 글자를 다시 재면 손이 뻑뻑해진다.
+        for (const r of el.querySelectorAll('.erd-card-bg, .erd-card-head, .erd-card-outline')) {
+          r.setAttribute('width', w);
+        }
+        const grip = el.querySelector('.erd-card-grip');
+        if (grip) grip.setAttribute('x', w - 4);
+        return;
+      }
       if (this.drag.mode === 'group-resize') {
         const w = Math.max(80, round1(this.drag.size.w + (point.x - this.drag.start.x)));
         const hh = Math.max(60, round1(this.drag.size.h + (point.y - this.drag.start.y)));
@@ -659,6 +719,16 @@ export class ErdCanvas {
           note.h = drag.lastSize.h;
         }
         this.opts.onNoteResize?.(drag.id, drag.lastSize.w, drag.lastSize.h);
+        this.render();
+        return;
+      }
+      if (drag?.mode === 'card-resize' && drag.lastWidth) {
+        // 로컬 상태를 먼저 갱신한다. 저장 결과가 오기 전에 다시 그려도 카드가
+        // 원래 폭으로 튀지 않게 하기 위해서다(옮기기와 같은 이유).
+        this.doc.layout[drag.key] = {
+          ...(this.doc.layout[drag.key] ?? {}), w: drag.lastWidth,
+        };
+        this.opts.onTableResize?.(drag.key, drag.lastWidth);
         this.render();
         return;
       }
@@ -1060,6 +1130,28 @@ export class ErdCanvas {
       : { mode: 'group', id: group.id, el, selector, grab: { x: p.x - group.x, y: p.y - group.y } };
   }
 
+  // onCardResizeDown은 카드 폭 조절을 시작한다.
+  onCardResizeDown(e, key, geom) {
+    e.stopPropagation();
+    if (this.otherButton(e)) return;
+    if (this.spaceHeld || this.panDrag) {
+      this.startPan(e);
+      return;
+    }
+    if (!this.isSelected('table', key)) {
+      this.selection = { kind: 'table', id: key };
+      this.opts.onSelect?.(key);
+      this.render();
+    }
+    if (!this.canEdit) return;
+    const p = this.toCanvas(e.clientX, e.clientY);
+    const selector = `.erd-card-g[data-key="${cssEscape(key)}"]`;
+    this.drag = {
+      mode: 'card-resize', key, el: this.svg.querySelector(selector), selector,
+      start: p, width: geom.w,
+    };
+  }
+
   // dragEl은 지금 끌고 있는 요소를 **살아 있는 것으로** 돌려준다.
   //
   // 누르는 순간 잡아 둔 요소는 곧 버려질 수 있다. 선택이 바뀌면 화면 쪽에서
@@ -1220,6 +1312,17 @@ export function svgEl(tag, attrs = {}, text) {
   }
   if (text !== undefined) el.textContent = text;
   return el;
+}
+
+// cardWidth는 그 카드의 폭이다. 정해 둔 것이 없으면 기본값을 쓴다.
+//
+// 여기 한 곳에서 상한·하한을 건다. 서버도 같은 값으로 자르지만(erd.ops), 화면이
+// 먼저 걸러 주지 않으면 끌고 있는 동안 카드가 화면 밖으로 자라거나 글자 폭보다
+// 좁아져 아무것도 읽을 수 없게 된다.
+export function cardWidth(layout) {
+  const w = Number(layout?.w) || 0;
+  if (!w) return CARD_W;
+  return Math.max(CARD_MIN_W, Math.min(CARD_MAX_W, w));
 }
 
 export function truncate(text, max) {

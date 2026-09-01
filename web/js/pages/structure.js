@@ -193,6 +193,10 @@ class StructureView {
       // 배치를 바꾸는 것들. 캔버스가 로컬 상태를 이미 갱신했으므로 같은 변경을
       // op로 보내기만 한다 — 서버가 seq를 붙여 모두에게 되돌려준다.
       onTableMove: (key, x, y) => this.op('table.move', { key, x, y }),
+      onTableResize: (key, width) => {
+        const box = this.doc.layout?.[key] ?? {};
+        this.op('table.move', { key, x: box.x ?? 0, y: box.y ?? 0, width });
+      },
       onNoteMove: (id, x, y) => this.op('note.update', { id, x, y }),
       onNoteResize: (id, w, h) => this.op('note.update', { id, w, h }),
       onGroupMove: (id, x, y) => this.op('group.update', { id, x, y }),

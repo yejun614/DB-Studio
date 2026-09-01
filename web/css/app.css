@@ -3713,6 +3713,18 @@ a.stat:hover { border-color: var(--text-mute); background: hsl(var(--h-muted) / 
 .macro-note.is-selected .note-box { stroke: var(--primary); stroke-width: 2.5; }
 .group-grip { fill: currentColor; fill-opacity: 0.5; cursor: nwse-resize; }
 
+/* 카드 폭 손잡이. 오른쪽 변에 세워 둔다 — 모서리에 두면 세로도 바뀔 것처럼 보이는데,
+   카드 높이는 컬럼 수로 정해지는 값이라 사람이 정할 것이 아니다.
+   평소에는 보이지 않는다. 카드마다 세로줄이 하나씩 서 있으면 그것이 무엇인지 묻게
+   되고, 잡을 자리는 손이 그 위에 갔을 때 알려 주면 된다. */
+.erd-card-grip {
+  fill: var(--primary);
+  fill-opacity: 0;
+  cursor: ew-resize;
+}
+.erd-card-g:hover .erd-card-grip { fill-opacity: 0.35; }
+.erd-card-grip:hover { fill-opacity: 0.7 !important; }
+
 /* 주석 색. 도형은 currentColor를 쓰므로 색 하나만 정하면 된다. */
 .tint-yellow { color: hsl(45 90% 55%); }
 .tint-blue { color: hsl(210 85% 60%); }
