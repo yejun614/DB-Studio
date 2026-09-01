@@ -382,8 +382,20 @@ export class ErdCanvas {
   cardEl(tbl, geom) {
     const key = tableKey(tbl);
     const selected = this.isSelected('table', key);
+    // 폭 손잡이에 손이 닿았거나 지금 끌고 있으면 테두리 전체가 달라진다.
+    //
+    // 둘을 나누는 이유: 손이 닿은 것은 중립적으로 밝아지기만 하고, 끄는 동안에만
+    // 강조색을 쓴다. 호버에 강조색을 쓰면 "고른 카드"(같은 색 테두리)와 구별되지
+    // 않아, 지나가기만 해도 고른 것처럼 보인다.
+    //
+    // 다시 그려도 그대로여야 하므로(끄는 동안 카드를 매 프레임 새로 만든다)
+    // 클래스를 여기서 붙인다.
+    const resizing = this.drag?.mode === 'card-resize' && this.drag.key === key;
+    const gripHover = !resizing && this.gripHover === key;
     const g = svgEl('g', {
-      class: `erd-card-g${selected ? ' is-selected' : ''}${this.isPrimary('table', key) ? ' is-primary' : ''}`,
+      class: `erd-card-g${selected ? ' is-selected' : ''}`
+        + `${this.isPrimary('table', key) ? ' is-primary' : ''}`
+        + `${resizing ? ' is-resizing' : ''}${gripHover ? ' is-grip-hover' : ''}`,
       transform: `translate(${geom.x},${geom.y})`,
       'data-key': key,
       // 색은 **묶음(g)**에 싣는다. 안쪽 사각형에 실으면 그 사각형 자신에게만
@@ -532,7 +544,18 @@ export class ErdCanvas {
         class: 'erd-card-grip', x: geom.w - 4, y: HEAD_H, width: 8, height: Math.max(16, geom.h - HEAD_H),
       });
       grip.addEventListener('pointerdown', (e) => this.onCardResizeDown(e, key, geom));
+      grip.addEventListener('pointerenter', () => this.setGripHover(key));
+      grip.addEventListener('pointerleave', () => this.setGripHover(null));
       g.appendChild(grip);
+    }
+
+    // 끄는 동안에는 폭을 숫자로도 적는다. 두 카드를 같은 폭으로 맞추려는 사람에게
+    // 글자가 어디까지 보이는지만으로는 부족하다. 카드 밖 오른쪽 아래에 두어
+    // 내용을 가리지 않는다.
+    if (this.drag?.mode === 'card-resize' && this.drag.key === key) {
+      g.appendChild(svgEl('text', {
+        class: 'erd-card-wnote', x: geom.w - 2, y: geom.h + 13, 'text-anchor': 'end',
+      }, `${Math.round(geom.w)}px`));
     }
 
     g.addEventListener('pointerdown', (e) => {
@@ -729,16 +752,7 @@ export class ErdCanvas {
       if (this.drag.mode === 'card-resize') {
         const w = Math.max(CARD_MIN_W,
           Math.min(CARD_MAX_W, round1(this.drag.width + (point.x - this.drag.start.x))));
-        this.drag.lastWidth = w;
-        const el = this.dragEl();
-        if (!el) return;
-        // 끌고 있는 동안에는 사각형과 손잡이만 옮긴다. 글자는 놓을 때 다시 그린다 —
-        // 폭이 바뀔 때마다 컬럼마다 글자를 다시 재면 손이 뻑뻑해진다.
-        for (const r of el.querySelectorAll('.erd-card-bg, .erd-card-head, .erd-card-outline')) {
-          r.setAttribute('width', w);
-        }
-        const grip = el.querySelector('.erd-card-grip');
-        if (grip) grip.setAttribute('x', w - 4);
+        this.liveResize(this.drag.key, w);
         return;
       }
       if (this.drag.mode === 'group-resize') {
@@ -810,11 +824,8 @@ export class ErdCanvas {
         return;
       }
       if (drag?.mode === 'card-resize' && drag.lastWidth) {
-        // 로컬 상태를 먼저 갱신한다. 저장 결과가 오기 전에 다시 그려도 카드가
-        // 원래 폭으로 튀지 않게 하기 위해서다(옮기기와 같은 이유).
-        this.doc.layout[drag.key] = {
-          ...(this.doc.layout[drag.key] ?? {}), w: drag.lastWidth,
-        };
+        // 로컬 상태는 끄는 동안 이미 갱신됐다(liveResize). 저장 결과가 오기 전에
+        // 다시 그려도 카드가 원래 폭으로 튀지 않는다.
         this.opts.onTableResize?.(drag.key, drag.lastWidth);
         this.render();
         return;
@@ -1235,6 +1246,58 @@ export class ErdCanvas {
       mode: 'card-resize', key, el: this.svg.querySelector(selector), selector,
       start: p, width: geom.w,
     };
+  }
+
+  // setGripHover는 폭 손잡이에 손이 닿았는지를 표시한다.
+  //
+  // 다시 그리지 않고 클래스만 갈아 끼운다. 마우스가 지나갈 때마다 도면 전체를
+  // 다시 그리면 큰 문서에서 손이 뻑뻑해진다.
+  setGripHover(key) {
+    if (this.gripHover === key) return;
+    const mark = (k, on) => {
+      if (!k) return;
+      this.svg.querySelector(`.erd-card-g[data-key="${cssEscape(k)}"]`)
+        ?.classList.toggle('is-grip-hover', on);
+    };
+    mark(this.gripHover, false);
+    this.gripHover = key;
+    mark(key, true);
+  }
+
+  // liveResize는 끄는 동안의 폭을 그대로 화면에 반영한다.
+  //
+  // 예전에는 사각형의 width 속성만 바꿨다. 그러면 카드는 넓어지는데 컬럼 이름은
+  // 아까 그 폭에 맞춰 자른 그대로여서, 넓히는 내내 "…"이 그대로 남아 있었다 —
+  // 넓히는 이유가 바로 그 "…"을 없애려는 것인데, 놓아 봐야 결과를 알 수 있었다.
+  //
+  // 카드 한 장만 새로 만들어 갈아 끼운다. 프레임당 한 번으로 묶으므로, 컬럼이
+  // 수십 개라도 글자를 다시 재는 일은 한 프레임에 한 번이다.
+  liveResize(key, w) {
+    this.drag.lastWidth = w;
+    this.doc.layout[key] = { ...(this.doc.layout[key] ?? {}), w };
+    if (this.resizeFrame) return;
+    this.resizeFrame = requestAnimationFrame(() => {
+      this.resizeFrame = 0;
+      // 끄는 동안에는 이 카드를 맨 위로 올린다. 넓히다 옆 카드 밑으로 들어가면
+      // 정작 늘어나는 부분이 가려져, 실시간으로 보여 주는 뜻이 없어진다.
+      // 놓으면 render()가 원래 순서로 다시 쌓는다.
+      this.redrawCard(key, { toTop: true });
+      // 관계선도 따라와야 한다. 오른쪽 변이 움직이는데 선이 제자리에 있으면
+      // 선이 카드 안쪽에서 시작하거나 허공에서 시작한다.
+      this.refreshLinks();
+    });
+  }
+
+  // redrawCard는 카드 한 장만 새로 그려 갈아 끼운다.
+  redrawCard(key, { toTop = false } = {}) {
+    const old = this.svg?.querySelector(`.erd-card-g[data-key="${cssEscape(key)}"]`);
+    if (!old) return;
+    const tbl = (this.doc.schema?.tables ?? []).find((t) => tableKey(t) === key);
+    const geom = this.boxes().get(key);
+    if (!tbl || !geom) return;
+    const fresh = this.cardEl(tbl, geom);
+    old.replaceWith(fresh);
+    if (toTop) this.layers?.cards?.appendChild(fresh);
   }
 
   // dragEl은 지금 끌고 있는 요소를 **살아 있는 것으로** 돌려준다.

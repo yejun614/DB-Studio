@@ -39,6 +39,8 @@ const MAX_PIXELS = 16000;
 // 키우고, 벡터 편집기에서 열면 정체를 알 수 없는 도형으로 걸린다.
 const CHROME_ONLY = [
   'erd-group-grip', 'erd-note-grip', 'erd-card-grip', 'erd-link-hit', 'erd-card-outline',
+  // 폭을 끄는 동안 보여 주는 px 숫자.
+  'erd-card-wnote',
   // 마우스를 올렸거나 골라서 잠깐 카드 위로 올려 둔 관계선. 같은 선이 아래
   // 레이어에 이미 있어서 남기면 한 선이 두 번 그려진다.
   'erd-link-temp',
@@ -210,9 +212,12 @@ function buildSVG(canvas, box, background, scope = null) {
   //
   // 떼고 붙이는 사이에 화면이 다시 그려지지는 않는다. 이 함수가 끝날 때까지
   // 브라우저는 그리지 않으므로 사람 눈에는 아무 일도 일어나지 않는다.
+  // 폭 손잡이에 손이 닿은 카드 표시도 같이 뗀다. 남으면 그 카드만 테두리 색이
+  // 다른 그림이 나오고, 받은 사람에게는 "이 표는 왜 다른가"가 된다.
+  const MARKS = ['is-selected', 'is-primary', 'is-grip-hover', 'is-resizing'];
   const marked = [];
-  for (const el of source.querySelectorAll('.is-selected, .is-primary')) {
-    const had = ['is-selected', 'is-primary'].filter((c) => el.classList.contains(c));
+  for (const el of source.querySelectorAll(MARKS.map((c) => `.${c}`).join(', '))) {
+    const had = MARKS.filter((c) => el.classList.contains(c));
     marked.push({ el, had });
     el.classList.remove(...had);
   }

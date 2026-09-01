@@ -2073,6 +2073,20 @@ option { background: var(--surface); color: var(--text); }
 .erd-card-g[style*="--card-accent"] .erd-card-head { fill: var(--card-accent); fill-opacity: 0.22; }
 .erd-card-g[style*="--card-accent"] .erd-card-bg { stroke: var(--card-accent); }
 
+/* 폭 손잡이에 손이 닿았거나 끌고 있는 동안은 테두리 **전체**가 달라진다.
+ *
+ * 손잡이 자신을 밝히지 않는 이유: 8px짜리 막대가 조금 진해지는 것은 카드 테두리
+ * 옆에서 거의 보이지 않고, 무엇이 바뀔지도 말해 주지 않는다. 테두리 전체가 달라지면
+ * "이 카드의 크기를 잡았다"가 한눈에 읽힌다.
+ *
+ * 손이 닿았을 때는 **중립적으로 밝아지기만** 한다. 여기에 강조색을 쓰면 고른
+ * 카드(같은 색 테두리)와 구별되지 않아, 지나가기만 해도 고른 것처럼 보인다.
+ * 강조색은 실제로 끌고 있는 동안에만 쓴다.
+ *
+ * --card-accent 규칙보다 뒤에 두어야 색 있는 카드에서도 달라진다(같은 우선순위). */
+.erd-card-g.is-grip-hover .erd-card-bg { stroke: var(--text-mute); }
+.erd-card-g.is-resizing .erd-card-bg { stroke: var(--chart-1); stroke-width: 1.6; }
+
 /* 그룹 — 테이블 묶음을 감싸는 반투명 사각형 */
 .erd-group-g { cursor: move; --group-accent: hsl(210 85% 60%); }
 .erd-group-bg {
@@ -3732,13 +3746,14 @@ a.stat:hover { border-color: var(--text-mute); background: hsl(var(--h-muted) / 
    카드 높이는 컬럼 수로 정해지는 값이라 사람이 정할 것이 아니다.
    평소에는 보이지 않는다. 카드마다 세로줄이 하나씩 서 있으면 그것이 무엇인지 묻게
    되고, 잡을 자리는 손이 그 위에 갔을 때 알려 주면 된다. */
+/* 폭 손잡이. 보이지 않는 잡는 면적이다 — 손이 닿았다는 신호는 카드 테두리가
+ * 물드는 것으로 한다(.erd-card-g.is-resize). */
 .erd-card-grip {
-  fill: var(--primary);
-  fill-opacity: 0;
+  fill: transparent;
   cursor: ew-resize;
 }
-.erd-card-g:hover .erd-card-grip { fill-opacity: 0.35; }
-.erd-card-grip:hover { fill-opacity: 0.7 !important; }
+/* 끄는 동안 폭을 적어 주는 글자. 카드 밖 오른쪽 아래에 둔다. */
+.erd-card-wnote { fill: var(--chart-1); font: 11px var(--mono); pointer-events: none; }
 
 /* 주석 색. 도형은 currentColor를 쓰므로 색 하나만 정하면 된다. */
 .tint-yellow { color: hsl(45 90% 55%); }
