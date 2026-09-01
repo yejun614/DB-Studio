@@ -286,6 +286,29 @@ function paintAndSerialize(source, box, background, scope = null) {
   return new XMLSerializer().serializeToString(clone);
 }
 
+/**
+ * withTheme는 잠깐 다른 테마로 바꿔 놓고 함수를 돌린다.
+ *
+ * 그림의 색은 화면에서 **계산된 값을 읽어 박는** 방식이라, 다른 테마로 내보내려면
+ * 화면을 잠깐 그 테마로 만들어야 한다. 색 이름을 따로 표로 들고 있는 방법도 있지만,
+ * 그러면 app.css를 고친 사람이 이 표를 잊고 "내보낸 그림만 색이 다르다"가 된다.
+ *
+ * 읽고 되돌리는 사이에 화면이 다시 그려지지는 않는다. 모두 같은 동기 블록 안에서
+ * 일어나므로 브라우저는 그 사이에 그리지 않고, 사람 눈에는 아무 일도 없다.
+ */
+function withTheme(mode, fn) {
+  if (!mode) return fn();
+  const root = document.documentElement;
+  const had = root.getAttribute('data-theme');
+  root.setAttribute('data-theme', mode);
+  try {
+    return fn();
+  } finally {
+    if (had === null) root.removeAttribute('data-theme');
+    else root.setAttribute('data-theme', had);
+  }
+}
+
 // rasterize는 SVG를 픽셀 그림으로 굽는다.
 async function rasterize(svgText, box, { scale, mime, background }) {
   const width = Math.round(box.w * scale);
@@ -420,6 +443,21 @@ export function openImageExportDialog(canvas, docName) {
   ], { value: '2' });
   const bgBox = checkbox('배경 채우기', { checked: true });
   const sizeNote = h('p.field-help');
+  // 테마. 지금 화면을 그대로 쓰거나, 어느 쪽이든 골라 낼 수 있다.
+  //
+  // 필요한 이유: 다크 테마로 보며 일하다가 밝은 문서에 붙이면 검은 덩어리가 되고,
+  // 반대도 마찬가지다. 붙일 곳의 색을 아는 사람은 여기서 고르면 그만이다.
+  const themeSelect = select([
+    { value: '', label: '지금 화면과 같게' },
+    { value: 'light', label: '라이트 — 흰 배경 문서에 붙일 때' },
+    { value: 'dark', label: '다크 — 어두운 발표 자료에 붙일 때' },
+  ], { value: '' });
+
+  // 미리보기. 내보내기는 되돌릴 수 없는 일은 아니지만, 배경·테마·범위를 잘못 골라
+  // 받은 파일은 열어 보고서야 알게 되고 그때마다 창을 다시 열어야 한다.
+  const previewImg = h('img.export-preview-img', { alt: '' });
+  const previewNote = h('span.export-preview-note');
+  const previewBox = h('div.export-preview', {}, previewImg, previewNote);
 
   const refresh = () => {
     // 범위가 바뀌면 담을 사각형이 달라진다. 크기 안내가 옛 값을 말하면 사람은
@@ -428,28 +466,35 @@ export function openImageExportDialog(canvas, docName) {
     box = diagramBounds(canvas, 40, scope);
     groupField.hidden = scopeSelect.value !== SCOPES.group;
     if (scopeSelect.value === SCOPES.group) {
-      scopeHelp.textContent = '묶음 사각형 안에 중심이 든 것을 담습니다(조금 삐져나와도 '
-        + '통째로 들어갑니다). 관계선은 양쪽 표가 모두 담겨야 그려집니다.';
+      scopeHelp.textContent = '묶음 안에 들어온 표와 메모를 담습니다. 테두리에 조금 걸친 '
+        + '표도 잘리지 않고 통째로 들어갑니다.';
     } else if (scopeSelect.value === SCOPES.marks) {
-      scopeHelp.textContent = '관계선은 양쪽 표가 모두 담겨야 그려집니다 — 한쪽만 담기면 '
-        + '선이 빈 곳으로 뻗습니다. 묶음을 골랐다면 그 안에 든 것까지 담깁니다.';
+      scopeHelp.textContent = '골라 둔 것만 담습니다. 관계선은 양쪽 표가 함께 담길 때만 '
+        + '그려집니다.';
     } else {
       scopeHelp.textContent = '';
     }
     scopeHelp.hidden = !scopeHelp.textContent;
-    const counted = scopeCount(scope);
-    if (!counted) {
-      scopeNote.textContent = '';
-    } else if (counted.tables + counted.notes + counted.groups === 0) {
-      scopeNote.textContent = '이 범위에 든 것이 없습니다. 빈 그림이 됩니다.';
+    // 전체에서도 센다. 범위를 바꿀 때만 줄이 나타나면 아래 고르개가 위아래로
+    // 밀려, 누르려던 것을 놓친다.
+    const counted = scopeCount(scope) ?? {
+      tables: canvas.boxes().size,
+      notes: (canvas.doc.notes ?? []).length,
+      groups: (canvas.doc.groups ?? []).length,
+      links: (canvas.linkSpots ?? new Map()).size,
+    };
+    const links = scope ? scope.links.size : counted.links;
+    if (counted.tables + counted.notes + counted.groups === 0) {
+      scopeNote.textContent = '담을 것이 없습니다. 지금 내보내면 빈 그림이 나옵니다.';
     } else {
       const parts = [];
       if (counted.tables) parts.push(`표 ${counted.tables}개`);
       if (counted.notes) parts.push(`메모 ${counted.notes}개`);
       if (counted.groups) parts.push(`묶음 ${counted.groups}개`);
-      scopeNote.textContent = `담깁니다: ${parts.join(' · ')}`
-        + (scope.links.size ? ` · 관계선 ${scope.links.size}개` : ' · 관계선 없음');
+      if (links) parts.push(`관계선 ${links}개`);
+      scopeNote.textContent = `이 그림에 담기는 것: ${parts.join(' · ')}`;
     }
+    scopeNote.hidden = !scopeNote.textContent;
 
     const format = formatSelect.value;
     const vector = format === 'svg';
@@ -465,30 +510,72 @@ export function openImageExportDialog(canvas, docName) {
       ? `${box.w} × ${box.h} — 벡터라 배율이 필요 없습니다`
       : `${w} × ${hh} 픽셀`
         + (Math.max(w, hh) > MAX_PIXELS ? ' — 너무 큽니다. 배율을 낮추세요.' : '');
+    // 투명 배경일 때는 뒤에 체크무늬를 깔아 준다. 미리보기 판의 색을 그대로 두면
+    // 투명한 그림과 그 색으로 채운 그림을 구별할 수 없다.
+    previewBox.classList.toggle('is-alpha', !bgInput.checked && format !== 'jpg');
+    schedulePreview();
+  };
+
+  // makeSVG는 지금 고른 설정으로 그림 문자열을 만든다. 미리보기와 내보내기가
+  // **같은 함수**를 쓴다 — 다르면 미리보기는 미리보기가 아니다.
+  const makeSVG = () => withTheme(themeSelect.value, () => {
+    const wantBg = bgBox.querySelector('input').checked;
+    const background = wantBg ? canvasBackground(canvas) : '';
+    return { svgText: buildSVG(canvas, box, background, scope), background };
+  });
+
+  // 미리보기는 한 박자 늦게 만든다. 고르개를 연달아 바꿀 때마다 도면 전체의
+  // 계산된 스타일을 다시 읽으면 창이 뻑뻑해진다.
+  let previewTimer = 0;
+  const schedulePreview = () => {
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(() => {
+      const empty = scope && scope.tables.size + scope.notes.size + scope.groups.size === 0;
+      if (empty) {
+        previewImg.removeAttribute('src');
+        previewImg.hidden = true;
+        previewNote.textContent = '담을 것이 없습니다';
+        return;
+      }
+      try {
+        const { svgText } = makeSVG();
+        previewImg.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgText)}`;
+        previewImg.hidden = false;
+        previewNote.textContent = '';
+      } catch (err) {
+        previewImg.hidden = true;
+        previewNote.textContent = `미리보기를 만들지 못했습니다: ${err.message}`;
+      }
+    }, 120);
   };
   formatSelect.addEventListener('change', refresh);
   scaleSelect.addEventListener('change', refresh);
   scopeSelect.addEventListener('change', refresh);
   groupSelect.addEventListener('change', refresh);
+  themeSelect.addEventListener('change', refresh);
+  bgBox.addEventListener('change', refresh);
   refresh();
 
   openModal({
     title: '사진으로 내보내기',
-    width: 520,
+    width: 620,
+    onClose: () => clearTimeout(previewTimer),
     body: () => [
+      previewBox,
       field('범위', scopeSelect),
       groupField,
       scopeNote,
       scopeHelp,
+      markCount ? null : h('p.field-help', {},
+        '표·메모·묶음을 먼저 골라 두면 "고른 것만"을 고를 수 있습니다. Shift(또는 Ctrl)를 '
+        + '누르고 클릭하거나, 빈 곳을 끌어 훑으세요.'),
+      field('테마', themeSelect),
       field('형식', formatSelect),
       field('배율', scaleSelect),
       h('div.field', {}, bgBox, sizeNote),
       h('p.field-help', {},
-        '지금 보고 있는 화면이 아니라 고른 범위 전체를 담습니다 — 화면 밖에 있어도 '
-        + '들어갑니다. 고른 표시와 다른 사람의 커서는 빠집니다.'),
-      markCount ? null : h('p.field-help', {},
-        '표·메모·묶음을 골라 두면 "고른 것만" 내보낼 수 있습니다(Shift 또는 Ctrl '
-        + '누르고 클릭, 또는 빈 곳을 끌어 훑기).'),
+        '보고 있는 화면이 아니라 고른 범위 전체가 들어갑니다 — 화면 밖에 있는 표도 '
+        + '담깁니다. 고른 표시와 다른 사람의 커서는 빠집니다.'),
       h('p.field-help', {},
         '글꼴은 그림에 담지 않습니다(4MB가 넘습니다). 이 글꼴이 없는 컴퓨터에서 열면 '
         + '비슷한 글꼴로 그려집니다.'),
@@ -508,18 +595,17 @@ export function openImageExportDialog(canvas, docName) {
             toast('이 범위에 든 것이 없습니다', 'error');
             return;
           }
-          const wantBg = bgBox.querySelector('input').checked;
-          const background = wantBg ? canvasBackground(canvas) : '';
           // 파일 이름에 범위를 적는다. 같은 설계에서 부분만 몇 장 내보내면
           // 이름이 같아 어느 것이 무엇인지 알 수 없다.
           const tag = scopeSelect.value === SCOPES.group
             ? safeName(groupSelect.options[groupSelect.selectedIndex]?.text ?? '묶음')
             : (scopeSelect.value === SCOPES.marks ? `선택${markCount}개` : '');
-          const name = [safeName(docName), tag, fileStamp()].filter(Boolean).join('_');
+          const name = [safeName(docName), tag, themeSelect.value, fileStamp()]
+            .filter(Boolean).join('_');
           const btn = e.currentTarget;
           btn.disabled = true;
           try {
-            const svgText = buildSVG(canvas, box, background, scope);
+            const { svgText, background } = makeSVG();
             if (format === 'svg') {
               saveBlob(new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' }), `${name}.svg`);
             } else {

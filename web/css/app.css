@@ -727,6 +727,34 @@ option { background: var(--surface); color: var(--text); }
 }
 .modal-message { margin: 0; color: var(--text-dim); line-height: 1.6; font-size: 13.5px; }
 
+/* 그림 내보내기 미리보기.
+ *
+ * 높이를 정해 두는 이유: 도면은 세로로 길 수도 가로로 길 수도 있는데, 그림에 맞춰
+ * 창이 늘었다 줄었다 하면 아래 고르개의 자리가 매번 달라져 누르려던 것을 놓친다. */
+.export-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 170px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  overflow: hidden;
+}
+/* 투명 배경으로 내보낼 때 깔리는 체크무늬. 판의 색을 그대로 두면 "투명한 그림"과
+ * "그 색으로 채운 그림"을 미리보기에서 구별할 수 없다. */
+.export-preview.is-alpha {
+  background-color: hsl(0 0% 55%);
+  background-image:
+    linear-gradient(45deg, hsl(0 0% 45%) 25%, transparent 25%, transparent 75%, hsl(0 0% 45%) 75%),
+    linear-gradient(45deg, hsl(0 0% 45%) 25%, transparent 25%, transparent 75%, hsl(0 0% 45%) 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 8px 8px;
+}
+.export-preview-img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.export-preview-note { font-size: 12.5px; color: var(--text-mute); }
+
 .modal-foot {
   display: flex;
   justify-content: flex-end;
