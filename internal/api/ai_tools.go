@@ -295,6 +295,9 @@ func aiTools() map[string]*aiTool {
 	// 계속 길어지면 무엇이 있는지 훑는 것 자체가 일이 된다.
 	list = append(list, dataTools()...)
 	list = append(list, infraTools()...)
+	// ERD 초안을 고치는 툴. ERD 화면 안의 대화가 쓰는 것과 **같은 구현**이고,
+	// 여기서는 "어느 초안인가"(document)를 인자로 받는다(ai_tools_erddoc.go).
+	list = append(list, erdDocTools()...)
 
 	out := make(map[string]*aiTool, len(list))
 	for _, t := range list {
