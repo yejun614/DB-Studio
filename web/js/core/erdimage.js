@@ -46,12 +46,106 @@ const CHROME_ONLY = [
   'erd-card-holder', 'erd-cursor', 'erd-hint',
 ];
 
-// diagramBounds는 그림 전체(테이블·메모·묶음)를 감싸는 사각형이다.
+// 내보낼 범위. 도면 하나를 다 담는 것만이 답이 아니다 — 표 쉰 개짜리 설계에서
+// 지금 이야기하고 있는 세 개만 붙이고 싶을 때가 훨씬 많다.
+export const SCOPES = { all: 'all', marks: 'marks', group: 'group' };
+
+function groupRect(g) {
+  return { x: g.x, y: g.y, w: g.w || 320, h: g.h || 240 };
+}
+
+function noteRect(n) {
+  return { x: n.x, y: n.y, w: n.w || 200, h: n.h || 80 };
+}
+
+// centerIn은 상자의 **중심**이 사각형 안에 드는지다.
 //
-// 지금 보고 있는 화면이 아니라 전체인 이유: 내보내기는 "이 설계를 그림으로 남긴다"는
-// 뜻이지 "지금 화면을 찍는다"가 아니다. 화면 밖의 테이블이 잘려 나가면 그 사실을
-// 파일을 열어 보고서야 알게 된다.
-export function diagramBounds(canvas, pad = 40) {
+// 묶음은 그냥 사각형이고 무엇이 자기 것인지 모른다. 그래서 "안에 있는가"를 자리로
+// 정해야 한다. 걸치기만 해도 넣으면 가장자리에 살짝 닿은 표까지 들어오고, 완전히
+// 든 것만 넣으면 조금 삐져나온 표가 빠진다 — 둘 다 눈으로 본 것과 다르다.
+// 중심으로 정하면 사람이 "이건 이 묶음 안이다"라고 보는 것과 거의 같다.
+// 삐져나온 부분이 잘릴 걱정도 없다. 범위는 든 것들의 실제 크기로 다시 재기 때문이다.
+function centerIn(rect, b) {
+  const cx = b.x + b.w / 2;
+  const cy = b.y + b.h / 2;
+  return cx >= rect.x && cx <= rect.x + rect.w && cy >= rect.y && cy <= rect.y + rect.h;
+}
+
+/**
+ * exportScope는 내보낼 요소의 목록이다. null 이면 "전부"다.
+ *
+ * null 을 쓰는 이유: 전체 내보내기는 아무것도 거르지 않는 길로 그대로 돌아야 한다.
+ * 빈 목록과 "제한 없음"을 같은 것으로 두면 언젠가 빈 그림이 나온다.
+ */
+export function exportScope(canvas, scope, groupId) {
+  if (scope !== SCOPES.marks && scope !== SCOPES.group) return null;
+
+  const tables = new Set();
+  const notes = new Set();
+  const groups = new Set();
+  const boxes = canvas.boxes();
+
+  const addInside = (rect) => {
+    for (const [key, b] of boxes) if (centerIn(rect, b)) tables.add(key);
+    for (const n of canvas.doc.notes ?? []) if (centerIn(rect, noteRect(n))) notes.add(n.id);
+    // 묶음 안의 묶음도 함께 담는다.
+    for (const g of canvas.doc.groups ?? []) if (centerIn(rect, groupRect(g))) groups.add(g.id);
+  };
+  const findGroup = (id) => (canvas.doc.groups ?? []).find((g) => g.id === id);
+
+  if (scope === SCOPES.group) {
+    const g = findGroup(groupId);
+    if (!g) return null;
+    groups.add(g.id);
+    addInside(groupRect(g));
+  } else {
+    for (const m of canvas.marks ?? []) {
+      if (m.kind === 'table') tables.add(m.id);
+      else if (m.kind === 'note') notes.add(m.id);
+      else if (m.kind === 'group') {
+        groups.add(m.id);
+        // 묶음을 골랐다면 그 안에 든 것까지 뜻한 것이다. 사각형만 나오면
+        // 빈 테두리 하나가 그림이 된다.
+        const g = findGroup(m.id);
+        if (g) addInside(groupRect(g));
+      }
+    }
+  }
+
+  // 관계선은 **양쪽이 다 들어야** 남긴다. 한쪽만 들면 선이 빈 곳으로 뻗어 나가고,
+  // 그림을 받은 사람은 잘려 나간 표가 있다고 읽는다.
+  const links = new Set();
+  for (const [fkID, r] of canvas.linkSpots ?? []) {
+    if (tables.has(r.fromKey) && tables.has(r.toKey)) links.add(fkID);
+  }
+  return {
+    tables, notes, groups, links,
+  };
+}
+
+// scopeCount는 이 범위에 몇 개가 들었는지다. 누르기 전에 보여 주려고 쓴다.
+export function scopeCount(scope) {
+  if (!scope) return null;
+  return { tables: scope.tables.size, notes: scope.notes.size, groups: scope.groups.size };
+}
+
+// outOfScope는 이 요소가 내보낼 범위 밖인지다.
+function outOfScope(el, scope) {
+  const d = el.dataset;
+  if (!d) return false;
+  if (d.key !== undefined) return !scope.tables.has(d.key);
+  if (d.note !== undefined) return !scope.notes.has(d.note);
+  if (d.group !== undefined) return !scope.groups.has(d.group);
+  if (d.fk !== undefined) return !scope.links.has(d.fk);
+  return false;
+}
+
+// diagramBounds는 그림에 담을 것들을 감싸는 사각형이다.
+//
+// 지금 보고 있는 화면이 아닌 이유: 내보내기는 "이 설계를 그림으로 남긴다"는 뜻이지
+// "지금 화면을 찍는다"가 아니다. 화면 밖의 테이블이 잘려 나가면 그 사실을 파일을
+// 열어 보고서야 알게 된다.
+export function diagramBounds(canvas, pad = 40, scope = null) {
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
@@ -62,17 +156,36 @@ export function diagramBounds(canvas, pad = 40) {
     maxX = Math.max(maxX, x + w);
     maxY = Math.max(maxY, y + hh);
   };
-  for (const b of canvas.boxes().values()) put(b.x, b.y, b.w, b.h);
-  for (const n of canvas.doc.notes ?? []) put(n.x, n.y, n.w || 200, n.h || 80);
-  for (const g of canvas.doc.groups ?? []) put(g.x, g.y, g.w || 320, g.h || 240);
+  for (const [key, b] of canvas.boxes()) {
+    if (scope && !scope.tables.has(key)) continue;
+    put(b.x, b.y, b.w, b.h);
+  }
+  for (const n of canvas.doc.notes ?? []) {
+    if (scope && !scope.notes.has(n.id)) continue;
+    put(n.x, n.y, n.w || 200, n.h || 80);
+  }
+  for (const g of canvas.doc.groups ?? []) {
+    if (scope && !scope.groups.has(g.id)) continue;
+    put(g.x, g.y, g.w || 320, g.h || 240);
+  }
   // 관계선도 센다. 길찾기가 카드를 피해 돌아가면 선은 카드 밖으로 나간다 —
   // 카드만 보고 자르면 돌아간 부분이 잘려 나가, 그림만 받은 사람에게는 선이
   // 허공에서 끊긴 것으로 보인다.
   const links = canvas.svg?.querySelector('.erd-layer-links');
   if (links?.firstChild) {
     try {
-      const bb = links.getBBox();
-      if (bb.width || bb.height) put(bb.x, bb.y, bb.width, bb.height);
+      if (scope) {
+        // 범위를 골랐으면 남는 선만 센다. 레이어 전체를 재면 빠질 선까지 담아
+        // 그림에 아무것도 없는 여백이 생긴다.
+        for (const el of links.querySelectorAll('.erd-link[data-fk]')) {
+          if (!scope.links.has(el.dataset.fk)) continue;
+          const bb = el.getBBox();
+          if (bb.width || bb.height) put(bb.x, bb.y, bb.width, bb.height);
+        }
+      } else {
+        const bb = links.getBBox();
+        if (bb.width || bb.height) put(bb.x, bb.y, bb.width, bb.height);
+      }
     } catch { /* 화면에 붙어 있지 않으면 getBBox가 안 된다 */ }
   }
   if (minX === Infinity) return { x: 0, y: 0, w: 400, h: 300 };
@@ -85,7 +198,7 @@ export function diagramBounds(canvas, pad = 40) {
 }
 
 // buildSVG는 혼자서도 같은 그림이 되는 SVG 문자열을 만든다.
-function buildSVG(canvas, box, background) {
+function buildSVG(canvas, box, background, scope = null) {
   const source = canvas.svg;
 
   // "고른 표시"는 화면에서 **잠깐 떼고** 읽는다.
@@ -104,14 +217,14 @@ function buildSVG(canvas, box, background) {
     el.classList.remove(...had);
   }
   try {
-    return paintAndSerialize(source, box, background);
+    return paintAndSerialize(source, box, background, scope);
   } finally {
     for (const { el, had } of marked) el.classList.add(...had);
   }
 }
 
 // paintAndSerialize는 계산된 값을 박아 넣고 문자열로 만든다.
-function paintAndSerialize(source, box, background) {
+function paintAndSerialize(source, box, background, scope = null) {
   const clone = source.cloneNode(true);
 
   // 계산된 값을 요소마다 박는다. 원본과 사본은 같은 순서로 훑을 수 있다
@@ -147,6 +260,7 @@ function paintAndSerialize(source, box, background) {
     const classes = from[i].classList;
     if (!classes) continue;
     if (CHROME_ONLY.some((name) => classes.contains(name))) drop.push(to[i]);
+    else if (scope && outOfScope(from[i], scope)) drop.push(to[i]);
   }
   for (const el of drop) el.remove();
 
@@ -255,7 +369,39 @@ function behindColor(el) {
 
 // openImageExportDialog는 형식·배율을 고르는 창을 연다.
 export function openImageExportDialog(canvas, docName) {
-  const box = diagramBounds(canvas);
+  // 고를 수 있는 범위만 목록에 넣는다. 고른 것이 없는데 "고른 것만"이 보이면
+  // 눌러 보고서야 안 되는 것을 알게 된다.
+  const groups = (canvas.doc.groups ?? []).filter((g) => g?.id);
+  const marks = canvas.marks ?? [];
+  const markCount = marks.filter((m) => m.kind !== 'link').length;
+  const pickedGroup = marks.find((m) => m.kind === 'group');
+
+  const scopeOptions = [{ value: SCOPES.all, label: '전체 — 이 설계에 있는 모든 것' }];
+  if (markCount) {
+    scopeOptions.push({ value: SCOPES.marks, label: `고른 것만 — ${markCount}개` });
+  }
+  if (groups.length) {
+    scopeOptions.push({ value: SCOPES.group, label: '묶음 하나 — 그 안에 든 것까지' });
+  }
+  // 기본은 언제나 전체다.
+  //
+  // 골라 둔 것이 있으면 그것을 기본으로 하고 싶어지지만, 두 실수의 무게가 다르다.
+  // 전체를 받았는데 일부만 원했다면 그 자리에서 알아채고 다시 하면 된다. 반대로
+  // 일부만 받았는데 전체로 알았다면 파일을 남에게 보낸 뒤에 알게 된다.
+  // 골라 둔 묶음은 아래 묶음 칸에 미리 채워 두므로, 한 번 고르면 그만이다.
+  const scopeSelect = select(scopeOptions, { value: SCOPES.all });
+  const groupSelect = select(groups.map((g, i) => ({
+    value: g.id, label: (g.label ?? '').trim() || `이름 없는 묶음 ${i + 1}`,
+  })), { value: pickedGroup?.id ?? groups[0]?.id });
+  const groupField = field('묶음', groupSelect);
+  const scopeNote = h('p.field-help');
+  // 범위마다 알아야 할 것이 다르다. 셋을 다 적어 두면 창이 설명서가 되고, 설명서가
+  // 된 창은 아무도 읽지 않는다.
+  const scopeHelp = h('p.field-help');
+
+  let scope = null;
+  let box = diagramBounds(canvas);
+
   const formatSelect = select([
     { value: 'png', label: 'PNG — 투명 배경을 쓸 수 있습니다' },
     { value: 'svg', label: 'SVG — 벡터, 확대해도 또렷합니다' },
@@ -271,6 +417,35 @@ export function openImageExportDialog(canvas, docName) {
   const sizeNote = h('p.field-help');
 
   const refresh = () => {
+    // 범위가 바뀌면 담을 사각형이 달라진다. 크기 안내가 옛 값을 말하면 사람은
+    // 그 값을 믿고 배율을 정한다.
+    scope = exportScope(canvas, scopeSelect.value, groupSelect.value);
+    box = diagramBounds(canvas, 40, scope);
+    groupField.hidden = scopeSelect.value !== SCOPES.group;
+    if (scopeSelect.value === SCOPES.group) {
+      scopeHelp.textContent = '묶음 사각형 안에 중심이 든 것을 담습니다(조금 삐져나와도 '
+        + '통째로 들어갑니다). 관계선은 양쪽 표가 모두 담겨야 그려집니다.';
+    } else if (scopeSelect.value === SCOPES.marks) {
+      scopeHelp.textContent = '관계선은 양쪽 표가 모두 담겨야 그려집니다 — 한쪽만 담기면 '
+        + '선이 빈 곳으로 뻗습니다. 묶음을 골랐다면 그 안에 든 것까지 담깁니다.';
+    } else {
+      scopeHelp.textContent = '';
+    }
+    scopeHelp.hidden = !scopeHelp.textContent;
+    const counted = scopeCount(scope);
+    if (!counted) {
+      scopeNote.textContent = '';
+    } else if (counted.tables + counted.notes + counted.groups === 0) {
+      scopeNote.textContent = '이 범위에 든 것이 없습니다. 빈 그림이 됩니다.';
+    } else {
+      const parts = [];
+      if (counted.tables) parts.push(`표 ${counted.tables}개`);
+      if (counted.notes) parts.push(`메모 ${counted.notes}개`);
+      if (counted.groups) parts.push(`묶음 ${counted.groups}개`);
+      scopeNote.textContent = `담깁니다: ${parts.join(' · ')}`
+        + (scope.links.size ? ` · 관계선 ${scope.links.size}개` : ' · 관계선 없음');
+    }
+
     const format = formatSelect.value;
     const vector = format === 'svg';
     scaleSelect.disabled = vector;
@@ -288,18 +463,27 @@ export function openImageExportDialog(canvas, docName) {
   };
   formatSelect.addEventListener('change', refresh);
   scaleSelect.addEventListener('change', refresh);
+  scopeSelect.addEventListener('change', refresh);
+  groupSelect.addEventListener('change', refresh);
   refresh();
 
   openModal({
     title: '사진으로 내보내기',
     width: 520,
     body: () => [
+      field('범위', scopeSelect),
+      groupField,
+      scopeNote,
+      scopeHelp,
       field('형식', formatSelect),
       field('배율', scaleSelect),
       h('div.field', {}, bgBox, sizeNote),
       h('p.field-help', {},
-        '지금 보고 있는 화면이 아니라 그림 전체를 담습니다. 고른 표시와 다른 사람의 '
-        + '커서는 빠집니다.'),
+        '지금 보고 있는 화면이 아니라 고른 범위 전체를 담습니다 — 화면 밖에 있어도 '
+        + '들어갑니다. 고른 표시와 다른 사람의 커서는 빠집니다.'),
+      markCount ? null : h('p.field-help', {},
+        '표·메모·묶음을 골라 두면 "고른 것만" 내보낼 수 있습니다(Shift 또는 Ctrl '
+        + '누르고 클릭, 또는 빈 곳을 끌어 훑기).'),
       h('p.field-help', {},
         '글꼴은 그림에 담지 않습니다(4MB가 넘습니다). 이 글꼴이 없는 컴퓨터에서 열면 '
         + '비슷한 글꼴로 그려집니다.'),
@@ -315,13 +499,22 @@ export function openImageExportDialog(canvas, docName) {
             toast('그림이 너무 큽니다. 배율을 낮추세요', 'error');
             return;
           }
+          if (scope && scope.tables.size + scope.notes.size + scope.groups.size === 0) {
+            toast('이 범위에 든 것이 없습니다', 'error');
+            return;
+          }
           const wantBg = bgBox.querySelector('input').checked;
           const background = wantBg ? canvasBackground(canvas) : '';
-          const name = `${safeName(docName)}_${fileStamp()}`;
+          // 파일 이름에 범위를 적는다. 같은 설계에서 부분만 몇 장 내보내면
+          // 이름이 같아 어느 것이 무엇인지 알 수 없다.
+          const tag = scopeSelect.value === SCOPES.group
+            ? safeName(groupSelect.options[groupSelect.selectedIndex]?.text ?? '묶음')
+            : (scopeSelect.value === SCOPES.marks ? `선택${markCount}개` : '');
+          const name = [safeName(docName), tag, fileStamp()].filter(Boolean).join('_');
           const btn = e.currentTarget;
           btn.disabled = true;
           try {
-            const svgText = buildSVG(canvas, box, background);
+            const svgText = buildSVG(canvas, box, background, scope);
             if (format === 'svg') {
               saveBlob(new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' }), `${name}.svg`);
             } else {

@@ -318,11 +318,14 @@ export class ErdCanvas {
         class: fkClass, d: r.d, 'data-fk': fkID,
       }));
       // 참조하는 쪽(다수)에 점, 참조되는 쪽(하나)에 짧은 막대를 둔다.
+      // 끝 표식에도 data-fk 를 단다. 그림을 범위만 골라 내보낼 때 어느 선의
+      // 조각인지 알아야 함께 빠진다 — 선만 빠지고 점이 남으면 아무 데도 닿지
+      // 않는 점 하나가 그림에 남는다.
       this.layers.links.appendChild(svgEl('circle', {
-        class: 'erd-link-many', cx: r.a.x, cy: r.a.y, r: 3.5,
+        class: 'erd-link-many', 'data-fk': fkID, cx: r.a.x, cy: r.a.y, r: 3.5,
       }));
       this.layers.links.appendChild(svgEl('rect', {
-        class: 'erd-link-one', ...oneMarker(r.b, r.sb),
+        class: 'erd-link-one', 'data-fk': fkID, ...oneMarker(r.b, r.sb),
       }));
       this.linkSpots.set(fkID, r);
     }
@@ -359,7 +362,9 @@ export class ErdCanvas {
       const temp = r.blocked ? '' : ' erd-link-temp';
       // 배경색 테두리를 먼저 깐다. 이것이 없으면 카드 글자 위에 선이 겹쳐
       // 둘 다 못 읽는다.
-      layer.appendChild(svgEl('path', { class: `erd-link-halo${temp}`, d: r.d }));
+      layer.appendChild(svgEl('path', {
+        class: `erd-link-halo${temp}`, 'data-fk': fkID, d: r.d,
+      }));
       layer.appendChild(svgEl('path', {
         class: `erd-link is-lifted${r.blocked ? ' is-over' : ''}`
           + `${this.isSelected('link', fkID) ? ' is-selected' : ''}${temp}`,
