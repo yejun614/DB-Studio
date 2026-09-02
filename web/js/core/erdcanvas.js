@@ -52,6 +52,18 @@ const HEAD_H = 34;
 const TITLE_Y = 22;
 const TITLE_Y_2 = 16;
 const SUB_Y = 27;
+// 아이콘과 컬럼 수는 **제목 줄이 아니라 글자 덩어리 전체**의 가운데에 선다.
+//
+// 제목 기준선에 맞추면 두 줄일 때 위로 치우친다. 이름 아래에 물리명이 한 줄 더
+// 붙으면 사람 눈에 머리글의 중심은 그 두 줄의 가운데(17 남짓)로 내려가는데,
+// 아이콘과 개수는 위 줄에 매달려 5px 가까이 높이 남는다. 그 둘은 어느 한 줄의
+// 것이 아니라 이 표의 것이라, 덩어리를 기준으로 서는 편이 맞다.
+// 13px 아이콘의 위 좌표(가운데 = 여기 + 6.5)와, 컬럼 수·N:N 표시의 기준선이다.
+// 한 줄일 때도 제목 기준선에서 계산하지 않고 적어 둔다 — 계산식으로 두면 두
+// 경우가 서로 다른 규칙을 따르는 것처럼 보이는데, 규칙은 하나다(덩어리 가운데).
+const MARK_Y = 12;
+const MARK_Y_2 = 11;
+const META_Y_2 = 21;
 const ROW_H = 20;
 const CARD_PAD = 8;
 
@@ -519,13 +531,14 @@ export class ErdCanvas {
     // 제목 기준선은 줄 수에 따라 다르다. 아이콘·컬럼 수·N:N 표시가 모두 이 줄에
     // 맞춰야 한다 — 하나만 머리글 가운데에 남으면 그것만 어긋나 보인다.
     const titleY = sub ? TITLE_Y_2 : TITLE_Y;
+    // 아이콘 위 좌표와 오른쪽 표시(컬럼 수·N:N)의 기준선.
+    const markY = sub ? MARK_Y_2 : MARK_Y;
+    const metaY = sub ? META_Y_2 : TITLE_Y;
     let titleX = 10;
     if (iconName) {
       const mark = icon(iconName, 13);
       mark.setAttribute('x', 9);
-      // 13px 아이콘의 가운데를 제목 기준선보다 조금 위에 둔다(글자는 기준선
-      // 위로 올라가고 아래로는 거의 내려오지 않는다).
-      mark.setAttribute('y', titleY - 9);
+      mark.setAttribute('y', markY);
       mark.classList.add('erd-card-icon');
       g.appendChild(mark);
       titleX = 28;
@@ -554,7 +567,7 @@ export class ErdCanvas {
     // N:N 으로 잇는다"이고, 그것은 이 표의 성질이다.
     if (isJunction(tbl)) {
       g.appendChild(svgEl('text', {
-        class: 'erd-card-nn', x: geom.w - PAD_R - 14, y: titleY,
+        class: 'erd-card-nn', x: geom.w - PAD_R - 14, y: metaY,
         'text-anchor': 'end',
       }, 'N:N'));
     }
@@ -571,7 +584,7 @@ export class ErdCanvas {
 
     const count = tbl.columns?.length ?? 0;
     g.appendChild(svgEl('text', {
-      class: 'erd-card-count', x: geom.w - 10, y: titleY, 'text-anchor': 'end',
+      class: 'erd-card-count', x: geom.w - 10, y: metaY, 'text-anchor': 'end',
     }, `${count}`));
 
     if (!geom.layout.collapsed) {
