@@ -147,6 +147,26 @@ type openaiToolFunctionDef struct {
 	Parameters  map[string]any `json:"parameters"`
 }
 
+// openaiTools는 툴 정의를 function 규약으로 옮긴다.
+//
+// Ollama 네이티브 API도 툴 정의만은 같은 모양을 쓰므로 두 어댑터가 함께 쓴다.
+func openaiTools(list []Tool) []openaiTool {
+	tools := make([]openaiTool, 0, len(list))
+	for _, t := range list {
+		params := t.Schema
+		if params == nil {
+			params = map[string]any{"type": "object", "properties": map[string]any{}}
+		}
+		tools = append(tools, openaiTool{
+			Type: "function",
+			Function: openaiToolFunctionDef{
+				Name: t.Name, Description: t.Description, Parameters: params,
+			},
+		})
+	}
+	return tools
+}
+
 // toOpenAI는 정규화된 메시지를 OpenAI 형식으로 바꾼다.
 func toOpenAI(system string, messages []Message) []openaiMessage {
 	out := []openaiMessage{}
@@ -202,19 +222,7 @@ func (p *openaiProvider) Stream(ctx context.Context, cfg Config, req Request) (<
 	if model == "" {
 		model = cfg.Model
 	}
-	tools := make([]openaiTool, 0, len(req.Tools))
-	for _, t := range req.Tools {
-		params := t.Schema
-		if params == nil {
-			params = map[string]any{"type": "object", "properties": map[string]any{}}
-		}
-		tools = append(tools, openaiTool{
-			Type: "function",
-			Function: openaiToolFunctionDef{
-				Name: t.Name, Description: t.Description, Parameters: params,
-			},
-		})
-	}
+	tools := openaiTools(req.Tools)
 
 	body := openaiRequest{
 		Model: model, Messages: toOpenAI(req.System, req.Messages), Tools: tools,

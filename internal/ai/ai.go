@@ -28,10 +28,15 @@ const (
 	Anthropic Kind = "anthropic"
 	// OpenAICompatible은 /v1/chat/completions 규약을 따르는 모든 엔드포인트다.
 	OpenAICompatible Kind = "openai"
+	// Ollama는 Ollama의 네이티브 API(/api/chat)다. 로컬과 Cloud 둘 다 같은 규약이다.
+	//
+	// OpenAI 호환으로도 붙을 수 있는데 따로 두는 이유는 ollama.go 머리에 적어 두었다 —
+	// 한마디로 컨텍스트 크기(num_ctx)를 정할 수 있느냐의 차이다.
+	Ollama Kind = "ollama"
 )
 
 func (k Kind) Valid() bool {
-	return k == Anthropic || k == OpenAICompatible
+	return k == Anthropic || k == OpenAICompatible || k == Ollama
 }
 
 func (k Kind) Label() string {
@@ -40,6 +45,8 @@ func (k Kind) Label() string {
 		return "Anthropic"
 	case OpenAICompatible:
 		return "OpenAI 호환"
+	case Ollama:
+		return "Ollama"
 	}
 	return string(k)
 }
@@ -51,6 +58,11 @@ type Config struct {
 	BaseURL string
 	APIKey  string
 	Model   string
+	// ContextTokens는 이 프로바이더가 한 번에 받는 토큰 수다. 0이면 모른다.
+	//
+	// 두 곳에 쓴다: Ollama에는 num_ctx로 그대로 보내고, 어느 프로바이더든
+	// 대화 이력을 얼마나 남길지 정하는 데 쓴다.
+	ContextTokens int
 }
 
 // Role은 대화 참여자다.
@@ -192,6 +204,8 @@ func Get(kind Kind) (Provider, error) {
 		return &anthropicProvider{}, nil
 	case OpenAICompatible:
 		return &openaiProvider{}, nil
+	case Ollama:
+		return &ollamaProvider{}, nil
 	}
 	return nil, fmt.Errorf("지원하지 않는 AI 프로바이더입니다: %s", kind)
 }

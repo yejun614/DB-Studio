@@ -159,3 +159,61 @@ func isPrivateHost(host string) bool {
 	}
 	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
 }
+
+// postNDJSON은 줄 단위 JSON 스트림을 읽는다 (Ollama 네이티브 API).
+//
+// SSE와 따로 두는 이유: Ollama는 `data:` 접두사도 빈 줄 구분도 쓰지 않고 한 줄에
+// JSON 하나를 그대로 흘린다. postSSE에 섞으면 두 규약을 하나의 함수가 눈치껏
+// 가르게 되고, 그 눈치가 틀리는 날 증상은 "가끔 응답이 비어 있다"가 된다.
+func postNDJSON(ctx context.Context, endpoint string, headers map[string]string, body any,
+	onLine func(raw []byte) bool) error {
+
+	data, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshal request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/x-ndjson")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+
+	res, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("요청 실패: %w", err)
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		raw, _ := io.ReadAll(io.LimitReader(res.Body, maxErrorBody))
+		return &APIError{
+			Status:  res.StatusCode,
+			Message: extractMessage(raw),
+			Body:    string(raw),
+		}
+	}
+
+	scanner := bufio.NewScanner(res.Body)
+	scanner.Buffer(make([]byte, 0, 64<<10), sseLineLimit)
+	for scanner.Scan() {
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+		if !onLine(line) {
+			return nil
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		// 컨텍스트 취소로 끊긴 것은 오류가 아니다 (사용자가 화면을 떠난 경우).
+		if ctx.Err() != nil {
+			return nil
+		}
+		return fmt.Errorf("스트림 읽기 실패: %w", err)
+	}
+	return nil
+}
