@@ -195,6 +195,9 @@ export class ErdCanvas {
   // ---------- 그리기 ----------
 
   render() {
+    // 가리키던 요소가 사라졌는데 설명만 남으면, 그 설명은 이제 아무것도 가리키지
+    // 않는 거짓말이다.
+    this.hideTip();
     const svg = this.svg;
     while (svg.firstChild) svg.removeChild(svg.firstChild);
     svg.setAttribute('viewBox', `${this.view.x} ${this.view.y} ${this.view.w} ${this.view.h}`);
@@ -425,6 +428,11 @@ export class ErdCanvas {
       titleX = 28;
     }
     const { main, sub } = tableLabel(tbl, geom.layout, this.nameMode);
+    // 제목 자리를 덮는 투명한 판. 글자 위에만 손을 올려야 뜨면, 짧은 이름에서는
+    // 겨냥할 곳이 몇 픽셀뿐이다.
+    const headHit = svgEl('rect', {
+      class: 'erd-hit', x: 0, y: 0, width: geom.w, height: HEAD_H,
+    });
     // 논리명일 때는 조금 작게 쓴다. 같은 크기로 두면 한글이 라틴 문자보다 크게
     // 보여서(글자당 차지하는 면적이 넓다) 제목만 유독 큼직하게 튄다.
     const isLogical = main !== (tbl.namespace ? `${tbl.namespace}.${tbl.name}` : tbl.name);
@@ -434,6 +442,9 @@ export class ErdCanvas {
       class: `erd-card-name${isLogical ? ' is-logical' : ''}`,
       x: titleX, y: sub ? 17 : 20,
     }, fitText(main, titleMax, cssFont(`erd-card-name${isLogical ? ' is-logical' : ''}`))));
+    // 제목의 주석·잘린 이름을 손 올렸을 때 보여 준다.
+    this.bindTip(headHit, () => tipForTable(tbl, geom.layout, main, titleMax));
+    g.appendChild(headHit);
     // 둘 다 보기에서는 물리명을 작은 글씨로 아래에 둔다. 나란히 쓰면 어느 쪽이
     // 진짜 이름인지 알 수 없고, 긴 한국어 이름에서 물리명이 먼저 잘린다.
     if (sub) {
@@ -511,6 +522,14 @@ export class ErdCanvas {
           class: `erd-col-type${domain ? ' is-domain' : ''}`,
           x: geom.w - PAD_R, y, 'text-anchor': 'end',
         }, typeStr));
+
+        // 줄 전체를 덮는 투명한 판. 이름 글자에만 손을 올려야 뜨면 짧은 컬럼에서
+        // 겨냥할 곳이 거의 없고, 잘려서 "…"이 된 이름은 더 짧아진다.
+        const rowHit = svgEl('rect', {
+          class: 'erd-hit', x: 0, y: y - ROW_H + 5, width: geom.w, height: ROW_H,
+        });
+        this.bindTip(rowHit, () => tipForColumn(col, geom.layout, label, rawType, domain, room));
+        g.appendChild(rowHit);
       });
     }
 
@@ -534,19 +553,29 @@ export class ErdCanvas {
       }));
     }
 
-    // 폭 손잡이. 오른쪽 가장자리를 잡아 끈다.
+    // 폭 손잡이. 좌우 가장자리를 잡아 끈다.
     //
     // 그룹·메모는 모서리에서 가로세로를 함께 잡지만 카드는 높이가 컬럼 수로 정해진다.
     // 모서리에 두면 세로도 바뀔 것처럼 보이고, 끌어 본 사람은 높이가 안 변하는 것을
-    // 고장으로 읽는다. 오른쪽 변이 "여기서 폭만 바뀐다"를 말해 준다.
+    // 고장으로 읽는다. 좌우 변이 "여기서 폭만 바뀐다"를 말해 준다.
+    //
+    // 왼쪽에도 두는 이유: 카드가 화면 오른쪽에 있으면 오른쪽 변을 잡으려고 화면을
+    // 먼저 밀어야 한다. 그리고 왼쪽으로 넓히는 것과 오른쪽으로 넓히는 것은 결과가
+    // 다르다 — 왼쪽 변을 끌면 오른쪽 변이 제자리에 있으므로, 오른쪽 이웃과의
+    // 간격을 지키면서 넓힐 수 있다.
     if (this.canEdit && !geom.layout.collapsed) {
-      const grip = svgEl('rect', {
-        class: 'erd-card-grip', x: geom.w - 4, y: HEAD_H, width: 8, height: Math.max(16, geom.h - HEAD_H),
-      });
-      grip.addEventListener('pointerdown', (e) => this.onCardResizeDown(e, key, geom));
-      grip.addEventListener('pointerenter', () => this.setGripHover(key));
-      grip.addEventListener('pointerleave', () => this.setGripHover(null));
-      g.appendChild(grip);
+      const gripH = Math.max(16, geom.h - HEAD_H);
+      for (const side of ['left', 'right']) {
+        const grip = svgEl('rect', {
+          class: `erd-card-grip is-${side}`,
+          x: side === 'right' ? geom.w - 4 : -4,
+          y: HEAD_H, width: 8, height: gripH,
+        });
+        grip.addEventListener('pointerdown', (e) => this.onCardResizeDown(e, key, geom, side));
+        grip.addEventListener('pointerenter', () => this.setGripHover(key));
+        grip.addEventListener('pointerleave', () => this.setGripHover(null));
+        g.appendChild(grip);
+      }
     }
 
     // 끄는 동안에는 폭을 숫자로도 적는다. 두 카드를 같은 폭으로 맞추려는 사람에게
@@ -662,6 +691,9 @@ export class ErdCanvas {
 
     const onWheel = (e) => {
       e.preventDefault();
+      // 화면이 움직이면 설명이 가리키던 자리도 움직인다. 제자리에 남은 설명은
+      // 엉뚱한 것을 가리킨다.
+      this.hideTip();
       const p = this.toCanvas(e.clientX, e.clientY);
       this.zoomAt(e.deltaY > 0 ? 1.12 : 0.89, p);
     };
@@ -750,9 +782,15 @@ export class ErdCanvas {
         return;
       }
       if (this.drag.mode === 'card-resize') {
-        const w = Math.max(CARD_MIN_W,
-          Math.min(CARD_MAX_W, round1(this.drag.width + (point.x - this.drag.start.x))));
-        this.liveResize(this.drag.key, w);
+        const d = this.drag;
+        const moved = point.x - d.start.x;
+        // 왼쪽 변은 끄는 방향과 폭의 방향이 반대다(오른쪽으로 끌면 좁아진다).
+        const raw = d.side === 'left' ? d.width - moved : d.width + moved;
+        const w = Math.max(CARD_MIN_W, Math.min(CARD_MAX_W, round1(raw)));
+        // 상한·하한에 닿아도 오른쪽 변은 제자리를 지켜야 한다. x를 끌던 자리로
+        // 계산하면 폭이 멈춘 뒤에도 카드가 계속 미끄러진다.
+        const x = d.side === 'left' ? round1(d.right - w) : d.x;
+        this.liveResize(d.key, w, x);
         return;
       }
       if (this.drag.mode === 'group-resize') {
@@ -826,6 +864,11 @@ export class ErdCanvas {
       if (drag?.mode === 'card-resize' && drag.lastWidth) {
         // 로컬 상태는 끄는 동안 이미 갱신됐다(liveResize). 저장 결과가 오기 전에
         // 다시 그려도 카드가 원래 폭으로 튀지 않는다.
+        //
+        // 왼쪽을 끌었으면 좌표도 바뀌어 있다. 따로 넘기지 않는 이유: 화면 쪽은
+        // 이미 같은 doc.layout 을 읽어 x·y 를 op 에 담는다(setDoc 이 같은 객체를
+        // 넘긴다). 여기서 또 넘기면 같은 값을 두 갈래로 전하게 되고, 둘이 어긋나는
+        // 날이 온다.
         this.opts.onTableResize?.(drag.key, drag.lastWidth);
         this.render();
         return;
@@ -1227,7 +1270,11 @@ export class ErdCanvas {
   }
 
   // onCardResizeDown은 카드 폭 조절을 시작한다.
-  onCardResizeDown(e, key, geom) {
+  //
+  // side가 'left'면 왼쪽 변을 끄는 것이다. 그때 움직이는 것은 폭만이 아니라
+  // 카드의 x이기도 하다 — 오른쪽 변을 제자리에 두려면 왼쪽으로 넓힌 만큼 x가
+  // 왼쪽으로 가야 한다.
+  onCardResizeDown(e, key, geom, side = 'right') {
     e.stopPropagation();
     if (this.otherButton(e)) return;
     if (this.spaceHeld || this.panDrag) {
@@ -1244,8 +1291,61 @@ export class ErdCanvas {
     const selector = `.erd-card-g[data-key="${cssEscape(key)}"]`;
     this.drag = {
       mode: 'card-resize', key, el: this.svg.querySelector(selector), selector,
-      start: p, width: geom.w,
+      start: p, width: geom.w, side,
+      // 왼쪽을 끌 때 붙잡아 둘 오른쪽 변의 자리.
+      right: geom.x + geom.w, x: geom.x, y: geom.y,
     };
+  }
+
+  // bindTip은 이 요소에 손을 올리면 잠깐 뒤 설명을 띄우도록 붙인다.
+  //
+  // 잠깐 기다리는 이유: 도면 위에서 마우스는 늘 지나다닌다. 곧바로 뜨면 카드를
+  // 가로지를 때마다 팝오버가 깜박이며 따라다녀서, 정작 읽으려는 것을 가린다.
+  bindTip(el, build) {
+    el.addEventListener('pointerenter', (e) => {
+      // 무언가를 끌고 있는 동안에는 띄우지 않는다. 옮기는 손끝을 설명이 가린다.
+      if (this.drag) return;
+      const text = build();
+      if (!text) return;
+      clearTimeout(this.tipTimer);
+      this.tipTimer = setTimeout(() => this.showTip(text, e.clientX, e.clientY), TIP_DELAY);
+    });
+    el.addEventListener('pointerleave', () => this.hideTip());
+    // 누르면 그 자리에서 치운다. 고르거나 끌기 시작하는 순간에 남아 있으면
+    // 방금 무엇을 눌렀는지가 가려진다.
+    el.addEventListener('pointerdown', () => this.hideTip());
+  }
+
+  // showTip은 설명 팝오버를 띄운다.
+  showTip(lines, clientX, clientY) {
+    if (!this.wrap) return;
+    if (!this.tipEl) {
+      this.tipEl = h('div.erd-tip', { role: 'tooltip' });
+      this.wrap.appendChild(this.tipEl);
+    }
+    mount(this.tipEl, lines.map(([label, value]) => h('div.erd-tip-row', {},
+      label ? h('span.erd-tip-label', {}, label) : null,
+      h('span.erd-tip-value', {}, value))));
+
+    // 자리를 잡는다. 마우스 오른쪽 아래가 기본이고, 넘치면 반대쪽으로 접는다 —
+    // 화면 밖으로 나간 설명은 없는 것과 같다.
+    const box = this.wrap.getBoundingClientRect();
+    this.tipEl.style.visibility = 'hidden';
+    this.tipEl.hidden = false;
+    const tip = this.tipEl.getBoundingClientRect();
+    let x = clientX - box.left + 14;
+    let y = clientY - box.top + 16;
+    if (x + tip.width > box.width - 8) x = Math.max(8, clientX - box.left - tip.width - 14);
+    if (y + tip.height > box.height - 8) y = Math.max(8, clientY - box.top - tip.height - 12);
+    this.tipEl.style.left = `${Math.round(x)}px`;
+    this.tipEl.style.top = `${Math.round(y)}px`;
+    this.tipEl.style.visibility = '';
+  }
+
+  hideTip() {
+    clearTimeout(this.tipTimer);
+    this.tipTimer = 0;
+    if (this.tipEl) this.tipEl.hidden = true;
   }
 
   // setGripHover는 폭 손잡이에 손이 닿았는지를 표시한다.
@@ -1272,9 +1372,11 @@ export class ErdCanvas {
   //
   // 카드 한 장만 새로 만들어 갈아 끼운다. 프레임당 한 번으로 묶으므로, 컬럼이
   // 수십 개라도 글자를 다시 재는 일은 한 프레임에 한 번이다.
-  liveResize(key, w) {
+  liveResize(key, w, x) {
     this.drag.lastWidth = w;
-    this.doc.layout[key] = { ...(this.doc.layout[key] ?? {}), w };
+    this.drag.lastX = x;
+    const prev = this.doc.layout[key] ?? {};
+    this.doc.layout[key] = { ...prev, w, x: x ?? prev.x };
     if (this.resizeFrame) return;
     this.resizeFrame = requestAnimationFrame(() => {
       this.resizeFrame = 0;
@@ -1510,4 +1612,52 @@ export function newLocalID(prefix) {
 // 캔버스 위에 아무것도 없을 때 쓰는 안내 요소.
 export function canvasWrap() {
   return h('div.erd-canvas-wrap');
+}
+
+// TIP_DELAY는 손을 올리고 설명이 뜨기까지의 시간이다.
+//
+// 도면 위에서 마우스는 늘 지나다닌다. 곧바로 뜨면 카드를 가로지를 때마다
+// 팝오버가 깜박이며 따라다니고, 정작 읽으려는 것을 가린다. 반대로 너무 길면
+// 사람이 먼저 포기한다.
+const TIP_DELAY = 420;
+
+// tipForTable은 표 제목에 띄울 줄들이다. 띄울 것이 없으면 null.
+function tipForTable(tbl, layout, shown, maxWidth) {
+  const rows = [];
+  const full = tbl.namespace ? `${tbl.namespace}.${tbl.name}` : tbl.name;
+  const logical = (layout?.logical ?? '').trim();
+
+  // 잘린 이름은 그것만으로도 띄울 이유가 된다. "…"으로 끝난 이름을 확인할 방법이
+  // 속성 창을 여는 것뿐이면, 도면을 훑는 일이 그때마다 끊긴다.
+  const cut = fitText(shown, maxWidth, cssFont('erd-card-name')) !== shown;
+  if (cut || logical) rows.push(['', full]);
+  if (logical) rows.push(['논리명', logical]);
+  const comment = (tbl.comment ?? '').trim();
+  if (comment) rows.push(['주석', comment]);
+  return rows.length ? rows : null;
+}
+
+// tipForColumn은 컬럼 줄에 띄울 줄들이다. 띄울 것이 없으면 null.
+function tipForColumn(col, layout, label, rawType, domain, room) {
+  const rows = [];
+  const logical = (layout?.columnLogical ?? {})[String(col.name).toLowerCase()] ?? '';
+
+  // 이름이 잘렸는지 본다. 논리명과 물리명을 함께 보일 때는 둘 다 잘릴 수 있다.
+  const nameFont = cssFont('erd-col');
+  const cut = fitText(label.main, room, nameFont) !== label.main;
+  if (cut || logical || label.sub) rows.push(['', col.name]);
+  if (logical) rows.push(['논리명', logical]);
+
+  // 타입은 늘 적는다. 도메인이 걸린 컬럼은 도면에 도메인 이름만 보이는데,
+  // 그때 실제 타입이 무엇인지가 가장 자주 궁금해지는 것이다.
+  const actual = col.rawType || col.type?.base || '';
+  if (domain) rows.push(['도메인', `${domain}${actual ? ` (${actual})` : ''}`]);
+  else if (actual) rows.push(['타입', actual + (col.nullable ? '' : ' NOT NULL')]);
+
+  if ((col.default ?? '') !== '') rows.push(['기본값', String(col.default)]);
+  const comment = (col.comment ?? '').trim();
+  if (comment) rows.push(['주석', comment]);
+  // 이름도 안 잘리고 주석도 없으면 띄울 이유가 없다. 타입은 이미 줄에 보인다.
+  if (!comment && !logical && !cut && !domain) return null;
+  return rows.length ? rows : null;
 }

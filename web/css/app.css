@@ -2011,6 +2011,50 @@ option { background: var(--surface); color: var(--text); }
 .erd-canvas-area { position: relative; min-width: 0; min-height: 0; display: flex; }
 .erd-canvas-area > .erd-canvas-wrap { flex: 1; }
 
+/* 이 도면에서 찾기.
+ *
+ * 캔버스 위에 겹쳐 띄운다. 도구 줄에 넣으면 결과 목록이 갈 곳이 없고, 오른쪽 속성
+ * 창에 넣으면 찾는 동안 속성 창을 쓸 수 없다 — 찾은 것을 고치려고 찾는 것인데. */
+.erd-find {
+  position: absolute; top: 10px; left: 10px; z-index: 25;
+  width: min(360px, calc(100% - 20px));
+  display: flex; flex-direction: column;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface); box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.erd-find-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 8px 8px 10px;
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--text-mute);
+}
+.erd-find-head .input { flex: 1; min-width: 0; }
+.erd-find-count { font-size: 12px; color: var(--text-mute); flex: none; }
+.erd-find-list { max-height: 320px; overflow-y: auto; }
+.erd-find-list > .muted { padding: 10px 12px; margin: 0; }
+
+.erd-find-row {
+  display: flex; align-items: baseline; gap: 8px; width: 100%;
+  padding: 6px 10px; border: none; background: none; cursor: pointer;
+  text-align: left; font-size: 12.5px; color: var(--text-dim);
+}
+.erd-find-row:hover { background: var(--bg-alt); }
+/* 방향키로 훑는 자리. 마우스 호버와 다른 색이어야 지금 어디에 있는지 알 수 있다. */
+.erd-find-row.is-at { background: var(--surface-2); color: var(--text); }
+.erd-find-kind {
+  flex: none; min-width: 34px;
+  font-size: 11px; color: var(--text-mute);
+}
+.erd-find-label { color: var(--text); font-weight: 500; }
+/* 어느 표의 것인지. 같은 이름의 컬럼은 흔해서, 이것이 없으면 목록이 답을 못 준다. */
+.erd-find-where { color: var(--text-mute); font-size: 11.5px; }
+.erd-find-sub {
+  margin-left: auto; padding-left: 8px;
+  color: var(--text-mute); font-size: 11.5px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%;
+}
+
 /* 채팅 알림 스택. 오른쪽 위에 쌓이고 스스로 사라진다. */
 .erd-chat-stack {
   position: absolute; top: 10px; right: 10px; z-index: 20;
@@ -3893,8 +3937,50 @@ a.stat:hover { border-color: var(--text-mute); background: hsl(var(--h-muted) / 
    카드 높이는 컬럼 수로 정해지는 값이라 사람이 정할 것이 아니다.
    평소에는 보이지 않는다. 카드마다 세로줄이 하나씩 서 있으면 그것이 무엇인지 묻게
    되고, 잡을 자리는 손이 그 위에 갔을 때 알려 주면 된다. */
+/* 손 올림을 받는 투명한 판. 제목 줄과 컬럼 줄 전체를 덮는다.
+ *
+ * 글자 위에만 손을 올려야 뜨게 하면 짧은 이름에서는 겨냥할 곳이 몇 픽셀뿐이고,
+ * 잘려서 "…"이 된 이름은 더 짧다 — 정작 설명이 가장 필요한 줄이 가장 겨냥하기
+ * 어려워진다. 그리기에는 참여하지 않으므로 채우기는 투명이다. */
+.erd-hit { fill: transparent; }
+
+/* 주석·잘린 이름을 보여 주는 팝오버.
+ *
+ * SVG가 아니라 HTML로 두는 이유: 여러 줄로 접히는 글은 SVG에서 손으로 줄을
+ * 나눠야 하고, 그 계산은 글꼴이 바뀔 때마다 어긋난다.
+ *
+ * 마우스를 받지 않는다(pointer-events:none). 받으면 팝오버가 뜨는 순간 그것이
+ * 마우스를 가로채 아래 요소가 "떠났다"고 판단하고, 그러면 팝오버가 사라지고
+ * 다시 뜨기를 반복한다. */
+.erd-tip {
+  position: absolute; z-index: 30;
+  max-width: 340px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  font-size: 12px; line-height: 1.6;
+  color: var(--text-dim);
+  pointer-events: none;
+  white-space: pre-wrap; word-break: break-word;
+}
+.erd-tip-row { display: flex; gap: 8px; }
+.erd-tip-row + .erd-tip-row { margin-top: 2px; }
+.erd-tip-label {
+  flex: none; min-width: 44px;
+  color: var(--text-mute); font-size: 11.5px;
+}
+.erd-tip-value { color: var(--text); }
+/* 첫 줄은 이름이다. 라벨 없이 그려지므로(showTip) 그 자리는 비어 있지 않고 아예 없다. */
+.erd-tip-row:first-child .erd-tip-value { font-weight: 600; }
+
 /* 폭 손잡이. 보이지 않는 잡는 면적이다 — 손이 닿았다는 신호는 카드 테두리가
- * 물드는 것으로 한다(.erd-card-g.is-resize). */
+ * 물드는 것으로 한다(.erd-card-g.is-grip-hover).
+ *
+ * 좌우 양쪽에 둔다. 카드가 화면 오른쪽에 있으면 오른쪽 변을 잡으려고 화면을 먼저
+ * 밀어야 하고, 왼쪽으로 넓히는 것은 오른쪽 이웃과의 간격을 지키면서 넓히는 일이라
+ * 결과 자체가 다르다. */
 .erd-card-grip {
   fill: transparent;
   cursor: ew-resize;
