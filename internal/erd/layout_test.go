@@ -1,6 +1,7 @@
 package erd
 
 import (
+	"fmt"
 	"testing"
 
 	"dbstudio/internal/schema"
@@ -38,16 +39,118 @@ func TestAutoLayoutStacksByHeight(t *testing.T) {
 			big.Y, bottom, under.Y)
 	}
 
-	// 작은 표들만 있으면 예전 격자와 같은 간격을 지킨다. 배치가 이유 없이
-	// 흐트러지면 쓰던 사람에게는 고장으로 보인다.
+	// 작은 표들끼리는 예전 격자와 같은 세로 간격을 지킨다. 간격이 이유 없이
+	// 좁아지면 카드가 붙어 보이고, 넓어지면 도면이 늘어난다.
 	small := &schema.Schema{Tables: []*schema.Table{
 		mk("a", 2), mk("b", 2), mk("c", 2), mk("d", 2), mk("e", 2),
 	}}
 	got := AutoLayout(small)
 	first := got[small.Tables[0].Key()]
-	fifth := got[small.Tables[4].Key()]
-	if fifth.Y-first.Y != layoutStepY {
-		t.Errorf("작은 표의 세로 간격 = %.0f, 기대 %.0f", fifth.Y-first.Y, layoutStepY)
+	second := got[small.Tables[1].Key()]
+	if first.X != second.X {
+		t.Fatalf("관계가 없는 표들이 같은 열에 놓이지 않았습니다: %v vs %v", first.X, second.X)
+	}
+	if second.Y-first.Y != layoutStepY {
+		t.Errorf("작은 표의 세로 간격 = %.0f, 기대 %.0f", second.Y-first.Y, layoutStepY)
+	}
+}
+
+// 가리켜지는 표가 왼쪽, 가리키는 표가 오른쪽에 선다.
+//
+// 왜 이 규칙인가: 격자로 나열하면 관계선이 도면을 가로지른다. 회원과 주문이 대각선
+// 으로 마주 보는 그림에서 무엇이 무엇을 가리키는지는 선을 눈으로 따라가야 알 수 있다.
+// 참조되는 쪽을 왼쪽에 세우면 회원 → 주문 → 주문상세 처럼 읽는 순서대로 늘어선다.
+func TestAutoLayoutOrdersByReference(t *testing.T) {
+	col := func(name string) *schema.Column { return &schema.Column{Name: name, Position: 1} }
+	members := &schema.Table{Name: "members", Columns: []*schema.Column{col("id")}}
+	orders := &schema.Table{
+		Name:    "orders",
+		Columns: []*schema.Column{col("id"), col("member_id")},
+		ForeignKeys: []*schema.ForeignKey{{
+			Name: "fk_orders_member", Columns: []string{"member_id"},
+			RefTable: "members", RefColumns: []string{"id"},
+		}},
+	}
+	items := &schema.Table{
+		Name:    "order_items",
+		Columns: []*schema.Column{col("id"), col("order_id")},
+		ForeignKeys: []*schema.ForeignKey{{
+			Name: "fk_items_order", Columns: []string{"order_id"},
+			RefTable: "orders", RefColumns: []string{"id"},
+		}},
+	}
+	// 목록 순서는 일부러 뒤집어 둔다 — 배치가 순서가 아니라 관계를 보는지 확인한다.
+	sc := &schema.Schema{Tables: []*schema.Table{items, orders, members}}
+
+	layout := AutoLayout(sc)
+	mx := layout["members"].X
+	ox := layout["orders"].X
+	ix := layout["order_items"].X
+	if !(mx < ox && ox < ix) {
+		t.Fatalf("열 순서가 관계를 따르지 않습니다: members %.0f, orders %.0f, order_items %.0f",
+			mx, ox, ix)
+	}
+	if ox-mx != layoutStepX || ix-ox != layoutStepX {
+		t.Errorf("열 간격이 %.0f/%.0f 입니다 (기대 %.0f)", ox-mx, ix-ox, layoutStepX)
+	}
+}
+
+// 한 열에 너무 많이 쌓이지 않는다.
+//
+// 관계가 없는 스키마에서는 모든 표가 0열에 몰린다. 그대로 두면 세로로 5000px 짜리
+// 한 줄이 되어 어떤 배율에서도 한 화면에 들어오지 않는다.
+func TestAutoLayoutWrapsTallColumns(t *testing.T) {
+	tables := make([]*schema.Table, 0, 20)
+	for i := 0; i < 20; i += 1 {
+		tables = append(tables, &schema.Table{
+			Name:    fmt.Sprintf("t%02d", i),
+			Columns: []*schema.Column{{Name: "id", Position: 1}},
+		})
+	}
+	sc := &schema.Schema{Tables: tables}
+	layout := AutoLayout(sc)
+
+	perColumn := map[float64]int{}
+	for _, b := range layout {
+		perColumn[b.X] += 1
+	}
+	if len(perColumn) < 2 {
+		t.Fatalf("스무 개가 한 열에 쌓였습니다: %v", perColumn)
+	}
+	for x, n := range perColumn {
+		if n > layoutRowsMax {
+			t.Errorf("x=%.0f 열에 %d개가 쌓였습니다 (한계 %d)", x, n, layoutRowsMax)
+		}
+	}
+}
+
+// 순환 참조(A→B→A)가 있어도 끝나고, 카드가 겹치지 않는다.
+//
+// 열 번호는 "가리키는 표보다 오른쪽"으로 정하는데, 순환에서는 그 조건을 동시에
+// 만족시킬 수 없다. 끝나지 않는 계산보다 조금 어긋난 배치가 낫다.
+func TestAutoLayoutSurvivesCycle(t *testing.T) {
+	a := &schema.Table{
+		Name:    "a",
+		Columns: []*schema.Column{{Name: "id", Position: 1}, {Name: "b_id", Position: 2}},
+		ForeignKeys: []*schema.ForeignKey{{
+			Name: "fk_a_b", Columns: []string{"b_id"}, RefTable: "b", RefColumns: []string{"id"},
+		}},
+	}
+	b := &schema.Table{
+		Name:    "b",
+		Columns: []*schema.Column{{Name: "id", Position: 1}, {Name: "a_id", Position: 2}},
+		ForeignKeys: []*schema.ForeignKey{{
+			Name: "fk_b_a", Columns: []string{"a_id"}, RefTable: "a", RefColumns: []string{"id"},
+		}},
+	}
+	sc := &schema.Schema{Tables: []*schema.Table{a, b}}
+
+	layout := AutoLayout(sc)
+	if len(layout) != 2 {
+		t.Fatalf("좌표가 %d개입니다", len(layout))
+	}
+	if layout["a"].X == layout["b"].X && layout["a"].Y == layout["b"].Y {
+		t.Errorf("두 카드가 같은 자리에 놓였습니다: %+v", layout["a"])
 	}
 }
 

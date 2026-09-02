@@ -56,6 +56,13 @@ func applySchemaImport(doc *Document, op *Op) error {
 		return invalid("한 번에 불러올 수 있는 테이블은 %d개까지입니다", maxImportTables)
 	}
 
+	// 사람이 정리해 둔 배치가 있는지 먼저 적어 둔다. 불러오기가 끝난 뒤 관계에
+	// 따라 다시 놓을지를 이것으로 판단한다.
+	placedBefore := make(map[string]bool, len(doc.Layout))
+	for key := range doc.Layout {
+		placedBefore[key] = true
+	}
+
 	// 먼저 지운다. 같은 스크립트에서 DROP 후 CREATE 하는 흐름이 흔하고,
 	// 순서가 반대면 방금 만든 테이블을 지우게 된다.
 	for _, raw := range p.Drops {
@@ -89,6 +96,26 @@ func applySchemaImport(doc *Document, op *Op) error {
 	}
 
 	doc.Schema.Sort()
+
+	// 불러온 것이 전부 새 표라면 관계에 따라 다시 놓는다.
+	//
+	// 왜 이 조건인가: mergeTable 은 새 표를 격자의 빈칸에 하나씩 놓는다. 빈 초안에
+	// 스키마를 통째로 불러오면 그 격자가 그대로 도면이 되어, 관계선이 도면을
+	// 가로지른다 — 회원과 주문이 대각선으로 마주 보는 그림에서 무엇이 무엇을
+	// 가리키는지는 선을 눈으로 따라가야 알 수 있다.
+	//
+	// 반대로 사람이 카드를 옮겨 둔 문서에서는 아무것도 건드리지 않는다. 표 하나를
+	// 더 불러왔다고 남이 정리한 배치를 흐트러뜨리는 것은, 불러오기가 할 일이 아니다.
+	fresh := len(doc.Schema.Tables) > 0
+	for _, t := range doc.Schema.Tables {
+		if placedBefore[t.Key()] {
+			fresh = false
+			break
+		}
+	}
+	if fresh {
+		doc.Layout = AutoLayout(doc.Schema)
+	}
 	return nil
 }
 

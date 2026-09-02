@@ -203,6 +203,16 @@ func placeMissing(sc *schema.Schema, layout map[string]*erd.Box) int {
 	if layout == nil {
 		return 0
 	}
+	// 아무것도 놓여 있지 않으면(구조 문서를 처음 여는 순간) 관계에 따라 한 번에
+	// 놓는다. 격자로 나열하면 관계선이 도면을 가로질러, "무엇이 무엇을 가리키는가"를
+	// 선을 눈으로 따라가야 알게 된다. 설계 화면의 첫 배치와 같은 규칙이다
+	// (erd.AutoLayout) — 두 화면을 오갈 때 같은 그림으로 읽혀야 한다.
+	if len(layout) == 0 && len(sc.Tables) > 0 {
+		for key, box := range erd.AutoLayout(sc) {
+			layout[key] = box
+		}
+		return len(sc.Tables)
+	}
 	// 이미 놓인 카드의 자리와 **높이**를 함께 들고 간다.
 	cols := make(map[string]int, len(sc.Tables))
 	for _, t := range sc.Tables {

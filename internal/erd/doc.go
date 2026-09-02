@@ -12,6 +12,7 @@
 package erd
 
 import (
+	"sort"
 	"strings"
 
 	"dbstudio/internal/schema"
@@ -182,7 +183,8 @@ func NewDocument(id, name, connectionID, dialect string) *Document {
 }
 
 // FromSchema는 실제 DB에서 읽은 스키마를 초안의 출발점으로 삼는다.
-// 좌표는 격자로 자동 배치한다 — 빈 캔버스에 테이블이 겹쳐 쌓여 있으면 쓸 수 없다.
+// 좌표는 관계를 따라 자동 배치한다(AutoLayout) — 빈 캔버스에 테이블이 겹쳐 쌓여
+// 있으면 쓸 수 없고, 격자로 나열하면 관계선이 도면을 가로지른다.
 func FromSchema(id, name, connectionID string, sc *schema.Schema) *Document {
 	doc := NewDocument(id, name, connectionID, sc.Dialect)
 	doc.Schema = sc
@@ -194,6 +196,9 @@ func FromSchema(id, name, connectionID string, sc *schema.Schema) *Document {
 // 자동 배치 격자. 카드 폭/높이는 프론트엔드와 맞춰야 겹치지 않는다.
 const (
 	layoutColumns = 4
+	// 한 열에 쌓는 카드 수의 한계. 넘으면 옆 칸을 하나 더 쓴다 — 세로로 길어진
+	// 도면은 확대해서 보든 줄여서 보든 한 화면에 들어오지 않는다.
+	layoutRowsMax = 6
 	layoutStepX   = 320.0
 	layoutStepY   = 260.0
 	layoutOriginX = 80.0
@@ -264,26 +269,166 @@ func SlotAt(n int) (float64, float64) {
 // 폭은 모든 카드가 같아서 어긋날 일이 없고, 열이 가지런해야 눈이 따라간다.
 func AutoLayout(sc *schema.Schema) map[string]*Box {
 	out := make(map[string]*Box, len(sc.Tables))
-	// 열마다 다음 카드가 놓일 y를 들고 간다.
-	next := make([]float64, layoutColumns)
-	for i := range next {
-		next[i] = layoutOriginY
+	if sc == nil || len(sc.Tables) == 0 {
+		return out
 	}
-	for i, t := range sc.Tables {
-		col := i % layoutColumns
-		out[t.Key()] = &Box{
-			X: layoutOriginX + float64(col)*layoutStepX,
-			Y: next[col],
+
+	byKey := make(map[string]*schema.Table, len(sc.Tables))
+	for _, t := range sc.Tables {
+		byKey[t.Key()] = t
+	}
+	// refs는 이 표가 **가리키는** 표들이다(외래키 방향). 같은 표를 두 번 가리켜도
+	// 한 번만 센다 — 열을 정하는 데 필요한 것은 "누구를 가리키는가"뿐이다.
+	refs := make(map[string][]string, len(sc.Tables))
+	for _, t := range sc.Tables {
+		seen := map[string]bool{}
+		for _, fk := range t.ForeignKeys {
+			key := refKeyOf(t, fk)
+			if key == "" || key == t.Key() || seen[key] {
+				continue // 자기 참조는 열을 밀어낼 이유가 없다.
+			}
+			if _, ok := byKey[key]; !ok {
+				continue // 문서 밖의 표를 가리키는 외래키(불러오기 중간 상태).
+			}
+			seen[key] = true
+			refs[t.Key()] = append(refs[t.Key()], key)
 		}
-		// 최소 간격은 옛 격자와 같게 둔다. 컬럼이 적은 표들만 있는 문서에서
-		// 배치가 예전과 달라지면, 쓰던 사람에게는 이유 없이 흐트러진 것으로 보인다.
-		step := CardHeight(len(t.Columns)) + cardGapY
-		if step < layoutStepY {
-			step = layoutStepY
+	}
+
+	depth := layoutDepths(sc, refs)
+	// 열(depth) 안에서의 순서는 **가리키는 표들의 자리**를 따른다. 부모가 위쪽에
+	// 있는 자식이 위쪽에 서면 선이 덜 엉킨다. 부모가 없으면 이름 순이다(같은
+	// 스키마를 두 번 불러오면 같은 그림이 나와야 한다 — sc.Tables 는 이미 정렬돼 있다).
+	byDepth := map[int][]*schema.Table{}
+	maxDepth := 0
+	for _, t := range sc.Tables {
+		d := depth[t.Key()]
+		byDepth[d] = append(byDepth[d], t)
+		if d > maxDepth {
+			maxDepth = d
 		}
-		next[col] += step
+	}
+
+	// 열마다 쓸 가로 칸 수를 먼저 정한다.
+	//
+	// 한 열에 스무 개가 쌓이면 세로로 5000px 이 되어 화면에 담기지 않는다. 관계가
+	// 없는 스키마에서는 모든 표가 0열에 몰리므로 특히 그렇다. 그래서 한 열이
+	// layoutRowsMax 를 넘으면 옆으로 한 칸 더 쓰고, 다음 열들을 그만큼 밀어 둔다 —
+	// 밀지 않으면 다음 열이 이 열의 두 번째 칸과 겹친다.
+	xSlot := make([]int, maxDepth+1)
+	cursor := 0
+	for d := 0; d <= maxDepth; d++ {
+		xSlot[d] = cursor
+		sub := (len(byDepth[d]) + layoutRowsMax - 1) / layoutRowsMax
+		if sub < 1 {
+			sub = 1
+		}
+		cursor += sub
+	}
+
+	// 열마다 위에서 아래로 쌓는다. 카드 높이가 컬럼 수마다 다르므로 실제 높이로 센다.
+	rowOf := make(map[string]int, len(sc.Tables))
+	for d := 0; d <= maxDepth; d++ {
+		list := byDepth[d]
+		if d > 0 {
+			sortTablesByParentRow(list, refs, rowOf)
+		}
+		// 나눠 쓰는 칸마다 다음 카드가 놓일 y 를 따로 들고 간다.
+		ys := map[int]float64{}
+		for i, t := range list {
+			sub := i / layoutRowsMax
+			if _, ok := ys[sub]; !ok {
+				ys[sub] = layoutOriginY
+			}
+			out[t.Key()] = &Box{
+				X: layoutOriginX + float64(xSlot[d]+sub)*layoutStepX,
+				Y: ys[sub],
+			}
+			rowOf[t.Key()] = i
+			step := CardHeight(len(t.Columns)) + cardGapY
+			if step < layoutStepY {
+				step = layoutStepY
+			}
+			ys[sub] += step
+		}
 	}
 	return out
+}
+
+// refKeyOf는 외래키가 가리키는 표의 키다(스키마가 비어 있으면 이 표의 스키마).
+func refKeyOf(t *schema.Table, fk *schema.ForeignKey) string {
+	if fk == nil || fk.RefTable == "" {
+		return ""
+	}
+	ns := fk.RefNamespace
+	if ns == "" {
+		ns = t.Namespace
+	}
+	if ns == "" {
+		return strings.ToLower(fk.RefTable)
+	}
+	return strings.ToLower(ns + "." + fk.RefTable)
+}
+
+// layoutDepths는 표마다 열 번호를 정한다.
+//
+// 규칙: **아무것도 가리키지 않는 표가 0열**이고, 어떤 표의 열은 그것이 가리키는
+// 표들보다 한 칸 오른쪽이다. 그러면 왼쪽에서 오른쪽으로 "참조되는 쪽 → 참조하는 쪽"
+// 순서가 되어, 회원 → 주문 → 주문상세 처럼 읽는 순서 그대로 늘어선다.
+//
+// 순환이 있으면(A→B→A) 그 관계는 열을 정할 수 없다. 그때는 더 밀지 않고 멈춘다 —
+// 끝나지 않는 계산보다 조금 어긋난 배치가 낫다.
+func layoutDepths(sc *schema.Schema, refs map[string][]string) map[string]int {
+	depth := make(map[string]int, len(sc.Tables))
+	// 표 수만큼 훑으면 순환이 없는 그래프에서는 반드시 안정된다(가장 긴 사슬의
+	// 길이가 표 수를 넘지 못한다). 순환이 있으면 그 횟수에서 멈춘다.
+	for round := 0; round < len(sc.Tables)+1; round++ {
+		changed := false
+		for _, t := range sc.Tables {
+			want := 0
+			for _, parent := range refs[t.Key()] {
+				if depth[parent]+1 > want {
+					want = depth[parent] + 1
+				}
+			}
+			if want > depth[t.Key()] {
+				depth[t.Key()] = want
+				changed = true
+			}
+		}
+		if !changed {
+			break
+		}
+	}
+	return depth
+}
+
+// sortTablesByParentRow는 한 열의 표들을 부모의 자리 순서로 세운다.
+//
+// 안정 정렬이어야 한다. 부모의 자리가 같은 표들(또는 부모가 없는 표들)은 들어온
+// 순서를 지켜야, 같은 스키마에서 같은 그림이 나온다.
+func sortTablesByParentRow(list []*schema.Table, refs map[string][]string, rowOf map[string]int) {
+	score := make(map[string]float64, len(list))
+	for _, t := range list {
+		sum := 0.0
+		n := 0
+		for _, parent := range refs[t.Key()] {
+			if row, ok := rowOf[parent]; ok {
+				sum += float64(row)
+				n++
+			}
+		}
+		if n == 0 {
+			// 부모가 아직 안 놓였으면 맨 아래로 보낸다. 위쪽은 선이 이어지는
+			// 표들의 자리다.
+			score[t.Key()] = 1e9
+			continue
+		}
+		score[t.Key()] = sum / float64(n)
+	}
+	sort.SliceStable(list, func(i, j int) bool {
+		return score[list[i].Key()] < score[list[j].Key()]
+	})
 }
 
 // nextFreeSlot은 새 테이블을 놓을 빈 자리를 찾는다.
