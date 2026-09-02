@@ -411,11 +411,13 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   background: var(--surface); color: var(--text);
   font: inherit; text-align: left; cursor: pointer;
 }
-.project-pick:hover { border-color: var(--primary); background: var(--bg-alt); }
+/* 손이 닿은 줄은 또렷해진다. 줄 전체가 단추라서, 어디까지가 한 줄인지 손을
+ * 올렸을 때 보여야 한다 — 목록이 길면 이름과 설명이 어느 줄의 것인지 흐려진다. */
+.project-pick:hover { border-color: var(--primary); background: var(--surface-2); }
 .project-pick:focus-visible { outline: 2px solid var(--primary); outline-offset: -1px; }
-/* 지금 보고 있는 것. 눌러도 아무 일이 없는 줄이므로 손가락 모양을 거둔다. */
-.project-pick.is-current { border-color: hsl(var(--h-success) / 0.45); cursor: default; }
-.project-pick.is-current:hover { background: var(--surface); }
+/* 지금 보고 있는 것도 **누를 수 있는 줄**이다(누르면 창이 닫힌다). 그래서 손가락
+ * 모양과 강조를 함께 둔다 — 여기만 커서가 화살표면 "이 줄은 죽어 있다"로 읽힌다. */
+.project-pick.is-current { border-color: hsl(var(--h-success) / 0.45); }
 .project-pick-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .project-pick-name { font-size: 14px; font-weight: 600; }
 .project-pick-note {
