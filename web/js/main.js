@@ -300,7 +300,12 @@ function buildShell() {
     // 좁은 화면 전용 상단 막대. 넓은 화면에서는 CSS가 숨긴다.
     sidebar.createTopbar(),
     h('aside#sidebar.sidebar', {},
-      h('a.brand', { href: '/' }, icon('database', 22), h('span', {}, 'DB Studio')),
+      h('div.sidebar-top', {},
+        h('a.brand', { href: '/' }, icon('database', 22), h('span', {}, 'DB Studio')),
+        // 접기 단추는 브랜드 옆에 둔다. 사이드바의 위쪽 모서리는 "이 칸 자체를
+        // 어떻게 할지"를 정하는 자리이고, 아래 메뉴들과 섞이면 메뉴처럼 읽힌다.
+        sidebar.createHideButton(),
+      ),
       projectSwitcher(),
       paletteButton(),
       nav,
@@ -323,6 +328,8 @@ function buildShell() {
       sidebar.createResizer(),
     ),
     sidebar.createBackdrop(),
+    // 접었을 때만 보이는 손잡이. 사이드바 밖에 두어야 사이드바가 사라져도 남는다.
+    sidebar.createShowButton(),
     outlet,
   );
 

@@ -297,6 +297,59 @@ body.is-resizing { cursor: col-resize; user-select: none; }
 .topbar { display: none; }
 .nav-backdrop { display: none; }
 
+/* 사이드바 접기.
+ *
+ * 좁은 화면의 서랍과 다른 동작이다. 서랍은 본문을 덮은 것을 치우는 일이고, 여기서는
+ * 본문에 자리를 내주는 일이다. 그래서 이 규칙은 넓은 화면에만 건다 — 좁은 화면에서
+ * 함께 걸리면 서랍을 열어도 폭이 0인 칸이 열린다.
+ *
+ * 폭을 0으로 만들되 요소를 지우지는 않는다. display:none 으로 지우면 다시 펼 때
+ * 사이드바 안의 상태(스크롤 자리, 열어 둔 하위 메뉴)가 초기화된다. */
+.sidebar-top {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.sidebar-top .brand { flex: 1; min-width: 0; }
+.sidebar-hide {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; flex: none;
+  border: 1px solid transparent; border-radius: var(--radius-sm);
+  background: none; color: var(--text-mute); cursor: pointer;
+}
+.sidebar-hide:hover { background: var(--surface); color: var(--text); }
+
+/* 접었을 때만 보이는 손잡이. 사이드바가 있던 자리가 통째로 사라지므로, 다시 부를
+ * 방법이 화면에 남아 있어야 한다 — 없으면 숨기기가 아니라 잃어버리기다. */
+.sidebar-show {
+  position: fixed;
+  top: 10px; left: 10px; z-index: 55;
+  display: none;
+  align-items: center; justify-content: center;
+  width: 30px; height: 30px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--text-dim);
+  cursor: pointer; box-shadow: var(--shadow-sm, 0 1px 3px rgb(0 0 0 / 0.2));
+}
+.sidebar-show:hover { color: var(--text); border-color: var(--text-mute); }
+
+@media (min-width: 901px) {
+  body.nav-hidden .shell { grid-template-columns: 0 minmax(0, 1fr); }
+  body.nav-hidden .sidebar {
+    /* 폭 0 안에서 넘치는 내용이 본문 위로 새지 않게 한다. */
+    overflow: hidden;
+    padding-left: 0; padding-right: 0;
+    border-right: none;
+    /* 초점 순서에서도 빠져야 한다. 안 그러면 Tab 이 보이지 않는 메뉴를 훑는다. */
+    visibility: hidden;
+  }
+  body.nav-hidden .sidebar-resize { display: none; }
+  body.nav-hidden .sidebar-show { display: inline-flex; }
+  /* 손잡이가 앉을 자리를 본문에서 비워 준다. 안 비우면 페이지 제목 위에 겹쳐
+   * 앉는다 — 그러면 제목의 첫 글자를 누를 수 없고, 손잡이도 제목처럼 읽힌다. */
+  body.nav-hidden .content { padding-left: 52px; }
+}
+
 .brand {
   display: flex;
   align-items: center;

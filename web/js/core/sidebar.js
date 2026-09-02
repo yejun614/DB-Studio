@@ -6,6 +6,7 @@
 import { h, icon } from './dom.js';
 
 const WIDTH_KEY = 'dbstudio-sidebar-width';
+const HIDDEN_KEY = 'dbstudio-sidebar-hidden';
 const MIN_WIDTH = 190;
 const MAX_WIDTH = 420;
 const DEFAULT_WIDTH = 240;
@@ -96,6 +97,96 @@ export function createResizer() {
   return handle;
 }
 
+// ---------- 넓은 화면에서 숨기기 ----------
+//
+// 서랍(좁은 화면)과 따로 두는 이유: 좁은 화면에서 사이드바는 본문을 덮는 서랍이고,
+// 넓은 화면에서는 본문과 자리를 나눠 쓰는 칸이다. 숨긴다는 말의 뜻이 서로 다르다 —
+// 서랍은 "덮은 것을 치운다"이고, 여기서는 "본문에 자리를 내준다"이다.
+//
+// 상태를 브라우저에 남긴다. 도면이나 표를 넓게 보려고 접어 둔 사람이 화면을 옮길
+// 때마다 다시 접어야 하면, 접는 기능은 없는 것과 같다.
+
+let hideBtn = null;
+let showBtn = null;
+
+export function isHidden() {
+  return document.body.classList.contains('nav-hidden');
+}
+
+function storedHidden() {
+  try {
+    return localStorage.getItem(HIDDEN_KEY) === '1';
+  } catch {
+    // 사생활 보호 모드에서는 localStorage 접근이 예외를 던진다. 보이는 쪽이 기본이다.
+    return false;
+  }
+}
+
+// setHidden은 숨김 상태를 적용한다.
+export function setHidden(hidden, { persist = true } = {}) {
+  document.body.classList.toggle('nav-hidden', hidden);
+  hideBtn?.setAttribute('aria-expanded', hidden ? 'false' : 'true');
+  showBtn?.setAttribute('aria-expanded', hidden ? 'false' : 'true');
+  if (persist) {
+    try {
+      if (hidden) localStorage.setItem(HIDDEN_KEY, '1');
+      else localStorage.removeItem(HIDDEN_KEY);
+    } catch {
+      // 저장에 실패해도 이번 화면에는 적용된다.
+    }
+  }
+}
+
+export function toggleHidden() {
+  // 좁은 화면에서는 서랍이 그 일을 한다. 여기서 또 접으면 서랍을 열 수 없게 된다.
+  if (isNarrow()) {
+    if (isDrawerOpen()) closeDrawer({ restoreFocus: true });
+    else openDrawer();
+    return;
+  }
+  setHidden(!isHidden());
+  // 다시 보이게 했으면 접기 단추로, 접었으면 펴기 단추로 초점을 옮긴다.
+  // 그러지 않으면 키보드 사용자의 초점이 사라진 요소에 남는다.
+  (isHidden() ? showBtn : hideBtn)?.focus();
+}
+
+// createHideButton은 사이드바 안의 접기 단추다.
+export function createHideButton() {
+  hideBtn = h('button.sidebar-hide', {
+    type: 'button',
+    'aria-label': '사이드바 숨기기 (Ctrl+B)',
+    'aria-controls': 'sidebar',
+    'aria-expanded': 'true',
+    title: '사이드바 숨기기 (Ctrl+B)',
+    onclick: () => {
+      setHidden(true);
+      // 접고 나면 이 단추는 사라진다. 초점을 옮기지 않으면 키보드 사용자의 초점이
+      // 보이지 않는 요소에 남아, 다음 Tab 이 어디로 갈지 알 수 없다.
+      showBtn?.focus();
+    },
+  }, icon('chevron-left', 16));
+  return hideBtn;
+}
+
+// createShowButton은 접었을 때만 보이는 작은 손잡이다.
+//
+// 화면 왼쪽 위 가장자리에 둔다. 접고 나면 사이드바가 있던 자리가 통째로 사라지는데,
+// 다시 부를 방법이 화면 어디에도 없으면 그것은 숨기기가 아니라 잃어버리기다.
+export function createShowButton() {
+  showBtn = h('button.sidebar-show', {
+    type: 'button',
+    'aria-label': '사이드바 보이기 (Ctrl+B)',
+    'aria-controls': 'sidebar',
+    'aria-expanded': 'false',
+    title: '사이드바 보이기 (Ctrl+B)',
+    onclick: () => {
+      setHidden(false);
+      hideBtn?.focus();
+    },
+  }, icon('menu', 16));
+  return showBtn;
+}
+
 // ---------- 모바일 서랍 ----------
 
 let toggleBtn = null;
@@ -162,11 +253,25 @@ let bound = false;
 
 export function bindGlobalHandlers() {
   applyWidth(storedWidth(), { persist: false });
+  setHidden(storedHidden(), { persist: false });
   if (bound) return;
   bound = true;
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') closeDrawer({ restoreFocus: true });
+    // Ctrl+B 로 접었다 편다. 편집기들이 오래 써 온 자리라 손이 먼저 기억한다.
+    //
+    // 글자를 치는 중에는 가로채지 않는다. 입력 칸에서 Ctrl+B 는 굵게가 될 수 있고,
+    // 무엇보다 사람이 지금 하는 일과 상관없는 화면이 움직이면 놀란다.
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey
+      && (e.key === 'b' || e.key === 'B')) {
+      const el = document.activeElement;
+      const typing = el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA'
+        || el.isContentEditable);
+      if (typing) return;
+      e.preventDefault();
+      toggleHidden();
+    }
   });
 
   // 메뉴를 고르면 화면이 바뀐다. 서랍이 그 위에 남아 있으면 결과를 볼 수 없다.
