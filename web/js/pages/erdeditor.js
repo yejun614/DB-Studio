@@ -3610,7 +3610,14 @@ class Editor {
     const others = (this.doc.schema?.tables ?? []);
     const myCols = tbl.columns ?? [];
 
-    const nameInput = input({ value: existing?.name ?? `fk_${tbl.name}_` });
+    // 이름은 고른 컬럼에서 저절로 만들어진다(fk_주문_회원아이디 꼴).
+    //
+    // 예전에는 "fk_orders_" 까지만 적혀 있어서, 사람이 뒷부분을 손으로 채웠다.
+    // 그 이름은 대개 컬럼 이름을 그대로 옮긴 것이고, 옮기는 동안 오타가 난다.
+    // 직접 적기 시작하면 그 뒤로는 손대지 않는다 — 사람이 정한 이름이 규칙보다 앞선다.
+    const nameInput = input({ value: existing?.name ?? '', placeholder: `fk_${tbl.name}_…` });
+    let nameTouched = editing;
+    nameInput.addEventListener('input', () => { nameTouched = true; });
     const refKeyOf = (fk) => `${fk.refNamespace ? `${fk.refNamespace}.` : ''}${fk.refTable}`.toLowerCase();
     // 처음 고를 대상은 **자기 자신이 아닌** 첫 테이블이다.
     //
@@ -3627,9 +3634,17 @@ class Editor {
     const onDeleteSelect = select(actions, { value: existing?.onDelete ?? '' });
     const onUpdateSelect = select(actions, { value: existing?.onUpdate ?? '' });
 
-    // 짝 상태: 참조 키의 컬럼 순서대로, 이 테이블의 어느 컬럼을 붙일지.
+    // 연결 상태: 참조 키의 컬럼 순서대로, 이 테이블의 어느 컬럼을 붙일지.
     let refCols = [...(existing?.refColumns ?? [])];
     let localCols = [...(existing?.columns ?? [])];
+    // creating 에 든 자리는 **아직 없는 컬럼**이다. 저장할 때 먼저 만든다.
+    //
+    // 왜 필요한가: 외래키를 걸려면 그 컬럼이 이미 있어야 했다. 그래서 관계를 그리려면
+    // 컬럼 추가 → 타입 맞추기 → 외래키 창을 다시 여는 세 걸음을 거쳤고, 그 중간에
+    // 타입을 잘못 적으면 관계가 서지 않았다. 여기서 만들면 타입은 참조하는 컬럼의
+    // 것을 그대로 쓴다.
+    const creating = new Set();
+    const NEW_COL = '\u0000new';
 
     const target = () => others.find((t) => tableKey(t) === refSelect.value) ?? null;
 
@@ -3653,31 +3668,70 @@ class Editor {
       const t = target();
       const used = new Set();
       const rows = refCols.map((refCol, i) => {
-        if (!localCols[i] || !myCols.some((c) => c.name === localCols[i])) {
+        const isNew = creating.has(i);
+        if (!isNew && (!localCols[i] || !myCols.some((c) => c.name === localCols[i]))) {
           localCols[i] = guessLocal(refCol, used);
         }
         used.add(localCols[i]);
-        const pick = select(myCols.map((c) => ({
-          value: c.name,
-          label: `${c.name} — ${c.rawType || c.type?.base || ''}`,
-        })), { value: localCols[i] });
+        const theirs = (t?.columns ?? []).find((c) => c.name.toLowerCase() === refCol.toLowerCase());
+        const newType = theirs?.rawType || theirs?.type?.base || '';
+
+        const pick = select([
+          ...myCols.map((c) => ({
+            value: c.name,
+            label: `${c.name} — ${c.rawType || c.type?.base || ''}`,
+          })),
+          { value: NEW_COL, label: '+ 새 컬럼 만들기…' },
+        ], { value: isNew ? NEW_COL : localCols[i] });
         pick.addEventListener('change', () => {
-          localCols[i] = pick.value;
+          if (pick.value === NEW_COL) {
+            creating.add(i);
+            // 기본 이름은 참조하는 컬럼 이름이다. 대개 그대로 쓰거나 앞에 표
+            // 이름을 붙이는 정도라, 빈 칸보다 고칠 것이 적다.
+            localCols[i] = refCol;
+          } else {
+            creating.delete(i);
+            localCols[i] = pick.value;
+          }
           drawPairs();
         });
+
+        // 새 컬럼이면 이름 칸을 보여준다. 이 칸을 고칠 때 목록을 다시 그리지
+        // 않는 이유: 글자마다 다시 그리면 커서가 칸에서 빠져나간다.
+        const nameBox = isNew
+          ? input({ value: localCols[i], placeholder: refCol, class: 'input erd-fk-newname' })
+          : null;
+        if (nameBox) {
+          nameBox.addEventListener('input', () => {
+            localCols[i] = nameBox.value.trim();
+            autoName();
+          });
+        }
+
         // 타입이 다르면 대상 DB가 외래키를 거부한다. 막지는 않되(우리가 읽지 못하는
         // 타입도 있다) 실행 전에 알 수 있게 적어 둔다.
         const mine = myCols.find((c) => c.name === localCols[i]);
-        const theirs = (t?.columns ?? []).find((c) => c.name.toLowerCase() === refCol.toLowerCase());
-        const mismatch = mine && theirs
+        const mismatch = !isNew && mine && theirs
           && (mine.type?.base ?? '') !== (theirs.type?.base ?? '');
         return h('div.erd-fk-pair', {},
           pick,
+          nameBox,
           h('span.erd-fk-arrow', {}, '→'),
           h('span.erd-fk-ref', {}, `${t?.name ?? ''}.${refCol}`),
+          // 새 컬럼의 타입은 참조하는 컬럼의 것을 그대로 쓴다. 타입이 다르면
+          // 외래키가 서지 않으므로 고를 이유가 없다.
+          isNew ? h('span.muted.small', {}, `${newType || '타입 미정'} · NULL 허용`) : null,
           mismatch ? badge('타입 다름', 'warn') : null);
       });
       mount(pairWrap, rows.length ? rows : h('p.muted.small', {}, '참조할 키를 고르세요'));
+      autoName();
+    };
+
+    // autoName은 고른 컬럼으로 이름을 만든다. 사람이 직접 적은 뒤에는 손대지 않는다.
+    const autoName = () => {
+      if (nameTouched) return;
+      const cols = refCols.map((_, i) => localCols[i]).filter(Boolean);
+      nameInput.value = cols.length ? `fk_${tbl.name}_${cols.join('_')}` : '';
     };
 
     // 참조할 키(기본키·고유 인덱스)를 고른다. 짝의 수가 여기서 정해진다.
@@ -3728,8 +3782,12 @@ class Editor {
         h('label.field', {}, h('span.field-label', {}, '이름'), nameInput),
         h('label.field', {}, h('span.field-label', {}, '참조할 테이블'), refSelect),
         h('div.field', {}, h('span.field-label', {}, '참조할 키'), keyWrap,
-          h('p.field-help', {}, '기본키나 고유 인덱스만 참조할 수 있습니다. 고른 키의 컬럼 수만큼 짝이 생깁니다.')),
-        h('div.field', {}, h('span.field-label', {}, '컬럼 짝'), pairWrap),
+          h('p.field-help', {},
+            '기본키나 고유 인덱스만 참조할 수 있습니다. 고른 키의 컬럼 수만큼 연결이 생깁니다.')),
+        h('div.field', {}, h('span.field-label', {}, '컬럼 연결'), pairWrap,
+          h('p.field-help', {},
+            '이 테이블의 컬럼을 참조할 컬럼에 잇습니다. 없으면 *+ 새 컬럼 만들기* 로 '
+            + '그 자리에서 만들 수 있고, 타입은 참조하는 컬럼의 것을 그대로 씁니다.')),
         h('label.field', {}, h('span.field-label', {}, 'ON DELETE'), onDeleteSelect),
         h('label.field', {}, h('span.field-label', {}, 'ON UPDATE'), onUpdateSelect),
         h('p.field-help', {},
@@ -3751,8 +3809,17 @@ class Editor {
               return;
             }
             if (localCols.length !== refCols.length || localCols.some((c) => !c)) {
-              toast('컬럼 짝을 모두 고르세요', 'error');
+              toast('컬럼 연결을 모두 채우세요', 'error');
               return;
+            }
+            // 새로 만들 컬럼의 이름이 이미 있는 컬럼과 겹치면, 서버는 그 추가를
+            // 거부하고 외래키만 남는다 — 절반만 적용된 상태가 된다.
+            for (const i of creating) {
+              const name2 = localCols[i];
+              if (myCols.some((c) => c.name.toLowerCase() === name2.toLowerCase())) {
+                toast(`${name2} 컬럼은 이미 있습니다`, 'error');
+                return;
+              }
             }
             // 같은 컬럼을 두 번 쓰면 복합 외래키가 성립하지 않는다.
             if (new Set(localCols.map((c) => c.toLowerCase())).size !== localCols.length) {
@@ -3780,7 +3847,26 @@ class Editor {
                 this.marks = [this.sel];
               }
             }
-            this.send(editing ? 'fk.update' : 'fk.add', payload);
+            // 새 컬럼을 먼저 만들고 같은 묶음(batch)으로 외래키를 보낸다.
+            //
+            // 한 묶음인 이유: 되돌리기가 함께 되돌아가야 한다. 나눠 보내면 외래키만
+            // 되돌린 뒤 쓰이지 않는 컬럼이 남는다.
+            const batch = newLocalID();
+            for (const i of [...creating].sort((x, y) => x - y)) {
+              const refCol = refCols[i];
+              const theirs = (t.columns ?? [])
+                .find((c) => c.name.toLowerCase() === refCol.toLowerCase());
+              this.send('column.add', {
+                table: ref.serverKey,
+                name: localCols[i],
+                type: theirs?.rawType || theirs?.type?.base || defaultColumnType(this.doc.dialect),
+                // NULL 을 허용해 둔다. 이미 줄이 있는 표에 NOT NULL 컬럼을 더하면
+                // 대상 DB 에서 거부되고, "부모가 반드시 있어야 한다"는 판단은
+                // 그림을 그린 뒤에 컬럼 줄에서 정하는 편이 맞다.
+                nullable: true,
+              }, batch);
+            }
+            this.send(editing ? 'fk.update' : 'fk.add', payload, batch);
             close();
           },
         }, editing ? '저장' : '추가'),

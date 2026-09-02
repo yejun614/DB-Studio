@@ -2412,8 +2412,10 @@ option { background: var(--surface); color: var(--text); }
 .erd-idx-col.is-on { background: var(--surface-2); }
 /* 외래키 컬럼 짝. 왼쪽이 이 테이블의 컬럼, 오른쪽이 참조 컬럼이다. */
 .erd-fk-pairs { display: flex; flex-direction: column; gap: 6px; }
-.erd-fk-pair { display: flex; align-items: center; gap: 8px; }
+.erd-fk-pair { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .erd-fk-pair select { flex: 1; min-width: 0; }
+/* 새 컬럼의 이름 칸. 고르개와 나란히 서고, 좁으면 아래로 접힌다. */
+.erd-fk-newname { flex: 1; min-width: 90px; }
 .erd-fk-arrow { color: var(--text-mute); flex: none; }
 .erd-fk-ref { font: 12px var(--mono); color: var(--text-dim); flex: none; }
 
