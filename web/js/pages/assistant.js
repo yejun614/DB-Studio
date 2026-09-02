@@ -724,31 +724,104 @@ class ChatView {
   //
   // 고를 것이 없으면(허용 목록이 비었으면) 지금 쓰는 모델 이름만 보여준다.
   modelControl() {
-    // 프로바이더를 지정하지 않은 세션은 기본 프로바이더를 쓴다.
-    // 목록은 is_default 순이므로 첫 항목이 그것이다.
-    const provider = (this.data.providers ?? [])
-      .find((p) => p.id === this.session.providerId) ?? (this.data.providers ?? [])[0];
-    const models = provider?.models ?? [];
+    // 고를 수 있는 것을 프로바이더별로 모은다.
+    //
+    // 예전에는 **지금 프로바이더의 모델이 둘 이상일 때만** 고르개가 떴다. 그래서
+    // 모델을 하나만 등록한 사람이나 목록을 비워 둔 사람(제한 없음)에게는 대화
+    // 도중에 모델을 바꿀 길이 아예 없었다 — 하필 아무 모델이나 쓸 수 있는 쪽이다.
+    //
+    // 프로바이더까지 함께 고르는 이유: 모델을 바꾸는 까닭은 대개 "이 대목은 더
+    // 좋은 모델로"인데, 그 좋은 모델은 다른 키(다른 프로바이더)에 있는 경우가
+    // 많다. 세션은 프로바이더와 모델을 함께 들고 있고 서버도 그 조합으로 판정하므로
+    // (checkSessionModel), 화면에서 둘을 나눠 고르게 할 이유가 없다.
+    const providers = this.data.providers ?? [];
+    const provider = providers.find((p) => p.id === this.session.providerId) ?? providers[0];
     const current = this.session.model || provider?.defaultModel || '';
-    if (models.length < 2) {
+    const currentKey = `${provider?.id ?? ''}|${current}`;
+
+    const options = [];
+    for (const p of providers) {
+      const models = p.models?.length ? p.models : [p.defaultModel].filter(Boolean);
+      for (const m of models) {
+        options.push({
+          value: `${p.id}|${m}`,
+          label: providers.length > 1 ? `${p.name} · ${m}` : m,
+        });
+      }
+      // 목록을 비워 둔 프로바이더는 제한이 없다(modelAllowed). 그때는 이름을
+      // 직접 적을 수 있어야 한다 — 로컬 LLM 은 모델이 수십 개다.
+      if (!p.models?.length) {
+        options.push({
+          value: `${p.id}|`,
+          label: providers.length > 1 ? `${p.name} · 직접 입력…` : '직접 입력…',
+        });
+      }
+    }
+    // 지금 쓰는 조합이 목록에 없으면(모델을 지운 뒤) 그것도 넣어 준다. 없으면
+    // 고르개가 엉뚱한 값을 가리키고, 건드리지도 않았는데 모델이 바뀐다.
+    if (current && !options.some((o) => o.value === currentKey)) {
+      options.unshift({ value: currentKey, label: `${current} (지금)` });
+    }
+    if (options.length === 0) return null;
+    if (options.length === 1 && !options[0].value.endsWith('|')) {
       return current ? h('code.muted', {}, current) : null;
     }
-    const sel = select(models.map((m) => ({ value: m, label: m })),
-      { value: models.includes(current) ? current : models[0] });
+
+    const sel = select(options, { value: currentKey });
     sel.classList.add('ai-model-switch');
     sel.title = '이 대화에 쓸 모델';
     sel.addEventListener('change', async () => {
+      const [providerId, picked] = sel.value.split('|');
+      const model = picked || await this.askModelName(providerId);
+      if (!model) {
+        sel.value = currentKey;
+        return;
+      }
       try {
         const res = await api.patch(
-          `/ai/sessions/${encodeURIComponent(this.session.id)}`, { model: sel.value });
+          `/ai/sessions/${encodeURIComponent(this.session.id)}`, { providerId, model });
         this.session = res.session;
-        toast(`모델을 ${sel.value} 로 바꿨습니다`, 'success');
+        toast(`모델을 ${model} 로 바꿨습니다`, 'success');
+        // 머리글의 프로바이더 배지와 고르개를 지금 세션에 맞춘다. 답변을 받는
+        // 중이어도 안전하다 — 그 말풍선 노드는 다시 쓰인다(renderLog).
+        this.render();
       } catch (err) {
-        sel.value = current;
+        sel.value = currentKey;
         toastError(err);
       }
     });
     return sel;
+  }
+
+  // askModelName은 모델 이름을 직접 받는다(제한을 두지 않은 프로바이더).
+  askModelName(providerId) {
+    const p = (this.data.providers ?? []).find((x) => x.id === providerId);
+    const box = input({ value: '', placeholder: p?.defaultModel || '예: llama3.1:70b' });
+    return new Promise((resolve) => {
+      let answered = false;
+      const done = (value, close) => {
+        answered = true;
+        close();
+        resolve(value);
+      };
+      openModal({
+        title: '모델 이름',
+        width: 420,
+        body: () => [
+          h('label.field', {}, h('span.field-label', {}, `${p?.name ?? '프로바이더'} 의 모델`), box),
+          h('p.field-help', {},
+            '이 프로바이더에는 허용 모델 목록이 없어 이름을 직접 적습니다. '
+            + '틀린 이름은 다음 질문에서 프로바이더가 거부합니다.'),
+        ],
+        footer: (close) => [
+          h('button.btn', { type: 'button', onclick: () => done('', close) }, '취소'),
+          h('button.btn.btn-primary', {
+            type: 'button', onclick: () => done(box.value.trim(), close),
+          }, '적용'),
+        ],
+        onClose: () => { if (!answered) resolve(''); },
+      });
+    });
   }
 
   // connControl은 이 대화가 참고할 DB를 바꾸는 칸이다.
