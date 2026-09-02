@@ -505,26 +505,42 @@ func truncateForUI(s string, max int) string {
 // 오류로 끝난 assistant 메시지를 건너뛰는 이유: 실패한 턴을 다시 보내면 모델이
 // 그 실패를 사실로 받아들여 같은 실수를 반복한다.
 func buildHistory(messages []*store.AIMessage, budget int) []ai.Message {
-	out := make([]ai.Message, 0, len(messages))
+	return trimHistory(pairToolCalls(plainMessages(buildHistoryRaw(messages))), budget)
+}
+
+// buildHistoryRaw는 저장된 메시지를 아이디를 단 채로 옮긴다.
+//
+// 아이디를 함께 들고 가는 이유: 접기(ai_compact.go)가 "어디까지 요약했는지"를
+// 세션에 남겨야 하는데, 여기서 걸러지는 메시지가 있어(오류로 끝난 턴, 결과 없는 툴
+// 메시지) 자리 번호로는 원본과 짝을 맞출 수 없다.
+func buildHistoryRaw(messages []*store.AIMessage) []histMsg {
+	out := make([]histMsg, 0, len(messages))
 	for _, m := range messages {
 		switch m.Role {
 		case string(ai.RoleUser):
-			out = append(out, ai.Message{Role: ai.RoleUser, Text: m.Text})
+			out = append(out, histMsg{
+				Message: ai.Message{Role: ai.RoleUser, Text: m.Text}, ID: m.ID,
+			})
 		case string(ai.RoleAssistant):
 			if m.Error != "" && strings.TrimSpace(m.Text) == "" && len(m.ToolCalls) == 0 {
 				continue
 			}
-			out = append(out, ai.Message{
-				Role: ai.RoleAssistant, Text: m.Text, ToolCalls: m.ToolCalls,
+			out = append(out, histMsg{
+				Message: ai.Message{
+					Role: ai.RoleAssistant, Text: m.Text, ToolCalls: m.ToolCalls,
+				},
+				ID: m.ID,
 			})
 		case string(ai.RoleTool):
 			if len(m.ToolResults) == 0 {
 				continue
 			}
-			out = append(out, ai.Message{Role: ai.RoleTool, ToolResults: m.ToolResults})
+			out = append(out, histMsg{
+				Message: ai.Message{Role: ai.RoleTool, ToolResults: m.ToolResults}, ID: m.ID,
+			})
 		}
 	}
-	return trimHistory(pairToolCalls(out), budget)
+	return out
 }
 
 // pairToolCalls는 짝이 맞지 않는 툴 호출과 결과를 걷어낸다.

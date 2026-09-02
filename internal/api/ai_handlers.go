@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
@@ -711,6 +712,15 @@ func (s *Server) handleAIChat(c *fiber.Ctx) error {
 		if derr != nil {
 			return derr
 		}
+		// 지운 자리를 담고 있던 요약은 **틀린 요약**이다. 그대로 두면 있지도 않은
+		// 이야기가 모든 다음 차례의 문맥으로 들어간다 — 고쳐 보내기가 옛 문답을
+		// 지우는 이유와 같은 이유로 지운다.
+		if sess.SummaryThroughID >= body.ReplaceFrom {
+			if serr := s.st.SetAISessionSummary(c.Context(), sess.ID, "", 0); serr != nil {
+				return serr
+			}
+			sess.Summary, sess.SummaryThroughID = "", 0
+		}
 		// 첫 말을 고쳤으면 제목도 그 말에서 뽑은 것이다. 비워 두면 아래에서 새 말로
 		// 다시 정해진다 — 그러지 않으면 목록의 제목과 대화의 첫 줄이 어긋난다.
 		if left == 0 {
@@ -756,7 +766,19 @@ func (s *Server) handleAIChat(c *fiber.Ctx) error {
 	// 하나의 상수로 두면 어느 쪽으로든 틀린다: Claude(20만 토큰)에서는 멀쩡한
 	// 이력을 이유 없이 버리고, 로컬 Ollama(기본 4~8천 토큰)에서는 넘치는 줄도
 	// 모르고 보내 Ollama가 말없이 앞을 잘라낸다.
-	history := buildHistory(stored, historyBudget(cfg.ContextTokens))
+	// 넘치면 자르지 않고 **접는다**. 무엇을 어떻게 접는지는 ai_compact.go 에 있다.
+	// 짧은 대화에서는 아무 일도 일어나지 않고, 프로바이더를 더 부르지도 않는다.
+	compacted := s.compactHistory(c.Context(), cfg, sess, stored,
+		historyBudget(cfg.ContextTokens))
+	history := compacted.Messages
+	if compacted.Summary != "" {
+		// 접어 둔 요약은 저장한다. 접는 일은 프로바이더를 한 번 더 부르는 일이라,
+		// 매 차례 다시 접으면 그 값을 매번 낸다.
+		if serr := s.st.SetAISessionSummary(c.Context(), sess.ID,
+			compacted.Summary, compacted.Through); serr != nil {
+			slog.Error("대화 요약 저장 실패", "session", sess.ID, "error", serr)
+		}
+	}
 
 	// 대상 DB를 시스템 프롬프트에 담는다. 이름을 읽을 수 없으면(지워졌거나 권한이
 	// 사라졌으면) 그냥 붙이지 않는다 — 여기서 실패시키면 대화 전체가 막힌다.
@@ -821,6 +843,12 @@ func (s *Server) handleAIChat(c *fiber.Ctx) error {
 		_ = out.send("start", map[string]any{
 			"sessionId": sess.ID, "provider": provider.Name, "model": cfg.Model,
 		})
+
+		// 접었으면 그렇게 말한다. 조용히 접으면 "아까 말한 그거"가 통하지 않는
+		// 순간이 오는데, 그때 이유를 모르면 모델이 고장 난 것으로 보인다.
+		if note := compactNotice(compacted); note != "" {
+			_ = out.send("notice", map[string]string{"message": note})
+		}
 
 		tc := srv.newToolContext(ctx, u, ip, sess)
 		run := &agentRun{
