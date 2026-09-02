@@ -30,8 +30,10 @@ import {
   loadTypeCatalog, buildType, parseType, categories, paramLabel, paramPlaceholder,
 } from '../core/dbtypes.js';
 import { navigate } from '../core/router.js';
+import { withProject } from '../core/project.js';
 import { isHidden as isNavHidden, setHidden as setNavHidden } from '../core/sidebar.js';
 import { panelResizeHandle, attachPanelResize } from '../core/panelresize.js';
+import { groupedSelect } from '../core/connpick.js';
 import { renderMarkdown } from '../core/markdown.js';
 import { openImageExportDialog } from '../core/erdimage.js';
 import { findInDocument, hitCenter, KIND_LABEL } from '../core/erdfind.js';
@@ -40,7 +42,7 @@ import {
 } from '../core/erdrel.js';
 import { streamAIChat } from '../core/aistream.js';
 import { errorPanel } from './users.js';
-import { statusBadge } from './erd.js';
+import { statusBadge, STATUS_LABELS } from './erd.js';
 
 // 테이블에 붙일 수 있는 아이콘. 빈 값은 "없음"이다.
 // 종류를 늘리는 것보다 서로 확실히 구분되는 몇 개가 낫다 — 스무 개 중에서 고르면
@@ -687,11 +689,10 @@ class Editor {
         // 도메인 이름 ↔ 실제 타입. 이름 보기와 같은 묶음에 두는 이유: 둘 다
         // "카드에 무엇을 적을까"이고, 설계 회의에서 함께 오간다.
         //
-        // 하나짜리 토글이 아니라 둘로 두는 이유: 토글은 지금 어느 쪽인지 말하려면
-        // 글자가 바뀌어야 하고, 바뀌는 글자는 "지금 이것"인지 "누르면 이것"인지
-        // 알 수 없다. 이름 보기와 같은 모양이면 그 규칙을 한 번만 배우면 된다.
-        // (그리고 "도메인" 한 단어는 오른쪽 도메인 **탭**과 겹친다.)
-        ...TYPE_MODES.map((m) => this.typeModeBtn(m)),
+        // 단추 하나로 오가고, 글자는 **지금 보고 있는 것**을 말한다. 이름 보기처럼
+        // 셋 중 하나를 고르는 것이 아니라 둘 사이를 왕복하는 설정이라, 두 칸을 두면
+        // 도구 줄에서 늘 한 칸은 꺼진 채로 자리만 차지한다.
+        this.typeModeBtn(),
       ),
       h('div.erd-tool-group', {},
         this.toolBtn('minus', '축소', () => this.zoom(1.25)),
@@ -782,17 +783,19 @@ class Editor {
     this.renderCanvas();
   }
 
-  // typeModeBtn은 컬럼 타입 자리에 무엇을 보일지 고르는 단추다.
-  typeModeBtn(mode) {
-    const on = (mode.value === 'domain') === this.showDomain;
-    return h('button.btn.btn-small.erd-name-mode', {
+  // typeModeBtn은 컬럼 타입 자리에 무엇을 보일지 오가는 단추다.
+  //
+  // 글자는 지금 보고 있는 쪽이다("도메인명" / "실제 타입"). 누르면 반대쪽으로
+  // 바뀌고 글자도 함께 바뀐다 — 어느 쪽을 보고 있는지가 곧 이 단추의 상태다.
+  typeModeBtn() {
+    const mode = this.showDomain ? TYPE_MODES[0] : TYPE_MODES[1];
+    return h('button.btn.btn-small.erd-name-mode.is-on', {
       type: 'button',
-      class: on ? 'btn btn-small erd-name-mode is-on' : 'btn btn-small erd-name-mode',
-      'aria-pressed': String(on),
-      title: mode.value === 'domain'
-        ? '도메인이 걸린 컬럼에 도메인 이름을 보입니다'
-        : '도메인이 걸린 컬럼에도 실제 타입을 보입니다',
-      onclick: () => this.setShowDomain(mode.value === 'domain'),
+      'aria-pressed': 'true',
+      title: this.showDomain
+        ? '도메인이 걸린 컬럼에 도메인 이름을 보입니다 — 누르면 실제 타입'
+        : '도메인이 걸린 컬럼에도 실제 타입을 보입니다 — 누르면 도메인명',
+      onclick: () => this.setShowDomain(!this.showDomain),
     }, mode.label);
   }
 
