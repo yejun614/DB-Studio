@@ -53,6 +53,10 @@ web/                 프론트엔드 (ES Module, 프레임워크 없음)
   fonts/pretendard-jp/  본문 폰트 Pretendard JP (OFL 1.1). CDN을 쓸 수 없어 함께 담는다
                      (CSP가 font-src 'self'). dynamic subset이라 브라우저는 쓰는
                      조각만 받는다 — 한국어 화면 기준 약 175KB (통짜 파일은 5.3MB)
+  fonts/d2coding/    코드·ERD 도면 고정폭 D2Coding (OFL 1.1, NAVER). 같은 이유로 함께 담는다.
+                     한글이 라틴 두 칸 폭이라 한글 섞인 코드·컬럼명에서도 세로줄이 맞는다 —
+                     라틴 전용 고정폭에서는 한글만 대체 글꼴로 빠져 줄이 어긋난다.
+                     subset(한글 2,350자 + ASCII) 두 굵기로 약 750KB (통짜는 3MB)
   js/theme-init.js   저장된 테마를 첫 페인트 전에 적용 (CSP 때문에 인라인 불가)
   js/core/           api, dom, ui, store, router, chart, dblogo, erdsocket, theme, avatars, highlight
   js/pages/          login, totp, security, dashboard, users, access, connections, schema, monitor,

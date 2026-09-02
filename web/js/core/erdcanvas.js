@@ -13,7 +13,7 @@
 import { h, mount, icon } from './dom.js';
 import { columnIcon, chosenIconFor } from './colicon.js';
 import { NAME_MODES, tableLabel, columnLabel } from './logical.js';
-import { fitText, measure, cssFont } from './textfit.js';
+import { fitText, measure, cssFont, forgetFonts } from './textfit.js';
 import { makeRouter, oneMarker } from './erdroute.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -79,6 +79,31 @@ export class ErdCanvas {
     mount(wrap, this.svg);
 
     this.bind();
+    this.watchFonts();
+  }
+
+  // watchFonts는 글꼴이 늦게 도착했을 때 다시 재고 다시 그린다.
+  //
+  // 왜 필요한가: 글자를 자를 자리는 **폭을 재서** 정한다(textfit). 그 잣대는 지금
+  // 그려지는 글꼴이고, 웹폰트는 첫 그리기보다 늦게 도착하는 일이 흔하다. 그러면
+  // 대체 글꼴의 폭으로 자른 자리가 그대로 남는다 — 글꼴이 바뀌었으니 그 자리는
+  // 이제 틀렸고, 화면에는 "이유 없이 일찍 잘린 이름"이나 넘치는 글자가 남는다.
+  //
+  // D2Coding에서 특히 두드러진다. 한글을 라틴 두 칸 폭으로 그리므로, 시스템
+  // 고정폭으로 잰 값과 크게 다르다.
+  //
+  // ready 와 loadingdone 을 함께 듣는 이유: ready 는 처음 요청한 글꼴이 끝나면
+  // 한 번 풀리는데, 도면의 고정폭은 카드가 처음 그려질 때 비로소 요청된다 —
+  // 그때는 ready 가 이미 풀린 뒤일 수 있다.
+  watchFonts() {
+    const fonts = document.fonts;
+    if (!fonts) return;
+    const refresh = () => {
+      forgetFonts();
+      if (this.svg?.isConnected) this.render();
+    };
+    fonts.ready?.then(refresh).catch(() => {});
+    fonts.addEventListener?.('loadingdone', refresh);
   }
 
   // canEdit은 "지금 손으로 옮길 수 있는가"다. 구조 화면에서도 배치는 옮길 수

@@ -185,5 +185,8 @@ go test ./internal/dbx -run TestIntrospect -integration
 
 이 프로젝트는 [MIT 라이선스](LICENSE)입니다.
 
-함께 담긴 본문 글꼴 **Pretendard JP**는 SIL Open Font License 1.1을 따릅니다
-(`web/fonts/pretendard-jp/OFL.txt`). CDN을 쓸 수 없는 사설망 배치를 위해 저장소에 포함했습니다.
+함께 담긴 글꼴 두 벌은 모두 SIL Open Font License 1.1을 따릅니다. CDN을 쓸 수 없는
+사설망 배치를 위해 저장소에 포함했습니다.
+
+- 본문 **Pretendard JP** (`web/fonts/pretendard-jp/OFL.txt`)
+- 코드·ERD 도면 **D2Coding** (`web/fonts/d2coding/OFL.txt`, NAVER)

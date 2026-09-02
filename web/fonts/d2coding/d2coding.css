@@ -1,0 +1,44 @@
+/* D2Coding — 자체 호스팅 웹폰트(코드·ERD 도면용 고정폭).
+ *
+ * Pretendard와 같은 이유로 함께 담는다: CSP가 font-src 'self' 로 고정되어 있고
+ * (외부 요청을 쓰지 않는 것이 이 앱의 전제다) 정적 자산은 바이너리에 embed된다.
+ *
+ * 왜 시스템 고정폭(Consolas·Menlo)으로 충분하지 않은가: 이 앱의 코드와 도면에는
+ * 한글이 섞인다(컬럼 논리명, 주석, SQL 안의 한글 리터럴). 라틴 전용 고정폭에서
+ * 한글은 대체 글꼴로 그려지고, 그 순간 글자 폭이 어긋나 세로줄이 무너진다.
+ * D2Coding은 한글을 라틴 두 칸 폭으로 그리는 고정폭이라 그 줄이 맞는다.
+ *
+ * **subset**(한글 2,350자 + ASCII)을 쓰는 이유: 통짜는 굵기 둘을 합쳐 3MB인데,
+ * 이 글꼴이 그리는 것은 식별자·타입·주석이라 완성형 밖의 희귀 한글이 나올 일이
+ * 드물다. 그런 글자는 아래 대체 글꼴(Pretendard)로 그려진다 — 그 줄만 폭이
+ * 어긋나지만, 3MB를 늘 내려받는 것보다 낫다고 판단했다.
+ * (통짜가 필요해지면 fonts/d2coding-*-full.woff2 로 바꾸면 된다.)
+ *
+ * 합자(ligature) 없는 판을 쓴다. => 나 != 가 한 글자로 붙어 보이면 SQL을 읽을 때
+ * 실제로 적힌 것과 보이는 것이 달라진다 — DB 도구에서는 그 차이가 위험하다.
+ *
+ * 출처: https://github.com/naver/d2codingfont (v1.3.2)
+ *   npm 패키지 d2coding@1.3.2 의 fonts/d2coding-subset.woff2,
+ *   fonts/d2coding-bold-subset.woff2 를 그대로 담았다.
+ * 라이선스: SIL Open Font License 1.1 — 같은 폴더의 OFL.txt
+ */
+
+@font-face {
+	font-family: 'D2Coding';
+	font-style: normal;
+	font-weight: 400;
+	font-display: swap;
+	/* 시스템에 설치돼 있으면 그것을 쓴다. 내려받지 않아도 되고, 사용자가 손본
+	 * 판이 있다면 그쪽이 그 사람에게 맞다. */
+	src: local('D2Coding'), local('D2Coding Regular'),
+		url(./woff2/d2coding-subset.woff2) format('woff2');
+}
+
+@font-face {
+	font-family: 'D2Coding';
+	font-style: normal;
+	font-weight: 700;
+	font-display: swap;
+	src: local('D2Coding Bold'),
+		url(./woff2/d2coding-bold-subset.woff2) format('woff2');
+}

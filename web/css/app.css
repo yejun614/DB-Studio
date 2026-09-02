@@ -71,7 +71,15 @@
   --shadow: 0 10px 15px -3px hsl(var(--h-foreground) / 0.1),
             0 4px 6px -4px hsl(var(--h-foreground) / 0.1);
 
-  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  /* 고정폭은 함께 담아 서빙하는 D2Coding이다(/fonts/d2coding/).
+   *
+   * 시스템 고정폭을 앞에 두지 않는 이유: 이 앱의 코드와 도면에는 한글이 섞인다
+   * (컬럼 논리명, 주석, SQL 안의 한글 리터럴). 라틴 전용 고정폭에서 한글은 대체
+   * 글꼴로 그려지고, 그 순간 글자 폭이 어긋나 세로줄이 무너진다.
+   *
+   * 뒤의 목록은 글꼴을 못 받았을 때를 위한 것이라 그대로 남긴다. */
+  --mono: "D2Coding", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    monospace;
   /* 본문 폰트는 함께 담아 서빙하는 Pretendard JP다(/fonts/pretendard-jp/).
    * 뒤의 목록은 폰트를 못 받았을 때를 위한 것이라 그대로 남긴다 — 한글이
    * 시스템 기본 고딕으로라도 읽혀야 한다. */
@@ -2176,7 +2184,10 @@ option { background: var(--surface); color: var(--text); }
 }
 .erd-card-holder { fill: none; stroke-width: 2; stroke-dasharray: 4 3; }
 .erd-card-head { fill: hsl(var(--h-muted)); }
-.erd-card-name { fill: var(--text); font: 600 12.5px var(--sans); }
+/* 카드 제목은 고정폭으로 쓴다. 표 이름은 코드에 그대로 적히는 식별자이고,
+ * 도면은 그 코드의 그림이다 — 본문 글꼴로 쓰면 도면만 문서처럼 읽힌다.
+ * (메모와 묶음 이름은 사람이 쓴 글이라 본문 글꼴 그대로 둔다.) */
+.erd-card-name { fill: var(--text); font: 600 12.5px var(--mono); }
 /* 논리명 제목은 조금 작게. 같은 크기로 두면 한글이 라틴 문자보다 넓어서
    제목만 유독 큼직하게 튄다. */
 .erd-card-name.is-logical { font-size: 11.5px; }
