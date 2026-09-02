@@ -1303,7 +1303,13 @@ export class ErdCanvas {
       else this.opts.onSelect?.(null);
       this.render();
     }
-    this.svg.setPointerCapture?.(e.pointerId);
+    // 이 포인터가 이미 사라졌으면(pointercancel, 아주 짧은 터치) 붙잡을 수 없다.
+    // 붙잡지 못해도 화면 이동은 pointermove 로 이어지므로, 예외로 손을 놓지 않는다.
+    try {
+      this.svg.setPointerCapture?.(e.pointerId);
+    } catch {
+      /* 붙잡을 포인터가 없다 */
+    }
   }
 
   // setSpaceHeld는 스페이스바 상태를 반영한다(커서 포함).

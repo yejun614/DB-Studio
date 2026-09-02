@@ -684,16 +684,7 @@ class Editor {
       // 도구 줄에 두는 이유: 설계 회의에서는 논리명으로 이야기하고 코드에서는
       // 물리명으로 쓴다. 그 둘 사이를 자주 오가므로 속성 창 안쪽이 아니라 손이
       // 바로 닿는 곳에 있어야 한다.
-      h('div.erd-tool-group', {},
-        ...NAME_MODES.map((m) => this.nameModeBtn(m)),
-        // 도메인 이름 ↔ 실제 타입. 이름 보기와 같은 묶음에 두는 이유: 둘 다
-        // "카드에 무엇을 적을까"이고, 설계 회의에서 함께 오간다.
-        //
-        // 단추 하나로 오가고, 글자는 **지금 보고 있는 것**을 말한다. 이름 보기처럼
-        // 셋 중 하나를 고르는 것이 아니라 둘 사이를 왕복하는 설정이라, 두 칸을 두면
-        // 도구 줄에서 늘 한 칸은 꺼진 채로 자리만 차지한다.
-        this.typeModeBtn(),
-      ),
+      h('div.erd-tool-group', {}, ...this.viewToggles()),
       h('div.erd-tool-group', {},
         this.toolBtn('minus', '축소', () => this.zoom(1.25)),
         this.toolBtn('plus', '확대', () => this.zoom(0.8)),
@@ -773,13 +764,41 @@ class Editor {
     }, mode.label);
   }
 
+  // viewToggles는 "카드에 무엇을 적을까"를 정하는 단추들이다.
+  //
+  // 도구 줄과 발표 막대가 같은 것을 쓴다. 발표 중에도 이 둘은 필요하다 — 논리명으로
+  // 설명하다가 "그 컬럼 물리명이 뭐죠"가 나오고, 도메인으로 이야기하다가 "실제로는
+  // 어떤 타입인가요"가 나온다. 발표를 끝내고 도구 줄에서 바꾼 뒤 다시 시작하면
+  // 화면이 한 번 깜빡이고 보고 있던 자리도 잃는다.
+  //
+  // 하나로 묶어 둔 이유: 두 곳에 따로 두면 한쪽에만 새 보기 설정이 생긴다.
+  viewToggles() {
+    return [
+      ...NAME_MODES.map((m) => this.nameModeBtn(m)),
+      // 도메인 이름 ↔ 실제 타입. 이름 보기와 같은 묶음에 두는 이유: 둘 다
+      // "카드에 무엇을 적을까"이고, 설계 회의에서 함께 오간다.
+      //
+      // 단추 하나로 오가고, 글자는 **지금 보고 있는 것**을 말한다. 이름 보기처럼
+      // 셋 중 하나를 고르는 것이 아니라 둘 사이를 왕복하는 설정이라, 두 칸을 두면
+      // 도구 줄에서 늘 한 칸은 꺼진 채로 자리만 차지한다.
+      this.typeModeBtn(),
+    ];
+  }
+
+  // refreshViewToggles는 보기 설정 단추들이 있는 곳을 다시 그린다. 발표 중에는
+  // 도구 줄이 아니라 발표 막대에 그것들이 있다.
+  refreshViewToggles() {
+    this.renderToolbar();
+    if (this.present) this.renderPresentBar();
+  }
+
   // setNameMode는 카드에 보일 이름을 바꾼다. 문서는 건드리지 않는 보기 설정이라
   // 다른 참여자에게 보내지 않는다.
   setNameMode(mode) {
     if (this.nameMode === mode) return;
     this.nameMode = mode;
     writeNameMode(mode);
-    this.renderToolbar();
+    this.refreshViewToggles();
     this.renderCanvas();
   }
 
@@ -804,7 +823,7 @@ class Editor {
   setShowDomain(on) {
     this.showDomain = Boolean(on);
     writeShowDomain(this.showDomain);
-    this.renderToolbar();
+    this.refreshViewToggles();
     this.renderCanvas();
   }
 
@@ -969,8 +988,12 @@ class Editor {
 
   // renderPresentBar는 발표 중 화면에 남는 유일한 도구다.
   //
-  // 무엇이 떠 있는지(문서 이름)와 어떻게 나가는지, 둘만 둔다. 나갈 길이 화면에
+  // 무엇이 떠 있는지(문서 이름), 어떻게 보일지, 어떻게 나가는지. 나갈 길이 화면에
   // 없으면 그것은 발표 모드가 아니라 갇힌 화면이다.
+  //
+  // 보기 설정(이름·타입)을 여기 두는 이유는 viewToggles 에 적어 두었다. 편집 도구는
+  // 하나도 두지 않는다 — 발표 중에는 고칠 수 없고, 눌러도 아무 일이 없는 단추는
+  // 발표자가 무언가 잘못했다고 생각하게 만든다.
   renderPresentBar() {
     const bar = this.ui.presentBar;
     if (!bar) return;
@@ -980,6 +1003,8 @@ class Editor {
     mount(bar,
       h('span.erd-present-title', {}, truncate(this.doc.name ?? '설계', 36)),
       h('span.erd-present-count', {}, `표 ${tables}개`),
+      h('div.erd-tool-group.erd-present-toggles', {}, ...this.viewToggles()),
+      h('span.erd-present-sep'),
       h('button.btn.btn-small', {
         type: 'button', onclick: () => this.leavePresent(),
       }, icon('x', 13), '발표 종료 (Esc)'),
