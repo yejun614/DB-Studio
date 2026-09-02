@@ -1353,6 +1353,37 @@ function openProviderForm(meta, existing, reload) {
     return true;
   };
 
+  // askContext는 모르는 모델의 크기를 서버에 물어본다.
+  //
+  // 목록에 크기가 함께 오는 것은 로컬 Ollama뿐이다. Ollama Cloud는 목록에 넣어
+  // 주지 않는데, 모델마다 크기가 크게 다르다(gpt-oss:120b 131,072 · glm-5.3
+  // 1,048,576). 그래서 고른 모델 하나만 따로 묻는다.
+  let asking = '';
+  const askContext = async (model) => {
+    if (!model || ctxByModel[model] || asking === model) return;
+    asking = model;
+    mount(ctxNote, `${model} 의 컨텍스트를 알아보는 중…`);
+    try {
+      const res = await api.post('/ai/providers/models', {
+        id: existing?.id ?? '',
+        provider: kindSelect.value,
+        baseUrl: baseInput.value,
+        apiKey: keyInput.value.trim(),
+        model,
+      });
+      ctxByModel = { ...ctxByModel, ...(res.contextTokens ?? {}) };
+      // 묻는 동안 사람이 직접 적었을 수 있다. 그러면 덮지 않는다.
+      if (ctxInput.value.trim() === '' && fillContext(model)) return;
+      mount(ctxNote, '');
+    } catch {
+      // 못 물어봐도 그만이다. 사람이 적으면 된다 — 여기서 오류를 띄우면
+      // 모델을 고를 때마다 붉은 토스트가 뜬다.
+      mount(ctxNote, '');
+    } finally {
+      asking = '';
+    }
+  };
+
   const listBox = h('div');
   const countLine = h('p.field-help');
   const filterInput = input({ placeholder: '모델 이름으로 거르기' });
@@ -1374,7 +1405,8 @@ function openProviderForm(meta, existing, reload) {
     sel.addEventListener('change', () => {
       defaultModel = sel.value;
       // 사람이 손으로 적은 값은 덮지 않는다. 비어 있을 때만 채운다.
-      if (ctxInput.value.trim() === '') fillContext(defaultModel);
+      if (ctxInput.value.trim() !== '') return;
+      if (!fillContext(defaultModel)) askContext(defaultModel);
     });
     mount(defaultModelField, sel,
       h('span.field-help', {}, '새 대화가 기본으로 쓰는 모델입니다 (대화마다 바꿀 수 있습니다)'));
@@ -1425,6 +1457,7 @@ function openProviderForm(meta, existing, reload) {
     manualInput.value = '';
     renderList();
     renderDefault();
+    if (ctxInput.value.trim() === '' && !fillContext(name)) askContext(name);
   };
   manualInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); addManual(); }
@@ -1459,7 +1492,8 @@ function openProviderForm(meta, existing, reload) {
       ctxByModel = res.contextTokens ?? {};
       // 아직 아무것도 안 적었으면 기본 모델의 크기로 채워 준다. 사람이 모델
       // 카드를 찾아 옮겨 적는 것보다 서버가 아는 값이 정확하다.
-      if (ctxInput.value.trim() === '' && defaultModel) fillContext(defaultModel);
+      if (ctxInput.value.trim() === '' && defaultModel
+        && !fillContext(defaultModel)) askContext(defaultModel);
       if (!res.supported) {
         toast('이 엔드포인트는 모델 목록을 제공하지 않습니다. 직접 입력하세요', 'error', 6000);
       } else {

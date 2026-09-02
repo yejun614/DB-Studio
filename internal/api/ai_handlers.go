@@ -271,6 +271,8 @@ func (s *Server) handleDiscoverAIModels(c *fiber.Ctx) error {
 		Provider string `json:"provider"`
 		BaseURL  string `json:"baseUrl"`
 		APIKey   string `json:"apiKey"`
+		// Model이 오면 그 모델의 컨텍스트 크기까지 알아본다.
+		Model string `json:"model"`
 	}
 	if err := c.BodyParser(&body); err != nil {
 		return fail(c, fiber.StatusBadRequest, "bad_request", "요청 본문을 해석할 수 없습니다")
@@ -336,12 +338,24 @@ func (s *Server) handleDiscoverAIModels(c *fiber.Ctx) error {
 	}
 	// Ollama는 모델마다 컨텍스트 크기를 알려준다. 화면이 그것으로 칸을 채운다 —
 	// 사람이 모델 카드를 찾아 손으로 옮겨 적으면 틀리고, 틀린 값은 조용히 이력을
-	// 지우거나 조용히 넘치게 한다. (클라우드는 주지 않으므로 빈 지도가 온다.)
+	// 지우거나 조용히 넘치게 한다.
 	res := fiber.Map{"models": models, "supported": true}
 	if ai.Kind(body.Provider) == ai.Ollama {
-		if sizes, cerr := ai.OllamaModelContext(ctx, ai.Config{
-			Kind: ai.Ollama, BaseURL: body.BaseURL, APIKey: body.APIKey,
-		}); cerr == nil && len(sizes) > 0 {
+		ocfg := ai.Config{Kind: ai.Ollama, BaseURL: body.BaseURL, APIKey: body.APIKey}
+		// 로컬은 목록에 크기가 함께 온다(요청 한 번).
+		sizes, cerr := ai.OllamaModelContext(ctx, ocfg)
+		if cerr != nil || sizes == nil {
+			sizes = map[string]int{}
+		}
+		// 클라우드는 목록에 넣어 주지 않는다. 그래서 고른 모델 하나만 따로 묻는다 —
+		// 모델이 스무 개면 요청도 스무 번이고, 필요한 것은 지금 쓸 모델뿐이다.
+		// (모델마다 크게 다르다: gpt-oss:120b 131072, glm-5.3 1048576.)
+		if want := strings.TrimSpace(body.Model); want != "" && sizes[want] == 0 {
+			if n, serr := ai.OllamaShowContext(ctx, ocfg, want); serr == nil && n > 0 {
+				sizes[want] = n
+			}
+		}
+		if len(sizes) > 0 {
 			res["contextTokens"] = sizes
 		}
 	}

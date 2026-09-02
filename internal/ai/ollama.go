@@ -79,8 +79,8 @@ func (p *ollamaProvider) Models(ctx context.Context, cfg Config) ([]string, erro
 // 대신 서버가 아는 값을 쓰는 편이 낫다 — 손으로 적으면 틀리고, 틀린 값은 조용히
 // 이력을 지우거나 조용히 넘치게 한다.
 //
-// 로컬 Ollama는 /api/tags 에 context_length 를 실어 준다. Cloud는 주지 않으므로
-// 그때는 0이고, 화면이 사람에게 묻는다.
+// 로컬 Ollama는 /api/tags 에 context_length 를 함께 준다. Cloud는 목록에 넣어 주지
+// 않으므로 여기서는 빈 지도가 나온다 — 그때는 OllamaShowContext 로 하나씩 묻는다.
 func OllamaModelContext(ctx context.Context, cfg Config) (map[string]int, error) {
 	p := &ollamaProvider{}
 	var out ollamaTags
@@ -307,4 +307,42 @@ func ollamaStopReason(reason string) string {
 	default:
 		return reason
 	}
+}
+
+// OllamaShowContext는 모델 하나의 컨텍스트 크기를 물어본다(토큰). 모르면 0.
+//
+// /api/tags 로 부족한 이유: Cloud는 목록에 크기를 실어 주지 않는다. 그런데 모델마다
+// 크기가 크게 다르다 — 재 보니 gpt-oss:120b 는 131,072, qwen3.5:397b 는 262,144,
+// minimax-m3 는 524,288, glm-5.3 은 1,048,576 이었다. 이 차이를 모르면 100만 토큰
+// 모델에서도 이력을 12만 자에서 버리게 된다.
+//
+// 목록 전체가 아니라 **고른 모델 하나만** 묻는 이유: 모델이 스무 개면 요청도 스무
+// 번이다. 필요한 것은 지금 쓸 모델 하나뿐이다.
+//
+// 크기가 담긴 열쇠 이름은 아키텍처마다 다르다(gptoss.context_length,
+// glm_dsa_moe.context_length, qwen3.5.context_length …). 그래서 이름을 맞히지 않고
+// ".context_length" 로 끝나는 것을 찾는다 — 새 아키텍처가 나와도 그대로 읽힌다.
+func OllamaShowContext(ctx context.Context, cfg Config, model string) (int, error) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return 0, nil
+	}
+	p := &ollamaProvider{}
+	var out struct {
+		ModelInfo map[string]json.RawMessage `json:"model_info"`
+	}
+	if err := postJSON(ctx, p.root(cfg)+"/api/show", p.headers(cfg),
+		map[string]string{"model": model}, &out); err != nil {
+		return 0, err
+	}
+	for key, raw := range out.ModelInfo {
+		if !strings.HasSuffix(key, ".context_length") {
+			continue
+		}
+		var n int
+		if err := json.Unmarshal(raw, &n); err == nil && n > 0 {
+			return n, nil
+		}
+	}
+	return 0, nil
 }

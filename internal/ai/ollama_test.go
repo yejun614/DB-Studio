@@ -262,3 +262,58 @@ func TestOllamaModelsAndContext(t *testing.T) {
 		t.Errorf("모르는 크기가 지도에 들어갔습니다: %v", sizes)
 	}
 }
+
+// 모델 하나의 컨텍스트 크기를 물어본다.
+//
+// 목록(/api/tags)에 크기가 함께 오는 것은 로컬뿐이다. Ollama Cloud는 넣어 주지
+// 않는데 모델마다 크기가 크게 다르므로(gpt-oss:120b 131,072 · glm-5.3 1,048,576),
+// 고른 모델 하나를 /api/show 로 따로 묻는다.
+func TestOllamaShowContext(t *testing.T) {
+	var asked map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/api/show") {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewDecoder(r.Body).Decode(&asked)
+		w.Header().Set("Content-Type", "application/json")
+		// 열쇠 이름은 아키텍처마다 다르다. 이름을 맞히지 않고 접미사로 찾는다.
+		fmt.Fprint(w, `{"model_info":{"general.architecture":"glm_dsa_moe",`+
+			`"glm_dsa_moe.embedding_length":0,"glm_dsa_moe.context_length":1048576}}`)
+	}))
+	defer srv.Close()
+
+	cfg := Config{Kind: Ollama, BaseURL: srv.URL}
+	n, err := OllamaShowContext(context.Background(), cfg, "glm-5.3")
+	if err != nil {
+		t.Fatalf("show: %v", err)
+	}
+	if n != 1048576 {
+		t.Errorf("컨텍스트 = %d, 기대 1048576", n)
+	}
+	if asked["model"] != "glm-5.3" {
+		t.Errorf("물어본 모델 = %q", asked["model"])
+	}
+
+	// 이름이 비면 묻지 않는다(요청 한 번을 아낀다).
+	if n, err := OllamaShowContext(context.Background(), cfg, "  "); err != nil || n != 0 {
+		t.Errorf("빈 이름 = %d, %v", n, err)
+	}
+}
+
+// 크기를 모르는 응답에는 0을 준다. 오류가 아니다 — 사람이 적으면 된다.
+func TestOllamaShowContextUnknown(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"model_info":{"general.architecture":"x"}}`)
+	}))
+	defer srv.Close()
+
+	n, err := OllamaShowContext(context.Background(), Config{BaseURL: srv.URL}, "x")
+	if err != nil {
+		t.Fatalf("show: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("모르는 크기 = %d, 기대 0", n)
+	}
+}

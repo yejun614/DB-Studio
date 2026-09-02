@@ -15,6 +15,9 @@ import (
 // maxErrorBody는 오류 응답을 읽을 상한이다.
 const maxErrorBody = 64 << 10
 
+// maxJSONBody는 조회 응답 본문의 상한이다.
+const maxJSONBody = 4 << 20
+
 // sseLineLimit은 SSE 한 줄의 상한이다.
 //
 // 기본 bufio.Scanner 버퍼(64KB)로는 부족하다: 툴 인자 JSON이 한 줄에 담겨 오는
@@ -102,6 +105,51 @@ func getJSON(ctx context.Context, endpoint string, headers map[string]string, ou
 	defer res.Body.Close()
 
 	raw, err := io.ReadAll(io.LimitReader(res.Body, maxErrorBody))
+	if err != nil {
+		return fmt.Errorf("응답을 읽지 못했습니다: %w", err)
+	}
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return &APIError{Status: res.StatusCode, Message: extractMessage(raw), Body: string(raw)}
+	}
+	if out == nil {
+		return nil
+	}
+	if err := json.Unmarshal(raw, out); err != nil {
+		return fmt.Errorf("응답을 해석하지 못했습니다: %w", err)
+	}
+	return nil
+}
+
+// postJSON은 JSON을 보내고 JSON을 받는다 (스트림이 아닌 조회용).
+//
+// getJSON과 나눠 두는 이유: Ollama의 /api/show 는 모델 이름을 본문에 담아 POST로
+// 물어본다. 스트림이 아니므로 postNDJSON은 맞지 않고, 본문이 있으므로 getJSON도
+// 맞지 않다.
+func postJSON(ctx context.Context, endpoint string, headers map[string]string,
+	body any, out any) error {
+
+	data, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshal request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	res, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("요청 실패: %w", err)
+	}
+	defer res.Body.Close()
+
+	// 성공 응답은 오류 본문보다 클 수 있다(모델 정보에 템플릿이 딸려 오기도 한다).
+	// 상한에 걸려 잘리면 JSON이 깨져 "응답을 해석하지 못했습니다"만 남는다.
+	raw, err := io.ReadAll(io.LimitReader(res.Body, maxJSONBody))
 	if err != nil {
 		return fmt.Errorf("응답을 읽지 못했습니다: %w", err)
 	}
