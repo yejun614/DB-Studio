@@ -107,6 +107,12 @@ function docCard(item, reload) {
     h('div.erd-card-actions', {},
       h('a.btn.btn-small', { href: `/erd/${encodeURIComponent(doc.id)}` },
         icon('edit'), '열기'),
+      // 복제는 **볼 수 있으면** 할 수 있다. 담기는 내용은 이미 보고 있는 것이고,
+      // 만들어지는 것은 내 새 초안이다 — 원본은 건드리지 않으므로 설정·삭제와 같은
+      // 문턱을 세울 이유가 없다.
+      h('button.btn.btn-small', {
+        type: 'button', onclick: () => openDuplicateDialog(doc, reload),
+      }, icon('copy'), '복제'),
       // 설정과 삭제는 되돌릴 수 없거나 남에게 영향을 준다. 대상 DB 없는 초안에서는
       // 만든 사람과 어드민만 할 수 있으므로, 할 수 없는 사람에게는 아예 보이지 않는다.
       !item.canManage ? null : h('button.btn.btn-small', {
@@ -133,6 +139,60 @@ function docCard(item, reload) {
       }, icon('trash'), '삭제'),
     ),
   );
+}
+
+// openDuplicateDialog는 초안을 베낀다.
+//
+// 창을 여는 이유: 사본에서 가장 먼저 정해야 하는 것이 이름이다. 자동 이름으로
+// 바로 만들면 "주문 개편 사본"이 목록에 남고, 그것을 고치러 설정을 다시 열어야
+// 한다. (테이블 복제도 같은 이유로 창을 띄운다 — erdeditor.openDuplicateDialog)
+function openDuplicateDialog(doc, reload) {
+  const nameInput = input({ value: `${doc.name} 사본`, autofocus: true });
+  let busy = false;
+
+  openModal({
+    title: '초안 복제',
+    width: 480,
+    body: () => [
+      h('label.field', {}, h('span.field-label', {}, '새 이름'), nameInput),
+      h('p.field-help', {},
+        '테이블·컬럼·관계는 물론 배치·색·아이콘·논리명·도메인·메모까지 그대로 베낍니다. '
+        + '원본은 바뀌지 않습니다.'),
+      // 무엇이 안 따라오는지도 적는다. "복제했는데 대화가 없다"를 나중에 발견하면
+      // 그것은 고장으로 읽힌다.
+      h('p.field-help', {}, '편집 이력과 대화는 따라오지 않고, 상태는 초안으로 시작합니다.'),
+    ],
+    footer: (closeFn) => [
+      h('button.btn', { type: 'button', onclick: closeFn }, '취소'),
+      h('button.btn.btn-primary', {
+        type: 'button',
+        onclick: async (e) => {
+          const name = nameInput.value.trim();
+          if (!name) {
+            toast('이름을 적으세요', 'error');
+            return;
+          }
+          // 두 번 눌러 두 개가 만들어지는 것을 막는다. 큰 초안은 응답이 한 박자 늦다.
+          if (busy) return;
+          busy = true;
+          e.target.disabled = true;
+          try {
+            const res = await api.post(
+              `/erd/documents/${encodeURIComponent(doc.id)}/duplicate`, { name });
+            closeFn();
+            toast('복제했습니다', 'success');
+            // 사본으로 바로 들어간다. 복제하는 사람은 그 사본을 고치려는 것이고,
+            // 목록으로 돌려보내면 방금 만든 것을 다시 찾게 한다.
+            navigate(`/erd/${encodeURIComponent(res.document.id)}`);
+          } catch (err) {
+            busy = false;
+            e.target.disabled = false;
+            toastError(err);
+          }
+        },
+      }, icon('copy'), '복제'),
+    ],
+  });
 }
 
 // openCreateDialog는 새 초안의 출발점을 고르게 한다.
