@@ -2589,6 +2589,131 @@ tr.is-destructive td { background: hsl(var(--h-danger) / 0.08); }
   .erd-body { grid-template-columns: 1fr; grid-template-rows: 1fr 300px; }
 }
 
+/* ---------- 발표 모드 ----------
+ *
+ * 도면만 남긴다. 머리글·도구 줄이 사라지고(왼쪽 사이드바는 JS가 접는다), 오른쪽
+ * 상세 창은 무언가를 고른 동안에만 나타난다.
+ *
+ * position: fixed 로 화면을 통째로 덮는 이유: 편집기는 콘텐츠 영역 안에 놓인
+ * 상자다(높이도 calc(100vh - 96px)). 그 안에서 아무리 넓혀도 바깥 여백과 사이드바
+ * 자리는 남는다. 전체화면이 거부된 브라우저에서도 "볼 것만 남는다"가 성립해야 한다.
+ *
+ * z-index 70: 사이드바 펴기 손잡이(55)보다 위, 대화상자(100)와 토스트(200)보다
+ * 아래다. 발표 중에 연결이 끊겼다는 알림은 도면 위에 떠야 한다.
+ *
+ * 아래 규칙들이 @media (max-width: 1100px) 뒤에 오는 이유: 좁은 화면의 .erd-body 는
+ * 세로 2단이고, 그 규칙이 나중에 오면 발표 창이 도면 아래로 떨어진다. */
+.erd-editor.is-present {
+  position: fixed; inset: 0; z-index: 70;
+  height: 100vh; min-height: 0;
+  padding: 8px; gap: 8px;
+  background: var(--bg);
+}
+.erd-editor.is-present > .erd-head,
+.erd-editor.is-present > .erd-toolbar,
+.erd-editor.is-present .erd-panel-resize { display: none; }
+.erd-editor.is-present .erd-body {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+.erd-editor.is-present .erd-panel { display: none; }
+/* 고른 것이 있을 때만 상세 창이 자리를 얻는다. 편집기보다 넓게 두는 이유: 발표에서
+ * 이 창은 회의실 뒤쪽에서도 읽혀야 하고, 그래서 글자가 크다. */
+.erd-editor.is-present.is-present-panel .erd-body {
+  grid-template-columns: minmax(0, 1fr) clamp(320px, 30vw, 460px);
+}
+.erd-editor.is-present.is-present-panel .erd-panel { display: flex; }
+
+/* 발표 중 화면에 남는 유일한 도구. 도면을 가리지 않게 옅게 두고, 손이 오면
+ * 또렷해진다 — 늘 켜져 있으므로 눈에 덜 띄어야 하지만, 찾을 때는 있어야 한다. */
+.erd-present-bar {
+  position: absolute; top: 10px; right: 10px; z-index: 26;
+  display: flex; align-items: center; gap: 10px;
+  padding: 5px 6px 5px 12px; border-radius: 999px;
+  background: var(--surface); border: 1px solid var(--border);
+  box-shadow: var(--shadow); font-size: 12.5px;
+  opacity: 0.55; transition: opacity 0.15s;
+}
+.erd-present-bar:hover, .erd-present-bar:focus-within { opacity: 1; }
+.erd-present-title { font-weight: 600; }
+.erd-present-count { color: var(--text-mute); }
+
+.erd-present-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 8px; padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.erd-present-head h2 { margin: 0; font-size: 19px; line-height: 1.25; }
+.erd-present-head-sub { margin: 3px 0 0; font: 12.5px var(--mono); color: var(--text-mute); }
+.erd-present-body { padding: 12px 14px 20px; overflow-y: auto; flex: 1; font-size: 13.5px; }
+.erd-present-note { margin: 0 0 10px; color: var(--text-dim); line-height: 1.55; }
+.erd-present-text { margin: 0; white-space: pre-wrap; line-height: 1.55; }
+.erd-present-empty { margin: 0; color: var(--text-mute); font-size: 12.5px; }
+
+.erd-present-stats { display: flex; flex-wrap: wrap; gap: 6px; }
+.erd-present-stats > span {
+  padding: 2px 9px; border-radius: 999px;
+  background: var(--surface-2); color: var(--text-mute); font-size: 12px;
+}
+.erd-present-nn { color: var(--accent); }
+
+.erd-present-sec {
+  margin: 18px 0 8px; font-size: 11.5px; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--text-mute);
+}
+
+/* 컬럼 한 줄. 이름·타입은 한 줄에, 표시와 부가 설명은 그 아래에 붙는다.
+ * 셋을 한 줄에 밀어 넣으면 타입이 잘리고, 발표에서 잘린 타입은 아무 뜻이 없다. */
+.erd-present-col {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: baseline; gap: 2px 8px;
+  padding: 6px 0; border-bottom: 1px solid var(--border-soft);
+}
+.erd-present-col-mark { color: var(--text-mute); line-height: 1; }
+.erd-present-col-name { font: 500 13.5px var(--mono); word-break: break-all; }
+.erd-present-col-alt { margin-left: 6px; color: var(--text-mute); font-size: 11.5px; }
+.erd-present-col-type { color: var(--text-dim); font: 12.5px var(--mono); text-align: right; }
+.erd-present-col-flags, .erd-present-col-meta { grid-column: 2 / -1; }
+.erd-present-col-flags { display: flex; flex-wrap: wrap; gap: 4px; }
+.erd-present-col-flags:empty { display: none; }
+.erd-present-flag {
+  padding: 1px 6px; border-radius: 999px;
+  background: var(--surface-2); color: var(--text-mute); font-size: 10.5px;
+}
+.erd-present-col-meta { color: var(--text-mute); font-size: 12px; line-height: 1.45; }
+
+/* 관계 한 줄. 누르면 그 표로 화면이 옮겨 가므로 단추다. */
+.erd-present-rels { display: flex; flex-direction: column; gap: 5px; }
+.erd-present-rel {
+  display: grid; grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: baseline; gap: 2px 8px; text-align: left;
+  padding: 7px 9px; border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+  background: none; color: var(--text); font: inherit; cursor: pointer;
+}
+.erd-present-rel:hover { border-color: var(--primary); background: var(--bg-alt); }
+.erd-present-rel-card { font: 600 12.5px var(--mono); color: var(--accent); }
+.erd-present-rel-arrow { color: var(--text-mute); }
+.erd-present-rel-name { font: 500 13px var(--mono); word-break: break-all; }
+.erd-present-rel-cols {
+  grid-column: 1 / -1; font: 11.5px var(--mono); color: var(--text-mute);
+}
+
+.erd-present-chips { display: flex; flex-direction: column; gap: 5px; }
+.erd-present-chip {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px;
+  padding: 6px 9px; border-radius: var(--radius-sm); background: var(--surface-2);
+}
+.erd-present-chip strong { font: 600 12.5px var(--mono); }
+.erd-present-chip span,
+.erd-present-chip code,
+.erd-present-chip em { color: var(--text-mute); font: 12px var(--mono); }
+
+.erd-present-meta { margin: 12px 0 0; display: flex; flex-direction: column; gap: 7px; }
+.erd-present-meta-row { display: flex; gap: 10px; }
+.erd-present-meta-row dt { flex: none; min-width: 76px; color: var(--text-mute); font-size: 12px; }
+.erd-present-meta-row dd { margin: 0; font: 12.5px var(--mono); word-break: break-all; }
+
 /* ---------- 마이그레이션 ---------- */
 
 .mig-list { display: flex; flex-direction: column; gap: 10px; }

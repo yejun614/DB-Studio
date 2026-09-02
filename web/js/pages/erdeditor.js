@@ -21,7 +21,7 @@ import { COLUMN_ICONS, columnIcon, autoColumnIcon, chosenIconFor } from '../core
 import { codeBlock, codeEditor } from '../core/highlight.js';
 import { versionSourceLabel } from './migrations.js';
 import { runDryRun } from '../core/dryrun.js';
-import { NAME_MODES, logicalOf } from '../core/logical.js';
+import { NAME_MODES, logicalOf, tableLabel, columnLabel } from '../core/logical.js';
 import { tintPicker } from '../core/tints.js';
 import {
   ErdCanvas, CARD_W, tableKey, tableDisplay, refKey, newLocalID, truncate, NOTE_W, noteHeight,
@@ -30,11 +30,14 @@ import {
   loadTypeCatalog, buildType, parseType, categories, paramLabel, paramPlaceholder,
 } from '../core/dbtypes.js';
 import { navigate } from '../core/router.js';
+import { isHidden as isNavHidden, setHidden as setNavHidden } from '../core/sidebar.js';
 import { panelResizeHandle, attachPanelResize } from '../core/panelresize.js';
 import { renderMarkdown } from '../core/markdown.js';
 import { openImageExportDialog } from '../core/erdimage.js';
 import { findInDocument, hitCenter, KIND_LABEL } from '../core/erdfind.js';
-import { cardinality, describeRelation } from '../core/erdrel.js';
+import {
+  cardinality, describeRelation, isJunction, junctionPartners,
+} from '../core/erdrel.js';
 import { streamAIChat } from '../core/aistream.js';
 import { errorPanel } from './users.js';
 import { statusBadge } from './erd.js';
@@ -94,6 +97,9 @@ function buildLayout(initial) {
   // 찾기 판. 캔버스 위에 겹쳐 뜬다 — 도구 줄에 넣으면 결과 목록이 갈 곳이 없고,
   // 오른쪽 속성 창에 넣으면 찾는 동안 속성 창을 못 쓴다.
   const findBox = h('div.erd-find', { hidden: true });
+  // 발표 막대. 발표 모드에서는 머리글과 도구 줄이 사라지므로, "무엇을 보고 있고
+  // 어떻게 빠져나가는가"를 말해 줄 것이 화면에 하나는 남아 있어야 한다.
+  const presentBar = h('div.erd-present-bar', { hidden: true });
   const chatStack = h('div.erd-chat-stack');
   const followBar = h('div.erd-follow-bar', { hidden: true });
   // 인스펙터 폭 손잡이. 컬럼이 많은 테이블에서는 340px에 타입까지 들어가지 않고,
@@ -118,14 +124,14 @@ function buildLayout(initial) {
     ),
     toolbar,
     h('div.erd-body', {},
-      h('div.erd-canvas-area', {}, canvasWrap, findBox, chatStack, followBar),
+      h('div.erd-canvas-area', {}, canvasWrap, findBox, presentBar, chatStack, followBar),
       panelResize,
       panel),
   );
 
   return {
     root, panel, toolbar, participants, statusChip, canvasWrap, findBox,
-    chatStack, followBar, panelResize,
+    chatStack, followBar, panelResize, presentBar,
   };
 }
 
@@ -143,6 +149,11 @@ class Editor {
     // 그 문서의 이름을 바꾸는 것은 만든 사람의 일이다.
     this.canManage = Boolean(initial.canManage);
     this.panelHidden = false;
+    // present는 발표 모드다. 전체화면으로 도면만 남기고, 편집 경로를 모두 닫는다.
+    // beforePresent는 돌아올 자리다(도구·탭·사이드바) — 발표는 잠깐 하는 일이고,
+    // 끝나면 하던 대로 돌아와야 한다.
+    this.present = false;
+    this.beforePresent = null;
     // 메모는 문서(그래프)가 아니라 메타 레코드에 붙어 있어 응답의 최상위로 온다.
     // this.doc.note 를 읽으면 언제나 비어 있다.
     this.note = initial.note ?? '';
@@ -197,7 +208,7 @@ class Editor {
     // 캔버스는 구조 화면과 공유한다(core/erdcanvas.js). 여기서는 "옮긴 결과를
     // op로 보낸다"만 정하고, 그리는 방법은 캔버스가 안다.
     this.canvas = new ErdCanvas(ui.canvasWrap, {
-      canEdit: () => this.canEdit,
+      canEdit: () => this.editable(),
       emptyHint: '테이블이 없습니다 — 위의 "＋ 테이블" 로 시작하세요',
       // 캔버스가 선택 표시를 스스로 다시 그린다. 여기서는 프레즌스와 패널만 맞춘다.
       onSelect: (key) => this.select(key ? { kind: 'table', id: key } : null),
@@ -276,7 +287,18 @@ class Editor {
     this.session.connect();
   }
 
+  // editable은 "지금 이 화면에서 문서를 고칠 수 있는가"다.
+  //
+  // 한곳에서만 정하는 이유: 권한(canEdit)과 발표 모드는 서로 다른 이유로 편집을
+  // 막지만, 막아야 하는 자리는 완전히 같다. 자리마다 따로 판단하게 두면 그중
+  // 하나를 빠뜨리고, 빠뜨린 자리가 곧 "발표 중에 표가 움직였다"가 된다.
+  editable() {
+    return this.canEdit && !this.present;
+  }
+
   stop() {
+    // 발표 중에 화면을 떠나면 전체화면과 접힌 사이드바가 그대로 남는다.
+    if (this.present) this.leavePresent({ render: false });
     this.session.close();
     this.canvas.destroy();
     if (this.unbind) this.unbind();
@@ -310,6 +332,15 @@ class Editor {
       // 키가 테이블을 지운다.
       const busy = isTyping(document.body) || document.querySelector('.modal-overlay');
 
+      // 발표 중의 Esc 는 발표를 끝낸다. 선택 해제가 아니라 이쪽인 이유: 전체화면일
+      // 때 Esc 는 브라우저가 먼저 먹으므로(그것은 fullscreenchange 로 받는다) 보는
+      // 사람은 이미 "Esc = 발표 끝"으로 배운다. 두 자리가 다르게 굴면 헷갈린다.
+      // 전체화면이 거부된 경우에 이 줄이 그 일을 대신한다.
+      if (e.key === 'Escape' && this.present && !busy) {
+        e.preventDefault();
+        this.leavePresent();
+        return;
+      }
       // Esc: 선택 해제. 모달이 열려 있으면 모달이 먼저 닫혀야 한다.
       if (e.key === 'Escape' && !busy) {
         if (!this.marks.length) return;
@@ -320,13 +351,15 @@ class Editor {
       // Delete/Backspace: 고른 것 지우기.
       if ((e.key === 'Delete' || e.key === 'Backspace') && !busy
         && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        if (!this.marks.length || !this.canEdit) return;
+        if (!this.marks.length || !this.editable()) return;
         e.preventDefault();
         this.deleteMarks();
         return;
       }
       // V / H: 마우스 도구. 그림 도구들이 쓰는 자리와 같게 둔다.
-      if (!busy && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      // 발표 중에는 화면 이동으로 고정이다(setTool 이 막지만, 여기서 먹어 두면
+      // 눌러도 아무 일이 없는 키가 되지 않는다).
+      if (!busy && !this.present && !e.ctrlKey && !e.metaKey && !e.altKey) {
         const key = e.key.toLowerCase();
         if (key === 'v' || key === 'h') {
           e.preventDefault();
@@ -347,8 +380,9 @@ class Editor {
         this.toggleFind(true);
         return;
       }
-      // Ctrl+A: 모두 고르기.
-      if (e.key.toLowerCase() === 'a' && !busy) {
+      // Ctrl+A: 모두 고르기. 발표 중에는 하지 않는다 — 여럿을 고른 창은 "함께
+      // 고친다"를 위한 것이고, 발표에서 고칠 것은 없다.
+      if (e.key.toLowerCase() === 'a' && !busy && !this.present) {
         e.preventDefault();
         this.selectAll();
         return;
@@ -362,7 +396,7 @@ class Editor {
       // 모달이 열려 있으면 사용자의 주의는 그 안에 있다. 뒤에서 문서가
       // 바뀌면 무엇이 되돌아갔는지 볼 수 없다.
       if (document.querySelector('.modal-overlay')) return;
-      if (!this.canEdit) return;
+      if (!this.editable()) return;
       e.preventDefault();
       if (redo) this.session.redo();
       else this.session.undo();
@@ -541,6 +575,9 @@ class Editor {
   // pushChatToast는 캔버스 오른쪽 위에 메시지 하나를 띄운다.
   pushChatToast(message) {
     if (!this.ui.chatStack) return;
+    // 발표 중에는 띄우지 않는다. 남의 대화가 스크린에 뜨고, 누르면 있지도 않은
+    // 대화 탭으로 넘어간다.
+    if (this.present) return;
     // 내가 보낸 것은 띄우지 않는다. 방금 친 문장을 다시 읽을 이유가 없다.
     if (message.userId && message.userId === this.you?.userId) return;
 
@@ -586,6 +623,9 @@ class Editor {
   // ---------- op 보내기 ----------
 
   send(kind, payload, batch = '') {
+    // 발표 중에는 편집 단추가 하나도 없다. 그래도 여기까지 온 것이 있다면(단축키,
+    // 남아 있던 콜백) 조용히 버린다 — 발표 화면에 오류 토스트가 뜨는 편이 더 나쁘다.
+    if (this.present) return null;
     if (!this.canEdit) {
       toast('이 문서를 편집할 권한이 없습니다', 'error');
       return null;
@@ -686,6 +726,11 @@ class Editor {
         }, '대화'),
         // 사이드바를 접으면 캔버스가 340px 넓어진다. 테이블이 스무 개를 넘어가면
         // 그 폭이 "한 화면에 다 보이는가"를 가른다.
+        // 발표 모드. 오른쪽 끝, 사이드바 접기 옆에 둔다 — 둘 다 "화면을 어떻게
+        // 보여줄까"이고, 편집 도구와 섞이면 발표 중에 눌릴 단추가 아닌데도
+        // 편집 도구처럼 읽힌다.
+        this.toolBtn('monitor', '발표 모드 (전체화면·읽기 전용)',
+          () => this.togglePresent()),
         this.toolBtn(this.panelHidden ? 'chevron-left' : 'chevron-right',
           this.panelHidden ? '사이드바 보이기' : '사이드바 숨기기',
           () => this.togglePanel()),
@@ -733,6 +778,9 @@ class Editor {
 
   // setTool은 마우스 도구를 바꾼다.
   setTool(tool) {
+    // 발표 중에는 화면 이동으로 고정한다. 발표에서 끌어야 하는 것은 화면뿐이고,
+    // 선택 도구로 빈 곳을 끌면 관객 앞에서 파란 선택 상자가 그려진다.
+    if (this.present) return;
     if (this.tool === tool) return;
     this.tool = tool;
     writeTool(tool);
@@ -743,7 +791,7 @@ class Editor {
   toolBtn(iconName, label, onclick, { needsEdit = false, disabled = false } = {}) {
     return h('button.icon-btn.btn-tip', {
       type: 'button',
-      disabled: disabled || (needsEdit && !this.canEdit),
+      disabled: disabled || (needsEdit && !this.editable()),
       'data-tip': label,
       'aria-label': label,
       onclick,
@@ -757,6 +805,142 @@ class Editor {
     this.renderToolbar();
     // 캔버스 폭이 바뀌었으므로 보이는 범위를 다시 잡는다.
     this.canvas.render();
+  }
+
+  // ---------- 발표 모드 ----------
+  //
+  // 발표는 편집과 다른 일이다. 회의실 스크린에 도면을 띄우는 동안 화면에 필요한
+  // 것은 도면과 "지금 이야기하는 표"의 상세뿐이고, 머리글·도구 줄·왼쪽 사이드바는
+  // 그 자리를 빼앗는다.
+  //
+  // 편집을 막는 것이 절반이다. 발표자는 화면을 가리키며 말한다 — 그 손이 표를
+  // 조금 끌면 관객 앞에서 문서가 바뀌고, 그 편집은 함께 보고 있는 모든 사람에게
+  // 실시간으로 퍼진다. 되돌릴 수는 있지만, 발표 중에 할 일이 아니다.
+
+  togglePresent() {
+    if (this.present) this.leavePresent();
+    else this.enterPresent();
+  }
+
+  enterPresent() {
+    if (this.present) return;
+    // 돌아올 자리를 적어 둔다. 발표는 잠깐 하는 일이고, 끝나면 하던 대로여야 한다.
+    this.beforePresent = {
+      tool: this.tool,
+      tab: this.tab,
+      navHidden: isNavHidden(),
+    };
+    this.present = true;
+
+    // 왼쪽 사이드바를 접는다. persist:false 인 이유: 발표하려고 접은 것은 그 사람의
+    // 취향이 아니다. 저장하면 발표가 끝난 뒤 다른 화면에서도 접힌 채로 남는다.
+    setNavHidden(true, { persist: false });
+    // 마우스는 화면 이동으로 고정한다. writeTool 을 쓰지 않는 이유도 위와 같다 —
+    // 발표 때문에 바뀐 도구가 그 사람의 손버릇으로 저장되면 안 된다.
+    this.tool = 'pan';
+    this.canvas.setTool('pan');
+    // 탭은 속성으로 되돌린다. 도구 줄이 없으니 발표 중에는 탭을 바꿀 수 없고,
+    // 대화 탭인 채로 들어오면 표를 골라도 대화 목록이 뜬다.
+    this.tab = 'table';
+    this.toggleFind(false);
+
+    this.ui.root.classList.add('is-present');
+    this.renderPresentBar();
+    this.bindFullscreen();
+    this.askFullscreen();
+
+    this.renderToolbar();
+    this.renderCanvas();
+    this.renderPanel();
+    // 화면이 커졌으니 다시 맞춘다. 발표는 "전체가 한눈에"로 시작하는 것이 맞다.
+    // 브라우저가 전체화면 전환을 끝내야 새 크기가 나오므로 한 프레임 뒤에 잡는다.
+    requestAnimationFrame(() => {
+      if (!this.present) return;
+      this.fitView();
+      this.renderCanvas();
+    });
+  }
+
+  // leavePresent는 발표를 끝낸다.
+  //
+  // render:false 는 화면을 떠나는 길이다(stop). 그때 다시 그리는 것은 곧 버려질
+  // DOM 을 만드는 일이지만, 전체화면과 접힌 사이드바는 화면을 떠나도 남으므로
+  // 그 둘은 반드시 풀어야 한다.
+  leavePresent({ render = true } = {}) {
+    if (!this.present) return;
+    const before = this.beforePresent ?? {};
+    this.present = false;
+    this.beforePresent = null;
+
+    this.ui.root.classList.remove('is-present', 'is-present-panel');
+    this.ui.presentBar.hidden = true;
+    if (this.unbindFullscreen) this.unbindFullscreen();
+    this.unbindFullscreen = null;
+    exitFullscreen();
+    setNavHidden(Boolean(before.navHidden), { persist: false });
+    if (before.tool) {
+      this.tool = before.tool;
+      this.canvas.setTool(before.tool);
+    }
+    if (before.tab) this.tab = before.tab;
+
+    if (!render) return;
+    this.renderToolbar();
+    this.renderPanel();
+    // 전체화면이 풀리는 데 한 프레임 이상 걸린다. 그 전에 재면 발표 중의 큰 화면
+    // 크기로 계산해, 캔버스가 창 밖으로 삐져나온 상태로 남는다.
+    this.renderCanvas();
+    requestAnimationFrame(() => this.canvas.render());
+  }
+
+  // askFullscreen은 브라우저의 전체화면을 부탁한다.
+  //
+  // documentElement 를 올리는 이유: 편집기 골격만 전체화면으로 올리면 body 에 붙는
+  // 것들(토스트·모달)이 그 밖으로 밀려 보이지 않는다. 그러면 "연결이 끊겼습니다"가
+  // 발표자에게 닿지 않는다.
+  //
+  // 거부될 수 있다(iframe 안, 브라우저 설정, 사용자 동작이 아닌 호출). 그래도 발표
+  // 모드는 유지한다 — 전체화면이 아니어도 "볼 것만 남긴다"는 이미 이뤄져 있고,
+  // 여기서 모드를 되돌리면 눌러도 아무 일이 없는 단추가 된다.
+  askFullscreen() {
+    const el = document.documentElement;
+    if (document.fullscreenElement || !el.requestFullscreen) return;
+    Promise.resolve(el.requestFullscreen()).catch(() => {
+      toast('전체화면으로 바꿀 수 없어 창 안에서 발표 모드로 엽니다', 'info');
+    });
+  }
+
+  // bindFullscreen은 브라우저 쪽에서 전체화면이 풀리는 것을 듣는다.
+  //
+  // 전체화면에서 Esc 와 F11 은 브라우저가 먼저 먹는다 — 우리 keydown 은 오지 않는다.
+  // 그것을 듣지 않으면 전체화면만 풀리고 발표 모드는 남아, 머리글도 도구 줄도 없는
+  // 화면에 갇힌다.
+  bindFullscreen() {
+    if (this.unbindFullscreen) return;
+    const onChange = () => {
+      if (this.present && !document.fullscreenElement) this.leavePresent();
+    };
+    document.addEventListener('fullscreenchange', onChange);
+    this.unbindFullscreen = () => document.removeEventListener('fullscreenchange', onChange);
+  }
+
+  // renderPresentBar는 발표 중 화면에 남는 유일한 도구다.
+  //
+  // 무엇이 떠 있는지(문서 이름)와 어떻게 나가는지, 둘만 둔다. 나갈 길이 화면에
+  // 없으면 그것은 발표 모드가 아니라 갇힌 화면이다.
+  renderPresentBar() {
+    const bar = this.ui.presentBar;
+    if (!bar) return;
+    bar.hidden = !this.present;
+    if (!this.present) return;
+    const tables = (this.doc.schema?.tables ?? []).length;
+    mount(bar,
+      h('span.erd-present-title', {}, truncate(this.doc.name ?? '설계', 36)),
+      h('span.erd-present-count', {}, `표 ${tables}개`),
+      h('button.btn.btn-small', {
+        type: 'button', onclick: () => this.leavePresent(),
+      }, icon('x', 13), '발표 종료 (Esc)'),
+    );
   }
 
   // openSettings는 문서 자체의 설정을 고친다(이름·메모).
@@ -1211,6 +1395,10 @@ class Editor {
 
   renderPanel() {
     this.panelDirty = false;
+    if (this.present) {
+      this.renderPresentPanel();
+      return;
+    }
     if (this.tab === 'domain') {
       mount(this.ui.panel, this.domainView());
       return;
@@ -1284,6 +1472,231 @@ class Editor {
     }
   }
 
+  // ---------- 발표용 상세 창 ----------
+  //
+  // 편집 창을 잠그는 대신 따로 만든 이유: 잠근 편집 창은 입력 칸과 회색 단추가
+  // 그대로 남은 화면이다. 그것을 스크린에 띄우면 관객은 무엇을 봐야 하는지 알 수
+  // 없다. 발표에서 읽고 싶은 것은 값이고, 칸은 값을 가린다.
+  //
+  // 그리고 여기에는 편집 창에 없는 것이 하나 있다: **이 표를 가리키는 관계**.
+  // 발표에서 가장 자주 나오는 질문이 "이건 어디서 쓰나요"인데, 나가는 외래키만
+  // 보이면 그 답이 화면에 없다.
+
+  renderPresentPanel() {
+    const view = this.presentViewFor(this.sel);
+    // 고른 것이 없으면 창을 접는다. 발표 중의 빈 창은 도면이 쓸 폭을 빼앗는 것
+    // 말고 하는 일이 없다.
+    this.ui.root.classList.toggle('is-present-panel', Boolean(view));
+    mount(this.ui.panel, view);
+  }
+
+  presentViewFor(sel) {
+    if (!sel) return null;
+    if (sel.kind === 'table') {
+      const tbl = this.findTable(sel.id);
+      return tbl ? this.presentTableView(tbl) : null;
+    }
+    if (sel.kind === 'link') {
+      const found = this.findFK(sel.id);
+      return found ? this.presentLinkView(found.table, found.fk) : null;
+    }
+    if (sel.kind === 'note') {
+      const note = (this.doc.notes ?? []).find((n) => n.id === sel.id);
+      return note ? this.presentNoteView(note) : null;
+    }
+    if (sel.kind === 'group') {
+      const group = (this.doc.groups ?? []).find((g) => g.id === sel.id);
+      return group ? this.presentGroupView(group) : null;
+    }
+    return null;
+  }
+
+  // presentHead는 발표 창의 머리글이다. 닫기 단추를 남기는 이유: 발표 중에도
+  // "이건 됐고 도면 전체를 보자"가 필요하고, 그때 Esc 는 발표를 끝내 버린다.
+  presentHead(main, sub) {
+    return h('div.erd-present-head', {},
+      h('div.erd-present-head-main', {},
+        h('h2', {}, main),
+        sub ? h('p.erd-present-head-sub', {}, sub) : null),
+      h('button.icon-btn', {
+        type: 'button', title: '닫기', 'aria-label': '상세 닫기',
+        onclick: () => this.select(null),
+      }, icon('x')),
+    );
+  }
+
+  presentTableView(tbl) {
+    const key = tableKey(tbl);
+    const box = this.doc.layout?.[key] ?? {};
+    // 이름 보기 설정(물리·논리)을 따르지 않고 늘 둘 다 보인다. 도면은 고른 대로
+    // 그려지지만, 이 창은 "한눈에 다 보는" 자리다 — 여기서 한쪽을 감추면 발표
+    // 중에 나오는 "물리명이 뭐였죠"에 답할 곳이 없어진다.
+    const name = tableLabel(tbl, box, 'both');
+    const cols = tbl.columns ?? [];
+    const outs = tbl.foreignKeys ?? [];
+    const ins = this.referencesTo(tbl);
+    const comment = (tbl.comment ?? '').trim();
+
+    return [
+      this.presentHead(name.main, name.sub),
+      h('div.erd-present-body', {},
+        comment ? h('p.erd-present-note', {}, comment) : null,
+        h('div.erd-present-stats', {},
+          h('span', {}, `컬럼 ${cols.length}`),
+          h('span', {}, `관계 ${outs.length + ins.length}`),
+          h('span', {}, `인덱스 ${(tbl.indexes ?? []).length}`),
+          isJunction(tbl)
+            ? h('span.erd-present-nn', {}, `N:N · ${junctionPartners(tbl).join(' ↔ ')}`)
+            : null,
+        ),
+
+        h('h3.erd-present-sec', {}, '컬럼'),
+        h('div.erd-present-cols', {}, cols.map((col) => this.presentColumn(tbl, col, box))),
+
+        h('h3.erd-present-sec', {}, '관계'),
+        outs.length + ins.length === 0
+          ? h('p.erd-present-empty', {}, '없음')
+          : h('div.erd-present-rels', {},
+            ...outs.map((fk) => this.presentRelRow(tbl, fk, false)),
+            ...ins.map((r) => this.presentRelRow(r.table, r.fk, true)),
+          ),
+
+        (tbl.indexes ?? []).length === 0 ? null : [
+          h('h3.erd-present-sec', {}, '인덱스'),
+          h('div.erd-present-chips', {}, (tbl.indexes ?? []).map((idx) => h('div.erd-present-chip', {},
+            h('strong', {}, `${idx.unique ? 'UNIQUE ' : ''}${idx.name}`),
+            h('span', {}, (idx.columns ?? [])
+              .map((c) => `${c.column || c.expression}${c.descending ? ' ↓' : ''}`).join(', ')),
+            idx.where ? h('em', {}, `WHERE ${idx.where}`) : null,
+          ))),
+        ],
+
+        (tbl.checks ?? []).length === 0 ? null : [
+          h('h3.erd-present-sec', {}, '체크 제약'),
+          h('div.erd-present-chips', {}, (tbl.checks ?? []).map((ck) => h('div.erd-present-chip', {},
+            h('strong', {}, ck.name),
+            h('code', {}, ck.expression),
+          ))),
+        ],
+      ),
+    ];
+  }
+
+  // presentColumn은 컬럼 한 줄이다. 기본키·외래키·NULL 여부·기본값·주석까지 한 줄에
+  // 담는다 — 발표에서 컬럼을 하나씩 눌러 볼 수는 없다.
+  presentColumn(tbl, col, box) {
+    const lower = (col.name ?? '').toLowerCase();
+    const isPK = (tbl.primaryKey?.columns ?? []).some((c) => String(c).toLowerCase() === lower);
+    const fk = (tbl.foreignKeys ?? [])
+      .find((f) => (f.columns ?? []).some((c) => String(c).toLowerCase() === lower));
+    const label = columnLabel(col, box, 'both');
+    const domain = (col.domain ?? '').trim();
+    const type = col.rawType || col.type?.base || '';
+    // 기본키 하나로 이뤄진 표에서는 UNIQUE 를 따로 적지 않는다 — 기본키가 이미
+    // 그것을 말한다. 두 번 적으면 정작 다른 컬럼의 UNIQUE 가 묻힌다.
+    const pkCols = (tbl.primaryKey?.columns ?? []).map((c) => String(c).toLowerCase());
+    const unique = !(pkCols.length === 1 && pkCols[0] === lower)
+      && Boolean(singleColumnIndex(tbl, col.name, true));
+    const meta = [];
+    if ((col.default ?? '') !== '') meta.push(`기본값 ${col.default}`);
+    if ((col.comment ?? '').trim()) meta.push(col.comment.trim());
+
+    return h('div.erd-present-col', {},
+      h('span.erd-present-col-mark', {},
+        isPK ? icon('key', 12) : fk ? icon('link', 12) : null),
+      h('span.erd-present-col-name', {}, label.main,
+        label.sub ? h('span.erd-present-col-alt', {}, label.sub) : null),
+      h('span.erd-present-col-type', {},
+        domain ? `${domain}${type ? ` (${type})` : ''}` : type || '—'),
+      h('span.erd-present-col-flags', {},
+        col.nullable ? null : h('span.erd-present-flag', {}, 'NOT NULL'),
+        unique ? h('span.erd-present-flag', {}, 'UNIQUE') : null),
+      meta.length ? h('span.erd-present-col-meta', {}, meta.join(' · ')) : null,
+    );
+  }
+
+  // presentRelRow는 관계 한 줄이다. incoming 이면 이 표를 **가리키는** 쪽이다.
+  //
+  // 누르면 그 표로 화면을 옮긴다. 발표에서 관계를 말하다 보면 다음에 볼 것은
+  // 거의 언제나 그 상대 표이고, 그때 도면에서 그것을 눈으로 찾는 시간이 아깝다.
+  presentRelRow(childTable, fk, incoming) {
+    const card = cardinality(childTable, fk);
+    // 들어오는 관계는 방향을 뒤집어 읽는다. 화면에 적힌 것이 언제나 "왼쪽:오른쪽"
+    // 순서여야, 화살표만 보고도 어느 쪽이 여럿인지 알 수 있다.
+    const label = incoming ? (card.oneToOne ? '1:1' : '1:N') : card.label;
+    const other = incoming
+      ? tableKey(childTable)
+      : `${fk.refNamespace ? `${fk.refNamespace}.` : ''}${fk.refTable}`;
+    const cols = (fk.columns ?? []).join(', ');
+    const refCols = (fk.refColumns ?? []).join(', ');
+
+    return h('button.erd-present-rel', {
+      type: 'button',
+      title: `${other} 로 이동`,
+      onclick: () => this.gotoHit({ kind: 'table', tableKey: other }, { keepFocus: true }),
+    },
+      h('span.erd-present-rel-card', {}, label),
+      h('span.erd-present-rel-arrow', {}, incoming ? '←' : '→'),
+      h('span.erd-present-rel-name', {}, other),
+      h('span.erd-present-rel-cols', {}, `${cols} → ${refCols}`),
+    );
+  }
+
+  // referencesTo는 이 표를 가리키는 외래키들이다({table, fk}).
+  referencesTo(tbl) {
+    const out = [];
+    const name = (tbl.name ?? '').toLowerCase();
+    const ns = (tbl.namespace ?? '').toLowerCase();
+    for (const t of this.doc.schema?.tables ?? []) {
+      if (t === tbl) continue;
+      for (const fk of t.foreignKeys ?? []) {
+        if ((fk.refTable ?? '').toLowerCase() !== name) continue;
+        // 참조에 스키마가 적혀 있으면 그것까지 맞아야 한다. 스키마가 다른 같은
+        // 이름의 표는 다른 표다.
+        if (fk.refNamespace && (fk.refNamespace ?? '').toLowerCase() !== ns) continue;
+        out.push({ table: t, fk });
+      }
+    }
+    return out;
+  }
+
+  presentLinkView(tbl, fk) {
+    const card = cardinality(tbl, fk);
+    const parent = `${fk.refNamespace ? `${fk.refNamespace}.` : ''}${fk.refTable}`;
+    const rows = [
+      ['기준', `${tableDisplay(tbl)} (${(fk.columns ?? []).join(', ')})`],
+      ['참조', `${parent} (${(fk.refColumns ?? []).join(', ')})`],
+    ];
+    // 지정하지 않은 동작은 적지 않는다. "(지정 안 함)" 두 줄은 발표에서 아무것도
+    // 말해 주지 않으면서 자리를 차지한다.
+    if (fk.onDelete) rows.push(['ON DELETE', fk.onDelete]);
+    if (fk.onUpdate) rows.push(['ON UPDATE', fk.onUpdate]);
+
+    return [
+      this.presentHead(card.label, fk.name),
+      h('div.erd-present-body', {},
+        h('p.erd-present-note', {}, describeRelation(tbl, fk)),
+        h('dl.erd-present-meta', {}, rows.map(([k, v]) =>
+          h('div.erd-present-meta-row', {}, h('dt', {}, k), h('dd', {}, v)))),
+      ),
+    ];
+  }
+
+  presentNoteView(note) {
+    return [
+      this.presentHead('메모', ''),
+      h('div.erd-present-body', {}, h('p.erd-present-text', {}, note.text ?? '')),
+    ];
+  }
+
+  presentGroupView(group) {
+    return [
+      this.presentHead(group.label || '그룹', ''),
+      h('div.erd-present-body', {},
+        h('p.erd-present-empty', {}, '테이블을 묶어 두는 영역입니다')),
+    ];
+  }
+
   // linkView는 관계선(외래키)을 인스펙터에서 고친다.
   //
   // 여기에는 자주 만지는 것(ON DELETE·ON UPDATE)만 둔다. 이름·컬럼 짝·참조 대상을
@@ -1292,7 +1705,7 @@ class Editor {
   // 지나간다.
   linkView(tbl, fk) {
     const key = tableKey(tbl);
-    const ro = !this.canEdit;
+    const ro = !this.editable();
     const actions = ['', 'NO ACTION', 'RESTRICT', 'CASCADE', 'SET NULL', 'SET DEFAULT'];
     const opts = actions.map((a) => ({ value: a, label: a || '(지정 안 함)' }));
 
@@ -1348,7 +1761,7 @@ class Editor {
   }
 
   noteView(note) {
-    const ro = !this.canEdit;
+    const ro = !this.editable();
     const box = h('textarea.input.textarea', { rows: 6, value: note.text ?? '', disabled: ro });
     commitOn(box, () => this.send('note.update', { id: note.id, text: box.value }));
 
@@ -1369,7 +1782,7 @@ class Editor {
   }
 
   groupView(group) {
-    const ro = !this.canEdit;
+    const ro = !this.editable();
     const nameInput = input({ value: group.label ?? '', disabled: ro });
     commitOn(nameInput, () =>
       this.send('group.update', { id: group.id, label: nameInput.value.trim() }));
@@ -1408,7 +1821,7 @@ class Editor {
 
   // multiView는 여럿을 고른 상태의 인스펙터다.
   multiView() {
-    const ro = !this.canEdit;
+    const ro = !this.editable();
     const tables = this.marksOf('table');
     const notes = this.marksOf('note');
     const groups = this.marksOf('group');
@@ -1539,7 +1952,7 @@ class Editor {
 
   tableView(tbl) {
     const ref = this.tableRef(tbl);
-    const ro = !this.canEdit;
+    const ro = !this.editable();
 
     // 서버가 알고 있는 이름·키를 따로 들고 있는다(ref.serverKey).
     //
@@ -2512,7 +2925,7 @@ class Editor {
   }
 
   toggleCollapse(key, geom) {
-    if (!this.canEdit) return;
+    if (!this.editable()) return;
     this.send('table.move', {
       key, x: geom.x, y: geom.y, collapsed: !geom.layout.collapsed,
     });
@@ -3043,7 +3456,7 @@ class Editor {
   // 어휘다. 테이블을 고른 상태에서만 볼 수 있으면 "먼저 정의부터 정리한다"는 순서가
   // 성립하지 않는다.
   domainView() {
-    const ro = !this.canEdit;
+    const ro = !this.editable();
     const domains = this.doc.domains ?? [];
     const usage = this.domainUsage();
 
@@ -4153,6 +4566,18 @@ function opSummary(op) {
 //
 // 기준은 생성되는 DDL과 같다(schema/ddl.go): NO ACTION 이면 SQL에 적지 않는다.
 // 화면과 SQL이 다른 것을 말하면 어느 쪽을 믿어야 하는지 알 수 없다.
+// exitFullscreen은 전체화면을 푼다.
+//
+// 이미 풀려 있으면 아무 일도 하지 않는다 — 전체화면이 아닌 상태에서 부르면
+// 브라우저가 거부 약속(rejected promise)을 돌려주고, 잡지 않으면 콘솔에 오류로
+// 남는다. 발표를 끝낸 것은 오류가 아니다.
+function exitFullscreen() {
+  if (!document.fullscreenElement || !document.exitFullscreen) return;
+  Promise.resolve(document.exitFullscreen()).catch(() => {
+    // 풀지 못했다면 사용자가 Esc 로 풀 수 있다. 여기서 더 할 수 있는 일은 없다.
+  });
+}
+
 function fkActionBadges(fk) {
   const out = [];
   const add = (label, value) => {
