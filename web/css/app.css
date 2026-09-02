@@ -3079,6 +3079,51 @@ h5.md-h, h6.md-h { font-size: 13.5px; color: var(--text-dim); }
 @keyframes ai-blink { to { visibility: hidden; } }
 
 .ai-stream-tools { display: flex; flex-direction: column; gap: 6px; }
+/* 생각 표시.
+ *
+ * 생각이 긴 모델은 첫 글자까지 수십 초가 걸린다. 그동안 깜박이는 커서만 있으면
+ * 생각하는 중인지 멈춘 것인지 알 수 없다. 흐른 시간을 함께 적는 이유도 같다 —
+ * "3초"와 "40초"는 기다릴지 그만둘지를 가르는 차이인데, 점 세 개는 그 둘을
+ * 똑같이 보이게 한다.
+ *
+ * 답풍선보다 흐리게 두는 이유: 생각은 답이 아니다. 같은 무게로 그리면 사람이
+ * 그것을 결론으로 읽는다. */
+.ai-think {
+  align-self: flex-start;
+  max-width: 100%;
+  font-size: 12px;
+  color: var(--text-mute);
+}
+.ai-think > summary {
+  display: flex; align-items: center; gap: 6px;
+  cursor: pointer; list-style: none;
+  padding: 4px 8px; border-radius: var(--radius-sm);
+  border: 1px dashed var(--border-soft);
+  width: fit-content;
+}
+.ai-think > summary::-webkit-details-marker { display: none; }
+.ai-think > summary:hover { color: var(--text-dim); }
+/* 생각하는 동안에만 맥박이 뛴다. 끝나면 라벨이 "생각함"으로 바뀌며 멈춘다. */
+.ai-think-label { animation: ai-think-pulse 1.6s ease-in-out infinite; }
+.ai-think-time { font-variant-numeric: tabular-nums; opacity: 0.8; }
+.ai-think[open] .ai-think-label, .ai-think .ai-think-label:only-child { animation: none; }
+@keyframes ai-think-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+/* 움직임을 줄여 달라고 한 사람에게는 깜박이지 않는다. */
+@media (prefers-reduced-motion: reduce) {
+  .ai-think-label { animation: none; }
+}
+.ai-think-body {
+  margin: 6px 0 0;
+  max-height: 220px; overflow: auto;
+  padding: 8px 10px; border-radius: var(--radius-sm);
+  background: var(--bg-alt); border: 1px solid var(--border-soft);
+  font-size: 11.5px; line-height: 1.6; color: var(--text-mute);
+  white-space: pre-wrap; word-break: break-word;
+}
+
 .ai-tool-call {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   padding: 6px 10px; border-radius: var(--radius-sm);

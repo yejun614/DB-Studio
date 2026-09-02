@@ -932,6 +932,9 @@ class ChatView {
     this.sendBtn.disabled = true;
     this.streaming = createStreamingNode();
     this.renderLog();
+    // 생각을 글로 보내지 않는 모델을 위해, 잠깐 기다려도 소식이 없으면
+    // 그때 "생각 중"을 띄운다. 바로 띄우면 빠른 답에서도 깜박여 어수선하다.
+    const waitTimer = setTimeout(() => this.streaming?.waiting(), 1500);
 
     this.controller = new AbortController();
     try {
@@ -945,6 +948,9 @@ class ChatView {
     } finally {
       this.controller = null;
       this.sendBtn.disabled = false;
+      // 시계를 멈춘다. 끊겼든 끝났든, 안 멈추면 화면을 떠난 뒤에도 계속 돈다.
+      this.streaming?.stop();
+      clearTimeout(waitTimer);
       this.streaming = null;
       // 스트림이 끝나면 서버에 저장된 상태로 다시 그린다 — 토큰 사용량과
       // 보류 제안이 정확히 반영된다.
@@ -955,6 +961,9 @@ class ChatView {
   handleEvent(ev) {
     if (!ev || !ev.event) return;
     switch (ev.event) {
+      case 'thinking':
+        this.streaming?.appendThinking(ev.data.text ?? '');
+        break;
       case 'text':
         this.streaming?.appendText(ev.data.text ?? '');
         break;
@@ -987,10 +996,41 @@ class ChatView {
 function createStreamingNode() {
   const bubble = h('div.ai-bubble.is-markdown.is-streaming', {}, h('span.ai-cursor', {}, '▌'));
   const toolBox = h('div.ai-stream-tools');
-  const node = h('div.ai-msg.is-assistant', {}, bubble, toolBox);
+
+  // 생각 표시.
+  //
+  // 왜 필요한가: 생각이 긴 모델은 첫 글자가 나오기까지 수십 초가 걸린다. 그동안
+  // 화면에는 깜박이는 커서 하나뿐이라, 생각하는 중인지 멈춘 것인지 알 수 없었다.
+  // 흐른 시간을 함께 보이는 이유도 같다 — "3초"와 "40초"는 기다릴지 그만둘지를
+  // 가르는 차이인데, 점 세 개는 그 둘을 똑같이 보이게 한다.
+  const thinkTime = h('span.ai-think-time', {}, '0초');
+  const thinkBody = h('pre.ai-think-body');
+  const thinkBox = h('details.ai-think', { hidden: true },
+    h('summary', {}, icon('activity', 13),
+      h('span.ai-think-label', {}, '생각 중'), thinkTime),
+    thinkBody);
+
+  const node = h('div.ai-msg.is-assistant', {}, thinkBox, bubble, toolBox);
   let text = '';
+  let thinking = '';
   let frame = 0;
+  let thinkFrame = 0;
   const toolNodes = new Map();
+
+  const startedAt = Date.now();
+  const tick = () => {
+    thinkTime.textContent = `${Math.round((Date.now() - startedAt) / 1000)}초`;
+  };
+  const timer = setInterval(tick, 1000);
+  // 답이 오기 시작하면 시계를 멈추고 "생각 12초"로 굳힌다. 계속 세면 다 끝난
+  // 뒤에도 숫자가 올라가 아직 무언가 하고 있는 것처럼 보인다.
+  const settle = () => {
+    if (!timer) return;
+    clearInterval(timer);
+    thinkBox.open = false;
+    const label = thinkBox.querySelector('.ai-think-label');
+    if (label) label.textContent = '생각함';
+  };
 
   // 도착한 조각마다 마크다운을 다시 그리되 프레임당 한 번으로 묶는다.
   // 토큰은 프레임보다 훨씬 빠르게 오므로 그대로 두면 같은 화면을 수십 번 그린다.
@@ -1001,11 +1041,37 @@ function createStreamingNode() {
 
   return {
     node,
+    appendThinking(chunk) {
+      thinking += chunk;
+      thinkBox.hidden = false;
+      if (!thinkFrame) {
+        thinkFrame = requestAnimationFrame(() => {
+          thinkFrame = 0;
+          // 생각은 길다. 뒤쪽(지금 하고 있는 생각)이 보이는 것이 앞쪽보다 쓸모 있다.
+          thinkBody.textContent = thinking.length > 4000
+            ? `…${thinking.slice(-4000)}` : thinking;
+          thinkBody.scrollTop = thinkBody.scrollHeight;
+        });
+      }
+    },
+    // waiting은 아직 아무것도 오지 않았을 때 "생각 중"을 띄운다.
+    //
+    // 생각을 글로 보내지 않는 모델도 있다. 그때도 오래 걸리는 것은 마찬가지라,
+    // 잠깐 기다려도 소식이 없으면 같은 표시를 띄운다.
+    waiting() {
+      if (text || thinking) return;
+      thinkBox.hidden = false;
+    },
     appendText(chunk) {
+      if (chunk) settle();
       text += chunk;
       if (!frame) frame = requestAnimationFrame(paint);
     },
+    stop() {
+      settle();
+    },
     addToolCall(data) {
+      settle();
       const el = toolCallNode(data, true);
       toolNodes.set(data.id, el);
       toolBox.appendChild(el);
