@@ -151,7 +151,7 @@ func TestERDChatAppliesToolCall(t *testing.T) {
 		// 그대로 적는 이유: 그래야 다음에 더해지는 툴이 여기서 한 번 걸린다.
 		if !strings.HasPrefix(n, "add_") && !strings.HasPrefix(n, "update_") &&
 			n != "read_schema" && n != "set_primary_key" && n != "duplicate_table" &&
-			n != "set_logical_names" {
+			n != "set_logical_names" && n != "list_domains" && n != "detach_domain" {
 			t.Errorf("초안 대화에 낯선 툴이 있습니다: %s", n)
 		}
 		if n == "run_query" || n == "list_connections" || n == "apply_migration" {

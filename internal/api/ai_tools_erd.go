@@ -84,6 +84,54 @@ func erdTools() map[string]*erdTool {
 			Run: erdReadSchema,
 		},
 		{
+			Name: "list_domains",
+			Description: "이 초안의 도메인(재사용 타입) 목록을 반환한다. " +
+				"컬럼에 도메인을 붙이기 전에 무엇이 있는지 먼저 본다.",
+			Schema: objectSchema(nil),
+			Run:    erdListDomains,
+		},
+		{
+			Name: "add_domain",
+			Description: "도메인을 만든다. 도메인은 이름을 붙인 재사용 타입이다" +
+				"(\"이메일은 VARCHAR(320)\", \"금액은 DECIMAL(18,2)\"). " +
+				"같은 뜻의 컬럼이 표마다 다른 타입으로 만들어지는 것을 막는 장치이고, " +
+				"정의를 고치면 그 도메인을 쓰는 컬럼이 함께 바뀐다. " +
+				"DB에는 도메인이 만들어지지 않는다 — 컬럼에는 언제나 구체 타입이 함께 남는다.",
+			Schema: objectSchema(map[string]any{
+				"name":     str("도메인 이름 (예: email, money)"),
+				"type":     str("DB 타입 (예: VARCHAR(320), DECIMAL(18,2))"),
+				"nullable": boolp("이 도메인을 쓰는 컬럼의 NULL 허용 (생략하면 컬럼마다 다르게 둔다)"),
+				"default":  str("기본값 식 (선택)"),
+				"comment":  str("설명 (선택)"),
+			}, "name", "type"),
+			Run: erdAddDomain,
+		},
+		{
+			Name: "update_domain",
+			Description: "도메인의 이름·타입·NULL 허용·기본값·설명을 바꾼다. 바꿀 것만 넘긴다. " +
+				"**이 도메인을 쓰는 컬럼들도 함께 바뀐다** — 그것이 도메인을 두는 이유다.",
+			Schema: objectSchema(map[string]any{
+				"name":     str("지금 도메인 이름"),
+				"newName":  str("새 이름 (선택)"),
+				"type":     str("새 타입 (선택)"),
+				"nullable": boolp("NULL 허용 (선택)"),
+				"clearNullable": boolp(
+					"true면 NULL 허용을 도메인이 정하지 않게 되돌린다 (컬럼마다 다르게)"),
+				"default": str("기본값 식 (선택)"),
+				"comment": str("설명 (선택)"),
+			}, "name"),
+			Run: erdUpdateDomain,
+		},
+		{
+			Name: "detach_domain",
+			Description: "도메인을 지운다. 그 도메인을 쓰던 컬럼의 **타입은 그대로 두고 연결만 끊는다** — " +
+				"타입까지 지우면 도메인 하나를 정리하려다 여러 컬럼이 타입을 잃는다.",
+			Schema: objectSchema(map[string]any{
+				"name": str("지울 도메인 이름"),
+			}, "name"),
+			Run: erdDeleteDomain,
+		},
+		{
 			Name: "set_logical_names",
 			Description: "테이블과 컬럼에 논리명(설계용 이름, 보통 한국어)을 붙인다. " +
 				"여러 테이블을 한 번에 보낼 수 있다 — 표마다 따로 부르면 툴 왕복 횟수를 금방 넘긴다. " +
@@ -148,21 +196,23 @@ func erdTools() map[string]*erdTool {
 			Schema: objectSchema(map[string]any{
 				"table":    str("테이블 이름"),
 				"name":     str("컬럼 이름"),
-				"type":     str("DB 타입"),
+				"type":     str("DB 타입. domain을 주면 생략할 수 있다"),
+				"domain":   str("쓸 도메인 이름 (선택). 주면 타입·NULL·기본값이 그 정의를 따른다"),
 				"nullable": boolp("NULL 허용 (기본 true)"),
 				"comment":  str("설명 (선택)"),
 				"default":  str("기본값 (선택)"),
-			}, "table", "name", "type"),
+			}, "table", "name"),
 			Run: erdAddColumn,
 		},
 		{
 			Name:        "update_column",
-			Description: "컬럼의 이름·타입·NULL 허용·기본값·설명을 바꾼다. 바꿀 것만 넘긴다.",
+			Description: "컬럼의 이름·타입·도메인·NULL 허용·기본값·설명을 바꾼다. 바꿀 것만 넘긴다.",
 			Schema: objectSchema(map[string]any{
 				"table":    str("테이블 이름"),
 				"name":     str("지금 컬럼 이름"),
 				"newName":  str("새 이름 (선택)"),
 				"type":     str("새 타입 (선택)"),
+				"domain":   str("쓸 도메인 이름 (선택). 빈 문자열을 주면 도메인 연결을 끊는다"),
 				"nullable": boolp("NULL 허용 (선택)"),
 				"default":  str("기본값 (선택)"),
 				"comment":  str("설명 (선택)"),
@@ -302,6 +352,11 @@ type erdColOut struct {
 	Nullable bool   `json:"nullable"`
 	Comment  string `json:"comment,omitempty"`
 	Logical  string `json:"logical,omitempty"`
+	// Domain은 이 컬럼이 쓰는 재사용 타입의 이름이다.
+	//
+	// 함께 싣는 이유: 이것이 없으면 모델은 타입만 보고 "이미 맞다"고 판단해
+	// 도메인을 붙일 생각을 하지 않는다. 그러면 정의를 고쳐도 그 컬럼만 안 따라온다.
+	Domain string `json:"domain,omitempty"`
 }
 
 type erdTblOut struct {
@@ -327,7 +382,8 @@ func erdTableOut(doc *erd.Document, t *schema.Table) erdTblOut {
 	}
 	for _, c := range t.Columns {
 		col := erdColOut{
-			Name: c.Name, Type: c.RawType, Nullable: c.Nullable, Comment: c.Comment,
+			Name: c.Name, Type: c.RawType, Nullable: c.Nullable,
+			Comment: c.Comment, Domain: c.Domain,
 		}
 		if box != nil {
 			col.Logical = box.ColumnLogical[strings.ToLower(c.Name)]
@@ -377,10 +433,14 @@ func erdReadSchema(ec *erdToolContext, args json.RawMessage) (string, error) {
 		if t == nil {
 			return "", fmt.Errorf("테이블 %q을(를) 찾을 수 없습니다", name)
 		}
-		return asJSON(map[string]any{
+		one := map[string]any{
 			"document": doc.Name, "dialect": doc.Dialect,
 			"tables": []erdTblOut{erdTableOut(doc, t)},
-		})
+		}
+		if len(doc.Domains) > 0 {
+			one["domains"] = domainsOut(doc)
+		}
+		return asJSON(one)
 	}
 
 	start := in.Offset
@@ -415,6 +475,11 @@ func erdReadSchema(ec *erdToolContext, args json.RawMessage) (string, error) {
 	res := map[string]any{
 		"document": doc.Name, "dialect": doc.Dialect,
 		"tableCount": len(all), "offset": start, "tables": tables,
+	}
+	// 도메인 목록도 함께 준다. 작고, 컬럼 타입을 정할 때마다 필요한 값이다 —
+	// 따로 물어보게 하면 툴 왕복이 한 번 더 늘고, 안 물어보면 도메인을 무시한다.
+	if len(doc.Domains) > 0 {
+		res["domains"] = domainsOut(doc)
 	}
 	if next > 0 {
 		res["nextOffset"] = next
@@ -656,6 +721,7 @@ func erdAddColumn(ec *erdToolContext, args json.RawMessage) (string, error) {
 		Table    string `json:"table"`
 		Name     string `json:"name"`
 		Type     string `json:"type"`
+		Domain   string `json:"domain"`
 		Nullable *bool  `json:"nullable"`
 		Comment  string `json:"comment"`
 		Default  string `json:"default"`
@@ -675,13 +741,31 @@ func erdAddColumn(ec *erdToolContext, args json.RawMessage) (string, error) {
 		"table": tbl.Key(), "name": in.Name, "type": in.Type,
 		"nullable": nullable, "comment": in.Comment,
 	}
+	// 도메인을 주면 타입은 그 정의에서 온다. 타입을 함께 줬더라도 도메인이 이긴다 —
+	// 둘이 다를 때 도메인을 무시하면 "도메인을 붙였는데 타입이 다르다"가 된다.
+	if d := strings.TrimSpace(in.Domain); d != "" {
+		payload["domain"] = d
+	}
 	if in.Default != "" {
 		payload["default"] = in.Default
 	}
 	if _, err := ec.submit(erd.OpColumnAdd, payload); err != nil {
 		return "", err
 	}
-	return asJSON(map[string]any{"table": tbl.Name, "added": in.Name, "type": in.Type})
+	// 도메인을 거쳤으면 실제로 무슨 타입이 됐는지 돌려준다. 모델이 그것을 모르면
+	// 다음 판단(인덱스 길이, 비교 대상)이 어긋난다.
+	out := map[string]any{"table": tbl.Name, "added": in.Name, "type": in.Type}
+	if in.Domain != "" {
+		out["domain"] = in.Domain
+		if doc, derr := ec.document(); derr == nil {
+			if t := findERDTable(doc, tbl.Key()); t != nil {
+				if c := t.Column(in.Name); c != nil {
+					out["type"] = c.RawType
+				}
+			}
+		}
+	}
+	return asJSON(out)
 }
 
 func erdUpdateColumn(ec *erdToolContext, args json.RawMessage) (string, error) {
@@ -690,6 +774,7 @@ func erdUpdateColumn(ec *erdToolContext, args json.RawMessage) (string, error) {
 		Name     string  `json:"name"`
 		NewName  *string `json:"newName"`
 		Type     *string `json:"type"`
+		Domain   *string `json:"domain"`
 		Nullable *bool   `json:"nullable"`
 		Default  *string `json:"default"`
 		Comment  *string `json:"comment"`
@@ -708,6 +793,11 @@ func erdUpdateColumn(ec *erdToolContext, args json.RawMessage) (string, error) {
 	if in.Type != nil {
 		payload["type"] = *in.Type
 	}
+	// 빈 문자열은 "연결을 끊는다"이고, 값이 있으면 그 도메인을 쓴다.
+	// 보내지 않으면 지금 것을 그대로 둔다 — 이름만 바꾸려다 도메인이 풀리면 안 된다.
+	if in.Domain != nil {
+		payload["domain"] = strings.TrimSpace(*in.Domain)
+	}
 	if in.Nullable != nil {
 		payload["nullable"] = *in.Nullable
 	}
@@ -720,7 +810,22 @@ func erdUpdateColumn(ec *erdToolContext, args json.RawMessage) (string, error) {
 	if _, err := ec.submit(erd.OpColumnUpdate, payload); err != nil {
 		return "", err
 	}
-	return asJSON(map[string]any{"table": tbl.Name, "updated": in.Name})
+	out := map[string]any{"table": tbl.Name, "updated": in.Name}
+	if doc, derr := ec.document(); derr == nil {
+		if t := findERDTable(doc, tbl.Key()); t != nil {
+			name := in.Name
+			if in.NewName != nil {
+				name = *in.NewName
+			}
+			if c := t.Column(name); c != nil {
+				out["type"] = c.RawType
+				if c.Domain != "" {
+					out["domain"] = c.Domain
+				}
+			}
+		}
+	}
+	return asJSON(out)
 }
 
 func erdSetPK(ec *erdToolContext, args json.RawMessage) (string, error) {
@@ -820,4 +925,159 @@ func (ec *erdToolContext) mustTable(name string) (*schema.Table, error) {
 			name, strings.Join(names, ", "))
 	}
 	return tbl, nil
+}
+
+// ---------- 도메인 (재사용 타입) ----------
+
+type erdDomainOut struct {
+	Name     string `json:"name"`
+	Type     string `json:"type"`
+	Nullable *bool  `json:"nullable,omitempty"`
+	Default  string `json:"default,omitempty"`
+	Comment  string `json:"comment,omitempty"`
+	// UsedBy는 이 도메인을 쓰는 컬럼들이다("orders.total" 꼴).
+	//
+	// 함께 세는 이유: 도메인을 고치면 이 컬럼들이 함께 바뀐다. 몇 개가 딸려
+	// 움직이는지 모르고 고치는 것과 알고 고치는 것은 다른 일이다.
+	UsedBy []string `json:"usedBy,omitempty"`
+}
+
+func domainsOut(doc *erd.Document) []erdDomainOut {
+	out := make([]erdDomainOut, 0, len(doc.Domains))
+	for _, d := range doc.Domains {
+		item := erdDomainOut{
+			Name: d.Name, Type: d.Type, Default: d.Default, Comment: d.Comment,
+		}
+		if d.Nullable != nil {
+			v := *d.Nullable
+			item.Nullable = &v
+		}
+		for _, t := range doc.Schema.Tables {
+			for _, c := range t.Columns {
+				if strings.EqualFold(c.Domain, d.Name) || strings.EqualFold(c.Domain, d.Key()) {
+					item.UsedBy = append(item.UsedBy, t.Name+"."+c.Name)
+				}
+			}
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func erdListDomains(ec *erdToolContext, _ json.RawMessage) (string, error) {
+	doc, err := ec.document()
+	if err != nil {
+		return "", err
+	}
+	return asJSON(map[string]any{
+		"document": doc.Name, "dialect": doc.Dialect, "domains": domainsOut(doc),
+	})
+}
+
+func erdAddDomain(ec *erdToolContext, args json.RawMessage) (string, error) {
+	var in struct {
+		Name     string  `json:"name"`
+		Type     string  `json:"type"`
+		Nullable *bool   `json:"nullable"`
+		Default  *string `json:"default"`
+		Comment  *string `json:"comment"`
+	}
+	if err := parseArgs(args, &in); err != nil {
+		return "", err
+	}
+	payload := map[string]any{"name": in.Name, "type": in.Type}
+	if in.Nullable != nil {
+		payload["nullable"] = *in.Nullable
+	}
+	if in.Default != nil {
+		payload["default"] = *in.Default
+	}
+	if in.Comment != nil {
+		payload["comment"] = *in.Comment
+	}
+	if _, err := ec.submit(erd.OpDomainAdd, payload); err != nil {
+		return "", err
+	}
+	return asJSON(map[string]any{
+		"ok": true, "added": in.Name, "type": in.Type,
+		"note": "컬럼에 붙이려면 add_column/update_column 의 domain 인자에 이 이름을 주세요. " +
+			"도메인은 DB에 만들어지지 않고, 컬럼에는 구체 타입이 함께 남습니다.",
+	})
+}
+
+func erdUpdateDomain(ec *erdToolContext, args json.RawMessage) (string, error) {
+	var in struct {
+		Name          string  `json:"name"`
+		NewName       *string `json:"newName"`
+		Type          *string `json:"type"`
+		Nullable      *bool   `json:"nullable"`
+		ClearNullable *bool   `json:"clearNullable"`
+		Default       *string `json:"default"`
+		Comment       *string `json:"comment"`
+	}
+	if err := parseArgs(args, &in); err != nil {
+		return "", err
+	}
+	// 무엇이 함께 바뀌는지 먼저 세어 둔다. 바꾼 뒤에는 옛 이름으로 찾을 수 없다.
+	before, err := ec.document()
+	if err != nil {
+		return "", err
+	}
+	affected := []string{}
+	for _, d := range domainsOut(before) {
+		if strings.EqualFold(d.Name, in.Name) {
+			affected = d.UsedBy
+		}
+	}
+
+	payload := map[string]any{"name": in.Name}
+	if in.NewName != nil {
+		payload["newName"] = *in.NewName
+	}
+	if in.Type != nil {
+		payload["type"] = *in.Type
+	}
+	if in.ClearNullable != nil && *in.ClearNullable {
+		payload["clearNullable"] = true
+	} else if in.Nullable != nil {
+		payload["nullable"] = *in.Nullable
+	}
+	if in.Default != nil {
+		payload["default"] = *in.Default
+	}
+	if in.Comment != nil {
+		payload["comment"] = *in.Comment
+	}
+	if _, err := ec.submit(erd.OpDomainUpdate, payload); err != nil {
+		return "", err
+	}
+	return asJSON(map[string]any{
+		"ok": true, "domain": in.Name, "alsoChanged": affected,
+	})
+}
+
+func erdDeleteDomain(ec *erdToolContext, args json.RawMessage) (string, error) {
+	var in struct {
+		Name string `json:"name"`
+	}
+	if err := parseArgs(args, &in); err != nil {
+		return "", err
+	}
+	before, err := ec.document()
+	if err != nil {
+		return "", err
+	}
+	detached := []string{}
+	for _, d := range domainsOut(before) {
+		if strings.EqualFold(d.Name, in.Name) {
+			detached = d.UsedBy
+		}
+	}
+	if _, err := ec.submit(erd.OpDomainDelete, map[string]any{"name": in.Name}); err != nil {
+		return "", err
+	}
+	return asJSON(map[string]any{
+		"ok": true, "deleted": in.Name, "detached": detached,
+		"note": "이 컬럼들의 타입은 그대로 두고 도메인 연결만 끊었습니다.",
+	})
 }
