@@ -1550,6 +1550,17 @@ class Editor {
             : null,
         ),
 
+        // 기본키는 따로 한 줄로 적는다. 컬럼마다 열쇠 표시가 붙어 있지만, 복합키의
+        // **순서**는 그 표시로 알 수 없다 — 발표에서 "무엇이 이 표의 식별자인가"는
+        // 거의 언제나 첫 질문이다.
+        h('h3.erd-present-sec', {}, '기본키'),
+        !tbl.primaryKey?.columns?.length
+          ? h('p.erd-present-empty', {}, '없음')
+          : h('div.erd-present-chip', {},
+            h('strong', {}, tbl.primaryKey.columns.join(', ')),
+            tbl.primaryKey.columns.length > 1 ? h('em', {}, '복합키') : null,
+            tbl.primaryKey.name ? h('span', {}, tbl.primaryKey.name) : null),
+
         h('h3.erd-present-sec', {}, '컬럼'),
         h('div.erd-present-cols', {}, cols.map((col) => this.presentColumn(tbl, col, box))),
 
@@ -1994,6 +2005,33 @@ class Editor {
           this.columnRow(ref, col, ro, i, all.length))),
         ro ? null : this.addColumnForm(ref),
 
+        // 기본키는 인덱스·외래키와 같은 자리에서 본다.
+        //
+        // 컬럼 줄의 열쇠 단추만 있던 때에는 "이 표의 기본키가 무엇인가"를 컬럼을
+        // 훑어 모아야 알았고, 복합키의 **순서**는 아예 알 방법이 없었다.
+        h('h3.erd-sub', {}, '기본키'),
+        h('div.erd-chip-list', {}, !tbl.primaryKey?.columns?.length
+          ? h('p.muted', {}, '없음')
+          : h('div.erd-chip', {},
+            h('span', {}, tbl.primaryKey.columns
+              .map((c, i) => (tbl.primaryKey.columns.length > 1 ? `${i + 1}. ${c}` : c))
+              .join(' · ')),
+            tbl.primaryKey.name ? h('span.muted', {}, tbl.primaryKey.name) : null,
+            tbl.primaryKey.columns.length > 1 ? badge('복합', 'neutral') : null,
+            ro ? null : h('button.icon-btn', {
+              type: 'button', title: '기본키 설정',
+              onclick: () => this.openPKDialog(ref),
+            }, icon('edit', 13)),
+            ro ? null : h('button.icon-btn', {
+              type: 'button', title: '기본키 없애기',
+              onclick: () => this.send('pk.set', { table: ref.serverKey, columns: [] }),
+            }, icon('trash', 13)),
+          )),
+        ro ? null : h('button.btn.btn-small', {
+          type: 'button', onclick: () => this.openPKDialog(ref),
+        }, icon(tbl.primaryKey?.columns?.length ? 'edit' : 'plus'),
+        tbl.primaryKey?.columns?.length ? '기본키 순서·이름' : '기본키 지정'),
+
         h('h3.erd-sub', {}, '인덱스', h('span.muted', {}, `${tbl.indexes?.length ?? 0}개`)),
         h('div.erd-chip-list', {}, (tbl.indexes ?? []).length === 0
           ? h('p.muted', {}, '없음')
@@ -2257,30 +2295,48 @@ class Editor {
     // 기본키를 컬럼 줄에서 바로 켠다.
     //
     // 따로 떨어진 목록에서 고르면 "지금 보고 있는 컬럼이 키인가"를 두 곳을 오가며
-    // 맞춰 봐야 한다. 순서는 화면의 컬럼 순서를 그대로 쓴다 — 복합키의 순서는
-    // 인덱스 효율에 영향을 주므로 임의로 정렬하지 않는다.
-    const isPK = (ref.table()?.primaryKey?.columns ?? [])
-      .some((c) => c.toLowerCase() === col.name.toLowerCase());
+    // 맞춰 봐야 한다. 순서를 뒤집거나 가운데에 끼우는 것은 이 단추로 할 수 없으므로,
+    // 그것은 기본키 설정 창에서 한다(openPKDialog).
+    // pkCols 는 위(UNIQUE 체크)에서 이미 소문자로 만들어 두었다. 여기서 필요한 것은
+    // 몇 번째인지와 몇 개인지뿐이라 그것을 그대로 쓴다.
+    const pkAt = pkCols.indexOf(col.name.toLowerCase());
+    const isPK = pkAt >= 0;
+    // 복합키에서는 몇 번째인지가 뜻을 갖는다. 열쇠 표시만 나란히 있으면 (a,b)와
+    // (b,a)가 화면에서 똑같이 보이는데, 그 둘은 다른 키다.
+    const pkOrder = isPK && pkCols.length > 1 ? `${pkAt + 1}` : '';
     const pkBtn = h('button.erd-pk-toggle', {
       type: 'button',
       class: isPK ? 'is-on' : '',
       disabled: ro,
-      title: isPK ? '기본키에서 빼기' : '기본키로 지정',
+      title: isPK
+        ? (pkOrder ? `복합 기본키의 ${pkAt + 1}번째 (전체 ${pkCols.length}개) — 누르면 뺍니다`
+          : '기본키에서 빼기')
+        : '기본키로 지정',
       'aria-pressed': String(isPK),
       onclick: () => {
         // 누르는 순간의 문서를 본다. 그리는 동안 다른 사람이 컬럼을 더했을 수 있고,
         // 그때 그릴 때 읽은 목록을 보내면 그 컬럼이 기본키에서 조용히 빠진다.
         const table = ref.table();
         if (!table) return;
-        const next = new Set((table.primaryKey?.columns ?? []).map((c) => c.toLowerCase()));
-        if (isPK) next.delete(shownName.toLowerCase());
-        else next.add(shownName.toLowerCase());
-        const cols = (table.columns ?? [])
-          .filter((c) => next.has(c.name.toLowerCase()))
-          .map((c) => c.name);
-        this.send('pk.set', { table: ref.serverKey, columns: cols });
+        const cur = table.primaryKey?.columns ?? [];
+        // 넣을 때는 **맨 뒤에** 붙이고, 이미 있던 순서는 그대로 둔다.
+        //
+        // 예전에는 컬럼 순서대로 다시 만들었다. 그러면 (b, a) 로 정해 둔 키에
+        // 컬럼 하나를 더하는 순간 순서가 컬럼 순서로 되돌아가, 손으로 정한 것이
+        // 조용히 사라진다.
+        const cols = isPK
+          ? cur.filter((c) => c.toLowerCase() !== shownName.toLowerCase())
+          : [...cur, table.columns?.find((c) =>
+            c.name.toLowerCase() === shownName.toLowerCase())?.name ?? shownName];
+        this.send('pk.set', {
+          table: ref.serverKey,
+          // 이름을 함께 보낸다. 빼고 보내면 서버가 이름 없는 기본키로 다시 만들어,
+          // 컬럼 하나를 켰다 끈 것이 CONSTRAINT 이름을 지우는 일이 된다.
+          name: table.primaryKey?.name ?? '',
+          columns: cols,
+        });
       },
-    }, icon('key', 12));
+    }, icon('key', 12), pkOrder ? h('span.erd-pk-ord', {}, pkOrder) : null);
 
     // 아이콘 단추. 고른 것이 없으면 자동으로 정해진 아이콘을 그대로 보여준다 —
     // 비어 있는 자리를 보여주면 "여기에 무엇이 들어가는지" 눌러 봐야 알 수 있고,
@@ -3123,6 +3179,115 @@ class Editor {
   // 만들기와 고치기가 같은 창인 이유: 창이 둘이면 "이 설정은 만들 때만 되는 것"이
   // 생기고, 그 사실은 눌러 보고서야 알게 된다. 예전에는 만든 뒤에 고칠 방법이 아예
   // 없어서, 이름 한 글자를 고치려면 지웠다 다시 만들어야 했다.
+  // openPKDialog는 기본키를 컬럼 목록과 **순서**로 정한다.
+  //
+  // 컬럼 줄의 열쇠 단추로는 순서를 정할 수 없다. 누른 순서대로 뒤에 쌓이므로,
+  // 이미 있는 키의 가운데에 무엇을 끼우거나 앞뒤를 뒤집으려면 전부 껐다 다시
+  // 켜야 한다.
+  //
+  // 순서가 뜻을 갖는 이유: 복합 기본키는 그 순서대로 인덱스를 만든다. (a, b) 키는
+  // a 로 찾는 조회에 쓰이지만 b 로만 찾는 조회에는 쓰이지 않는다. 즉 순서를 못
+  // 바꾸면 복합키의 절반은 손댈 수 없는 셈이다.
+  openPKDialog(ref) {
+    const tbl = ref.table();
+    if (!tbl) return;
+    const pk = tbl.primaryKey;
+    const nameInput = input({
+      value: pk?.name ?? '', placeholder: `예: pk_${tbl.name}`,
+    });
+    let picked = [...(pk?.columns ?? [])];
+
+    // 인덱스 창과 같은 모양의 목록이다. 하는 일이 같으면 같아 보여야 한다 —
+    // 여기서만 다른 방식으로 고르게 하면 둘 중 하나는 매번 다시 익혀야 한다.
+    const listBox = h('div.erd-idx-cols');
+    const drawList = () => {
+      const inPK = new Set(picked.map((c) => c.toLowerCase()));
+      const rows = [];
+      picked.forEach((name, i) => {
+        const col = (tbl.columns ?? []).find((c) => c.name.toLowerCase() === name.toLowerCase());
+        rows.push(h('div.erd-idx-col.is-on', {},
+          h('label.checkbox', {},
+            h('input', {
+              type: 'checkbox',
+              checked: true,
+              onchange: () => {
+                picked = picked.filter((x) => x.toLowerCase() !== name.toLowerCase());
+                drawList();
+              },
+            }),
+            h('span', {}, name)),
+          h('span.erd-idx-ord', {}, `${i + 1}`),
+          // NULL 허용 컬럼을 기본키에 넣으면 서버가 NOT NULL 로 바꾼다. 넣기 전에
+          // 알려 주지 않으면 저장한 뒤에 컬럼 줄의 NULL 체크가 저절로 풀린 것처럼 보인다.
+          col?.nullable ? h('span.muted.small', {}, 'NOT NULL 로 바뀝니다') : null,
+          h('div.erd-col-order', {},
+            h('button.icon-btn', {
+              type: 'button', title: '앞으로', disabled: i === 0,
+              onclick: () => {
+                picked.splice(i - 1, 0, picked.splice(i, 1)[0]);
+                drawList();
+              },
+            }, h('span.erd-move-arrow', {}, '▲')),
+            h('button.icon-btn', {
+              type: 'button', title: '뒤로', disabled: i === picked.length - 1,
+              onclick: () => {
+                picked.splice(i + 1, 0, picked.splice(i, 1)[0]);
+                drawList();
+              },
+            }, h('span.erd-move-arrow', {}, '▼'))),
+        ));
+      });
+      for (const col of tbl.columns ?? []) {
+        if (inPK.has(col.name.toLowerCase())) continue;
+        rows.push(h('div.erd-idx-col', {},
+          h('label.checkbox', {},
+            h('input', {
+              type: 'checkbox',
+              onchange: () => { picked.push(col.name); drawList(); },
+            }),
+            h('span', {}, col.name)),
+          h('span.muted.small', {}, col.rawType || col.type?.base || '')));
+      }
+      mount(listBox, rows);
+    };
+    drawList();
+
+    openModal({
+      title: '기본키 설정',
+      width: 520,
+      body: () => [
+        h('div.field', {}, h('span.field-label', {}, '컬럼'), listBox,
+          h('p.field-help', {},
+            '고른 순서가 곧 기본키의 컬럼 순서입니다. ▲▼로 바꾸세요. '
+            + '기본키 컬럼은 자동으로 NOT NULL 이 됩니다.')),
+        h('label.field', {}, h('span.field-label', {}, '제약 이름 (선택)'), nameInput,
+          h('p.field-help', {},
+            '비우면 DB가 정하는 이름을 씁니다. 적으면 DDL에 CONSTRAINT 이름으로 나갑니다.')),
+      ],
+      footer: (closeModal) => [
+        h('button.btn', { type: 'button', onclick: closeModal }, '취소'),
+        h('button.btn.btn-primary', {
+          type: 'button',
+          onclick: () => {
+            // 하나도 고르지 않은 것은 "기본키를 없앤다"다. 창에서 조용히 지우면
+            // 저장을 누른 사람이 무엇을 한 것인지 모르므로 여기서 막고, 없애는
+            // 것은 인스펙터의 휴지통으로 하게 한다.
+            if (!picked.length) {
+              toast('컬럼을 하나 이상 고르세요 (없애려면 기본키 칸의 휴지통)', 'error');
+              return;
+            }
+            this.send('pk.set', {
+              table: ref.serverKey,
+              name: nameInput.value.trim(),
+              columns: picked,
+            });
+            closeModal();
+          },
+        }, '저장'),
+      ],
+    });
+  }
+
   openIndexDialog(ref, existing = null) {
     const tbl = ref.table();
     if (!tbl) return;

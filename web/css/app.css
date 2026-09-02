@@ -2408,6 +2408,16 @@ option { background: var(--surface); color: var(--text); }
   background: hsl(var(--h-warning) / 0.12);
 }
 .erd-pk-toggle:disabled { opacity: 0.5; cursor: not-allowed; }
+/* 복합 기본키에서 몇 번째인지. 열쇠 표시만 나란히 있으면 (a,b)와 (b,a)가 화면에서
+ * 똑같이 보이는데, 그 둘은 다른 키다(만들어지는 인덱스의 앞뒤가 다르다). */
+.erd-pk-toggle { position: relative; }
+.erd-pk-ord {
+  position: absolute; top: -5px; right: -5px;
+  min-width: 12px; padding: 0 2px; border-radius: 6px;
+  background: var(--warn); color: var(--bg);
+  font: 700 8.5px var(--mono); line-height: 12px; text-align: center;
+  pointer-events: none;
+}
 /* 아이콘 단추. 기본키 토글과 같은 크기라 두 표식이 나란히 읽힌다. */
 .erd-col-icon-btn {
   display: inline-flex; align-items: center; justify-content: center;

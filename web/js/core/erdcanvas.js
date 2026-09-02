@@ -562,7 +562,11 @@ export class ErdCanvas {
       const cols = tbl.columns ?? [];
       cols.forEach((col, i) => {
         const y = HEAD_H + i * ROW_H + 14;
-        const isPK = (tbl.primaryKey?.columns ?? []).some((c) => eqName(c, col.name));
+        // 복합 기본키에서는 몇 번째인지가 뜻을 갖는다. 열쇠 표시만으로는 (a,b)와
+        // (b,a)가 카드에서 똑같이 보이는데, 그 둘은 다른 키다.
+        const pkCols = tbl.primaryKey?.columns ?? [];
+        const pkAt = pkCols.findIndex((c) => eqName(c, col.name));
+        const isPK = pkAt >= 0;
         const isFK = (tbl.foreignKeys ?? []).some((fk) =>
           (fk.columns ?? []).some((c) => eqName(c, col.name)));
         // 아이콘은 ●/◆ 를 대신한다. 표식이 붙던 컬럼만 달라 보이던 것과 달리
@@ -628,7 +632,8 @@ export class ErdCanvas {
         const rowHit = svgEl('rect', {
           class: 'erd-hit', x: 0, y: y - ROW_H + 5, width: geom.w, height: ROW_H,
         });
-        this.bindTip(rowHit, () => tipForColumn(col, geom.layout, label, rawType, domain, room));
+        this.bindTip(rowHit, () => tipForColumn(col, geom.layout, label, rawType, domain, room,
+          pkCols.length > 1 && isPK ? { at: pkAt + 1, of: pkCols.length } : null));
         g.appendChild(rowHit);
       });
     }
@@ -1771,7 +1776,10 @@ function endSpecs(r) {
 }
 
 // tipForColumn은 컬럼 줄에 띄울 줄들이다. 띄울 것이 없으면 null.
-function tipForColumn(col, layout, label, rawType, domain, room) {
+//
+// pk 는 복합 기본키에서의 자리다({at, of}) 또는 null. 단일 기본키에서는 넘기지
+// 않는다 — 열쇠 표시가 이미 그것을 말하고 있고, "1/1"은 아무것도 더해 주지 않는다.
+function tipForColumn(col, layout, label, rawType, domain, room, pk = null) {
   const rows = [];
   const logical = (layout?.columnLogical ?? {})[String(col.name).toLowerCase()] ?? '';
 
@@ -1787,10 +1795,12 @@ function tipForColumn(col, layout, label, rawType, domain, room) {
   if (domain) rows.push(['도메인', `${domain}${actual ? ` (${actual})` : ''}`]);
   else if (actual) rows.push(['타입', actual + (col.nullable ? '' : ' NOT NULL')]);
 
+  if (pk) rows.push(['기본키', `복합키의 ${pk.at}번째 (전체 ${pk.of}개)`]);
   if ((col.default ?? '') !== '') rows.push(['기본값', String(col.default)]);
   const comment = (col.comment ?? '').trim();
   if (comment) rows.push(['주석', comment]);
   // 이름도 안 잘리고 주석도 없으면 띄울 이유가 없다. 타입은 이미 줄에 보인다.
-  if (!comment && !logical && !cut && !domain) return null;
+  // 복합키의 자리는 예외다 — 그것은 카드에 적혀 있지 않다.
+  if (!comment && !logical && !cut && !domain && !pk) return null;
   return rows.length ? rows : null;
 }
