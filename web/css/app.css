@@ -1004,6 +1004,19 @@ option { background: var(--surface); color: var(--text); }
 }
 /* 말풍선 안(AI 도구 오류 등)처럼 알림이 마지막 요소일 때는 아래 여백이 군더더기가 된다. */
 .notice:last-child { margin-bottom: 0; }
+/* 카드 안에서는 **앞** 블록과도 붙지 않는다.
+ *
+ * 아래 간격만 두었더니, 통계 타일이나 항목 목록(margin: 0) 바로 뒤에 오는 알림이
+ * 그 블록에 달라붙었다(보안 설정의 내부 시계 카드).
+ *
+ * 카드에만 거는 이유: 카드는 보통의 블록이라 형제 여백이 서로 겹쳐진다
+ * (margin collapsing) — 이미 간격이 있는 자리에서는 아무것도 달라지지 않는다.
+ * 반면 대화상자 본문(.modal-body)은 gap 을 가진 flex 라 여백이 겹치지 않고
+ * 그대로 더해져, 거기까지 걸면 모든 창의 알림 위가 두 배로 벌어진다.
+ *
+ * 값은 아래 간격과 같은 16px 이다. 알림은 앞뒤로 같은 만큼 떠 있어야 하나의
+ * 덩어리로 읽힌다 — 한쪽만 좁으면 그 블록에 딸린 설명처럼 보인다. */
+.card > * + .notice { margin-top: 16px; }
 .notice > .icon { margin-top: 2px; }
 .notice strong { font-weight: 500; }
 .notice-info {
@@ -5057,12 +5070,39 @@ a.stat:hover { border-color: var(--text-mute); background: hsl(var(--h-muted) / 
 }
 
 /* 감사 기록 상세 */
+/* 감사 기록의 머리 속성(시각·수행자·액션·대상·결과·IP).
+ *
+ * 항목과 값이 **각각 한 줄로 맞춰 서게** 한다. 예전에는 줄마다 [항목][값] 을 묶어
+ * 놓고 그 묶음을 자동 배치했는데, 항목 글자 폭이 서로 달라서("시각"·"수행자"·"IP")
+ * 값이 줄마다 다른 자리에서 시작했다 — 읽는 눈이 값을 찾으려고 매번 왼쪽으로
+ * 되돌아가야 했다.
+ *
+ * .kv 에 display: contents 를 주는 이유: 항목과 값이 부모 그리드의 칸에 직접
+ * 들어가야 열이 맞는다. 묶음을 없애고 평평하게 그리면 마크업에서 "이 둘이 한 쌍"
+ * 이라는 사실이 사라지므로, 묶음은 남기고 자리만 부모에게 넘긴다. */
 .audit-detail-head {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 8px 16px; margin-bottom: 16px;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr);
+  gap: 7px 14px;
+  align-items: baseline;
+  /* 값은 칸을 채우지 않고 왼쪽에 붙는다. 이것이 없으면 배지(결과)가 칸 끝까지
+   * 늘어나 초록색 띠 하나가 되고, 그 옆의 값들과 폭이 어긋나 보인다. */
+  justify-items: start;
+  margin-bottom: 16px;
 }
-.audit-detail-head .kv { display: flex; align-items: center; gap: 8px; font-size: 13px; }
-.audit-detail-head .kv-key { color: var(--text-mute); min-width: 48px; }
+.audit-detail-head .kv { display: contents; }
+.audit-detail-head .kv-key {
+  color: var(--text-mute); font-size: 12.5px; white-space: nowrap;
+}
+/* 값은 어떤 태그로든 온다(span·code·배지). 긴 식별자는 칸 안에서 접는다 —
+ * 넘치면 그리드가 넓어져 창을 밀어낸다. */
+.audit-detail-head .kv > :not(.kv-key) {
+  font-size: 13px; min-width: 0; word-break: break-all;
+}
+/* 좁은 창에서는 한 쌍씩. 네 칸을 우겨 넣으면 값이 한 글자씩 접힌다. */
+@media (max-width: 620px) {
+  .audit-detail-head { grid-template-columns: max-content minmax(0, 1fr); }
+}
 .audit-detail-title { font-size: 13px; color: var(--text-dim); margin: 0 0 8px; }
 .audit-kv { table-layout: auto; }
 .audit-kv td { vertical-align: top; }
