@@ -686,6 +686,16 @@ class ChatView {
 
   renderLog() {
     const items = [];
+    // 접어 둔 옛 대화가 있으면 맨 위에 알린다.
+    //
+    // 보여 주는 이유: 접기는 되돌릴 수 없다. 무엇이 남았는지 사람이 볼 수 있어야
+    // "그 이야기는 왜 잊었지?"에 답할 수 있고, 요약이 중요한 것을 빠뜨렸다면
+    // 다시 말해 줄 수 있다.
+    if (this.session?.summary) {
+      items.push(h('details.ai-summary', {},
+        h('summary', {}, icon('list', 13), '이전 대화 요약 (문맥이 차서 접었습니다)'),
+        h('div.ai-summary-body', {}, renderMarkdown(this.session.summary))));
+    }
     for (const m of this.messages) {
       const node = this.messageNode(m);
       if (!node) continue;
