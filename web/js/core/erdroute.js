@@ -328,3 +328,17 @@ export function oneMarker(b, side) {
     x: b.x - 5, y: b.y - 1, width: 10, height: 2, rx: 1,
   };
 }
+
+// endLabelSpot은 선 끝에 붙일 글자의 자리다.
+//
+// 끝점 그대로에 두면 카드 테두리 위에 글자가 얹혀 읽히지 않는다. 들어오는 방향의
+// **반대쪽**(선이 온 쪽)으로 조금 물리고, 선과 겹치지 않게 직각 방향으로도 비킨다.
+export function endLabelSpot(p, side, gap = 13, off = 9) {
+  const n = SIDES[side] ?? SIDES.right;
+  return {
+    x: p.x - n.nx * gap - (n.ny === 0 ? 0 : off),
+    y: p.y - n.ny * gap - (n.ny === 0 ? off : 0),
+    // 가로로 들어오는 선은 글자를 선 위에 얹고, 세로로 들어오는 선은 옆에 둔다.
+    anchor: n.ny === 0 ? 'middle' : 'start',
+  };
+}

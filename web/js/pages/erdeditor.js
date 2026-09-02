@@ -34,6 +34,7 @@ import { panelResizeHandle, attachPanelResize } from '../core/panelresize.js';
 import { renderMarkdown } from '../core/markdown.js';
 import { openImageExportDialog } from '../core/erdimage.js';
 import { findInDocument, hitCenter, KIND_LABEL } from '../core/erdfind.js';
+import { cardinality, describeRelation } from '../core/erdrel.js';
 import { streamAIChat } from '../core/aistream.js';
 import { errorPanel } from './users.js';
 import { statusBadge } from './erd.js';
@@ -1312,7 +1313,12 @@ class Editor {
             h('dd', {}, `${tableDisplay(tbl)} (${(fk.columns ?? []).join(', ')})`)),
           h('div.meta-row', {}, h('dt', {}, '참조'),
             h('dd', {}, `${fk.refNamespace ? `${fk.refNamespace}.` : ''}${fk.refTable} (${(fk.refColumns ?? []).join(', ')})`)),
+          h('div.meta-row', {}, h('dt', {}, '관계'),
+            h('dd', {}, cardinality(tbl, fk).label)),
         ),
+        // 기호만으로는 무엇의 N 인지 분명하지 않다. 어느 쪽이 여럿인지를 표 이름으로
+        // 말해 주면 헷갈릴 일이 없다.
+        h('p.field-help', {}, describeRelation(tbl, fk)),
         h('label.field', {}, h('span.field-label', {}, 'ON DELETE'), onDelete),
         h('label.field', {}, h('span.field-label', {}, 'ON UPDATE'), onUpdate),
         h('p.field-help', {},

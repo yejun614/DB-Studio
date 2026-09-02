@@ -14,7 +14,8 @@ import { h, mount, icon } from './dom.js';
 import { columnIcon, chosenIconFor } from './colicon.js';
 import { NAME_MODES, tableLabel, columnLabel } from './logical.js';
 import { fitText, measure, cssFont, forgetFonts } from './textfit.js';
-import { makeRouter, oneMarker } from './erdroute.js';
+import { makeRouter, oneMarker, endLabelSpot } from './erdroute.js';
+import { cardinality, isJunction, junctionPartners } from './erdrel.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -307,7 +308,11 @@ export class ErdCanvas {
         const toKey = refKey(tbl, fk);
         if (!boxes.has(toKey)) continue;
         const r = route(fromKey, toKey);
-        if (r) map.set(`${fromKey}.${fk.name}`, { ...r, fromKey, toKey });
+        if (r) {
+          map.set(`${fromKey}.${fk.name}`, {
+            ...r, fromKey, toKey, card: cardinality(tbl, fk),
+          });
+        }
       }
     }
     this.routeCache = { sig, map };
@@ -355,6 +360,24 @@ export class ErdCanvas {
       this.layers.links.appendChild(svgEl('rect', {
         class: 'erd-link-one', 'data-fk': fkID, ...oneMarker(r.b, r.sb),
       }));
+
+      // 양 끝에 개수를 적는다.
+      //
+      // 점과 막대만으로도 "여럿 → 하나"는 읽히지만, 1:1 과 N:1 은 그 표식이
+      // 같아서 구별되지 않았다. 그리고 처음 보는 사람에게 점·막대의 뜻은
+      // 배워야 아는 것이다 — 글자는 배울 것이 없다.
+      if (r.card) {
+        const at = endLabelSpot(r.a, r.sa);
+        this.layers.links.appendChild(svgEl('text', {
+          class: 'erd-link-card', 'data-fk': fkID,
+          x: at.x, y: at.y, 'text-anchor': at.anchor,
+        }, r.card.child));
+        const bt = endLabelSpot(r.b, r.sb);
+        this.layers.links.appendChild(svgEl('text', {
+          class: 'erd-link-card', 'data-fk': fkID,
+          x: bt.x, y: bt.y, 'text-anchor': bt.anchor,
+        }, r.card.parent));
+      }
       this.linkSpots.set(fkID, r);
     }
     this.syncLiftedLinks();
@@ -467,6 +490,20 @@ export class ErdCanvas {
       class: `erd-card-name${isLogical ? ' is-logical' : ''}`,
       x: titleX, y: sub ? 17 : 20,
     }, fitText(main, titleMax, cssFont(`erd-card-name${isLogical ? ' is-logical' : ''}`))));
+    // 연결 표(N:N)임을 제목 줄에 적는다.
+    //
+    // 두 표 사이에 N:N 선을 그리지 않는 이유: 그런 외래키는 없다. N:N 은 이 표를
+    // 두는 **패턴**이고, 그 표에서 나가는 외래키는 각각 N:1 이다. 없는 선을 그리면
+    // 도면이 DDL과 달라진다 — 이 앱에서 도면은 DDL의 그림이다.
+    //
+    // 대신 그 사실을 이 표에 적는다. 읽는 사람이 알고 싶은 것은 "이 표가 A와 B를
+    // N:N 으로 잇는다"이고, 그것은 이 표의 성질이다.
+    if (isJunction(tbl)) {
+      g.appendChild(svgEl('text', {
+        class: 'erd-card-nn', x: geom.w - PAD_R - 14, y: sub ? 17 : 20,
+        'text-anchor': 'end',
+      }, 'N:N'));
+    }
     // 제목의 주석·잘린 이름을 손 올렸을 때 보여 준다.
     this.bindTip(headHit, () => tipForTable(tbl, geom.layout, main, titleMax));
     g.appendChild(headHit);
@@ -1659,6 +1696,11 @@ function tipForTable(tbl, layout, shown, maxWidth) {
   if (logical) rows.push(['논리명', logical]);
   const comment = (tbl.comment ?? '').trim();
   if (comment) rows.push(['주석', comment]);
+  // 연결 표라면 무엇과 무엇을 잇는지 적는다. 카드에는 "N:N"만 보이는데, 그것만으로는
+  // 무엇의 N:N 인지 알 수 없다.
+  if (isJunction(tbl)) {
+    rows.push(['N:N', `${junctionPartners(tbl).join(' ↔ ')} 를 잇는 연결 표`]);
+  }
   return rows.length ? rows : null;
 }
 

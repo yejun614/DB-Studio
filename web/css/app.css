@@ -2159,6 +2159,25 @@ option { background: var(--surface); color: var(--text); }
   fill: none; stroke: transparent; stroke-width: 12; cursor: pointer;
 }
 .erd-link-many { fill: var(--text-dim); pointer-events: none; }
+/* 선 끝의 개수 표기(N · 1 · 0..1).
+ *
+ * 점과 막대만으로도 "여럿 → 하나"는 읽히지만, 1:1 과 N:1 은 그 표식이 같아서
+ * 구별되지 않았다. 그리고 점·막대의 뜻은 배워야 아는 것이고, 글자는 배울 것이 없다.
+ *
+ * 선보다 옅게 두지 않는 이유: 이 글자는 8px 남짓이라 옅게 하면 그냥 안 보인다.
+ * 대신 작게 두어 도면의 주인공이 표와 선임을 지킨다. */
+.erd-link-card {
+  fill: var(--text-mute);
+  /* 크기는 타입 글자(10.5px)에 맞춘다. 9px로 두었더니 화면에 맞춘 배율에서
+   * 아예 보이지 않았다 — 안 보이는 표기는 없는 것과 같다. */
+  font: 600 10.5px var(--mono);
+  pointer-events: none;
+  /* 선 위에 얹히는 자리라, 뒤에 얇은 테두리를 둘러 글자가 선에 묻히지 않게 한다. */
+  paint-order: stroke;
+  stroke: var(--bg);
+  stroke-width: 2.5px;
+  stroke-linejoin: round;
+}
 .erd-link-one { fill: var(--text-dim); pointer-events: none; }
 
 /* 테이블 카드 */
@@ -2192,6 +2211,8 @@ option { background: var(--surface); color: var(--text); }
    제목만 유독 큼직하게 튄다. */
 .erd-card-name.is-logical { font-size: 11.5px; }
 .erd-card-count { fill: var(--text-mute); font: 11px var(--mono); }
+/* 연결 표(N:N) 표시. 컬럼 수 왼쪽에 둔다 — 제목과 붙여 두면 이름의 일부로 읽힌다. */
+.erd-card-nn { fill: var(--accent); font: 600 10px var(--mono); }
 .erd-col { fill: var(--text-dim); font: 11.5px var(--mono); }
 .erd-col.is-pk { fill: var(--warn); font-weight: 600; }
 .erd-col-type { fill: var(--text-mute); font: 10.5px var(--mono); }
