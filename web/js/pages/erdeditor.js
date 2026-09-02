@@ -990,55 +990,126 @@ class Editor {
   //
   // 캔버스 위가 아니라 모달인 이유: 자주 바뀌지 않는 값이고, 도구 막대에 늘 펼쳐
   // 두면 정작 자주 쓰는 도구가 밀린다.
-  openSettings() {
-    const nameInput = input({ value: this.doc.name ?? '', disabled: !this.canManage });
+  async openSettings() {
+    const ro = !this.canManage;
+    const nameInput = input({ value: this.doc.name ?? '', disabled: ro });
     const noteBox = h('textarea.input.textarea', {
-      rows: 4, value: this.note, disabled: !this.canManage,
+      rows: 4, value: this.note, disabled: ro,
       placeholder: '이 초안의 목적이나 결정 사항을 적어 두면 나중에 읽는 사람이 덜 묻습니다',
     });
+    // 상태는 한글로 보인다. 목록 화면의 설정 창과 같은 이름이어야 한다 — 같은 값을
+    // 한쪽에서는 "draft", 다른 쪽에서는 "초안"으로 부르면 같은 것인지 알 수 없다.
+    const statusSelect = select(
+      Object.entries(STATUS_LABELS).map(([value, [label]]) => ({ value, label })),
+      { value: this.doc.status, disabled: ro },
+    );
+
+    // 고를 수 있는 커넥션은 열 때 받아 온다. 편집기를 열 때마다 받으면 쓰지도 않는
+    // 요청이 매번 하나 늘고, 그 목록은 이 창에서만 쓴다.
+    let targets = [];
+    if (!ro) {
+      try {
+        const conns = await api.get(withProject('/connections/'));
+        targets = (conns.items ?? []).filter((i) => {
+          if (!i.accessible) return false;
+          // ERD 는 관계형 스키마가 있는 DB 만이고, 붙이려면 편집 등급이 있어야 한다.
+          if (i.level !== 'erd' && i.level !== 'migrate') return false;
+          const info = state.meta?.dbKinds?.find((k) => k.kind === i.connection.kind);
+          return info?.capabilities?.migrate;
+        });
+      } catch {
+        // 목록을 못 받아도 이름·메모·상태는 고칠 수 있어야 한다.
+      }
+    }
+    const connSelect = groupedSelect({
+      usable: targets,
+      currentId: this.connection?.id ?? '',
+      allLabel: '없음 (독립 초안)',
+    });
+    connSelect.disabled = ro;
+
+    const dialects = (state.meta?.dbKinds ?? []).filter((k) => k.capabilities?.migrate);
+    const dialectSelect = select(
+      dialects.map((k) => ({ value: k.kind, label: k.label })),
+      { value: this.doc.dialect },
+    );
+    // 대상이 있으면 문법은 그 대상의 것이다. 두 값을 따로 고르게 두면
+    // "PostgreSQL 을 향하는데 문법은 MySQL"인 문서가 생기고, 그 문서가 만드는
+    // 마이그레이션은 실행하는 순간에야 거부된다.
+    const syncDialect = () => {
+      const picked = targets.find((i) => i.connection.id === connSelect.value);
+      if (picked) dialectSelect.value = picked.connection.kind;
+      dialectSelect.disabled = ro || Boolean(picked);
+    };
+    connSelect.addEventListener('change', syncDialect);
+    syncDialect();
 
     openModal({
       title: 'ERD 설계 설정',
-      width: 520,
+      width: 560,
       body: () => [
         h('label.field', {}, h('span.field-label', {}, '이름'), nameInput),
+        h('label.field', {}, h('span.field-label', {}, '상태'), statusSelect,
+          h('span.field-help', {}, '리뷰 중으로 바꾸면 검토를 요청한 것으로 표시됩니다')),
+        h('label.field', {}, h('span.field-label', {}, '대상 DB'), connSelect,
+          h('span.field-help', {},
+            '대상을 붙이면 변경 비교와 마이그레이션을 만들 수 있습니다. '
+            + '편집 권한도 그 커넥션의 등급을 따릅니다.')),
+        h('label.field', {}, h('span.field-label', {}, 'DB 문법'), dialectSelect,
+          h('span.field-help', {},
+            dialectSelect.disabled && !ro
+              ? '대상 DB가 있으면 문법은 그 DB의 것으로 정해집니다.'
+              : '이미 적어 둔 컬럼 타입은 그대로 남습니다 — 내보낼 때 변환 경고로 알려 줍니다.')),
         h('label.field', {}, h('span.field-label', {}, '메모'), noteBox),
-        h('dl.mig-meta', {},
-          h('div.meta-row', {}, h('dt', {}, '대상 DB'),
-            h('dd', {}, this.connection ? this.connection.name : '없음 (독립 초안)')),
-          h('div.meta-row', {}, h('dt', {}, 'DB 문법'), h('dd', {}, kindLabel(this.doc.dialect))),
-          h('div.meta-row', {}, h('dt', {}, '상태'), h('dd', {}, this.doc.status)),
-        ),
-        this.canManage
-          ? null
-          : h('p.notice.notice-info', {}, icon('lock'),
-            '문서 설정은 만든 사람과 관리 권한이 있는 사람만 바꿀 수 있습니다.'),
+        ro
+          ? h('p.notice.notice-info', {}, icon('lock'),
+            '문서 설정은 만든 사람과 관리 권한이 있는 사람만 바꿀 수 있습니다.')
+          : null,
       ],
       footer: (close) => [
-        h('button.btn', { type: 'button', onclick: close }, this.canManage ? '취소' : '닫기'),
-        this.canManage
-          ? h('button.btn.btn-primary', {
+        h('button.btn', { type: 'button', onclick: close }, ro ? '닫기' : '취소'),
+        ro
+          ? null
+          : h('button.btn.btn-primary', {
             type: 'button',
             onclick: async () => {
+              const retarget = (connSelect.value || '') !== (this.connection?.id ?? '')
+                || dialectSelect.value !== this.doc.dialect;
               try {
                 const res = await api.patch(`/erd/documents/${encodeURIComponent(this.docID)}`, {
                   name: nameInput.value.trim(),
                   note: noteBox.value,
+                  status: statusSelect.value,
+                  connectionId: connSelect.value || '',
+                  dialect: dialectSelect.value,
                 });
                 this.doc.name = res.document?.name ?? nameInput.value.trim();
                 this.note = res.document?.note ?? noteBox.value;
-                const title = this.ui.root.querySelector('.erd-title');
-                if (title) mount(title, this.doc.name);
                 close();
                 toast('문서 설정을 저장했습니다', 'success');
+                // 대상이나 문법이 바뀌면 화면의 절반이 달라진다(마이그레이션 단추,
+                // 타입 고르개, 상태 배지). 부분만 고치면 어긋난 자리가 남으므로
+                // 문서를 다시 열어 처음부터 그린다.
+                if (retarget) navigate(`/erd/${encodeURIComponent(this.docID)}`);
+                else this.refreshHead(res.document?.status ?? statusSelect.value);
               } catch (err) {
                 toastError(err);
               }
             },
-          }, '저장')
-          : null,
+          }, '저장'),
       ].filter(Boolean),
     });
+  }
+
+  // refreshHead는 머리글의 제목과 상태 배지를 지금 문서에 맞춘다.
+  refreshHead(status) {
+    const title = this.ui.root.querySelector('.erd-title');
+    if (title) mount(title, this.doc.name);
+    if (status && status !== this.doc.status) {
+      this.doc.status = status;
+      const old = this.ui.root.querySelector('.erd-head .badge');
+      if (old) old.replaceWith(statusBadge(status));
+    }
   }
 
   renderParticipants() {
