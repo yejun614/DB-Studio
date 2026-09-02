@@ -27,6 +27,11 @@ type AIProvider struct {
 	APIKey       string `json:"-"`
 	HasKey       bool   `json:"hasKey"`
 	DefaultModel string `json:"defaultModel,omitempty"`
+	// ContextTokens는 이 프로바이더가 한 번에 받는 토큰 수다.
+	//
+	// 0은 "모름"이고, 그때는 코드가 보수적인 기본값을 쓴다. 단위가 토큰인 이유:
+	// 모델 카드에 적힌 값이 토큰이고, 사람이 그것을 그대로 옮겨 적을 수 있어야 한다.
+	ContextTokens int `json:"contextTokens"`
 	// Models는 이 프로바이더로 쓸 수 있는 모델 목록이다.
 	//
 	// 비어 있으면 제한이 없다(어떤 모델 이름이든 쓸 수 있다). 관리자가 목록을 채우면
@@ -45,12 +50,13 @@ type AIProvider struct {
 
 // SaveAIProviderParams는 프로바이더 생성/수정 입력이다.
 type SaveAIProviderParams struct {
-	ID           string
-	Name         string
-	Provider     string
-	BaseURL      string
-	DefaultModel string
-	Models       []string
+	ID            string
+	Name          string
+	Provider      string
+	BaseURL       string
+	DefaultModel  string
+	ContextTokens int
+	Models        []string
 	// APIKey가 nil이면 기존 키를 유지한다 (수정 화면에서 비워 두는 것은 "유지"다).
 	APIKey    *string
 	Enabled   bool
@@ -80,9 +86,10 @@ func (s *Store) CreateAIProvider(ctx context.Context, p SaveAIProviderParams) (*
 
 	if _, err := tx.ExecContext(ctx, `INSERT INTO ai_providers
 		(id, name, provider, base_url, api_key_enc, default_model, allowed_models,
-		 enabled, is_default, created_by, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 context_tokens, enabled, is_default, created_by, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, p.Name, p.Provider, p.BaseURL, sealed, p.DefaultModel, encodeModels(p.Models),
+		clampContext(p.ContextTokens),
 		boolInt(p.Enabled), boolInt(p.IsDefault), nullString(p.CreatedBy), now, now); err != nil {
 		if isUniqueViolation(err) {
 			return nil, ErrDuplicateName
@@ -114,7 +121,7 @@ func clearOtherDefaults(ctx context.Context, tx *sql.Tx, keepID string, isDefaul
 func (s *Store) UpdateAIProvider(ctx context.Context, p SaveAIProviderParams) (*AIProvider, error) {
 	args := []any{
 		p.Name, p.Provider, p.BaseURL, p.DefaultModel, encodeModels(p.Models),
-		boolInt(p.Enabled), boolInt(p.IsDefault), nowString(),
+		clampContext(p.ContextTokens), boolInt(p.Enabled), boolInt(p.IsDefault), nowString(),
 	}
 	keyClause := ""
 	if p.APIKey != nil {
@@ -138,7 +145,7 @@ func (s *Store) UpdateAIProvider(ctx context.Context, p SaveAIProviderParams) (*
 
 	res, err := tx.ExecContext(ctx, `UPDATE ai_providers SET
 		name = ?, provider = ?, base_url = ?, default_model = ?, allowed_models = ?,
-		enabled = ?, is_default = ?, updated_at = ?`+keyClause+`
+		context_tokens = ?, enabled = ?, is_default = ?, updated_at = ?`+keyClause+`
 		WHERE id = ?`, args...)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -160,9 +167,21 @@ func (s *Store) UpdateAIProvider(ctx context.Context, p SaveAIProviderParams) (*
 
 const aiProviderSelect = `SELECT
 	id, name, provider, base_url, api_key_enc, default_model, allowed_models,
-	enabled, is_default, last_check_at, last_check_ok, last_check_msg,
+	context_tokens, enabled, is_default, last_check_at, last_check_ok, last_check_msg,
 	COALESCE(created_by, ''), created_at, updated_at
 	FROM ai_providers`
+
+// clampContext는 컨텍스트 토큰 수를 성한 값으로 만든다.
+//
+// 0은 "모름"이라 그대로 둔다. 음수와 터무니없이 큰 값은 0으로 되돌린다 —
+// 잘못된 값으로 예산을 계산하면 이력이 통째로 사라지거나(음수) 아무것도 걸러지지
+// 않는다(과대), 둘 다 조용히 일어난다.
+func clampContext(n int) int {
+	if n <= 0 || n > 10_000_000 {
+		return 0
+	}
+	return n
+}
 
 // encodeModels는 허용 모델 목록을 저장 형식으로 만든다.
 //
@@ -246,7 +265,7 @@ func (s *Store) scanAIProvider(row interface{ Scan(...any) error }, withKey bool
 	var lastCheckOK sql.NullInt64
 
 	if err := row.Scan(&p.ID, &p.Name, &p.Provider, &p.BaseURL, &keyEnc, &p.DefaultModel,
-		&models, &enabled, &isDefault, &lastCheckAt, &lastCheckOK, &p.LastCheckMsg,
+		&models, &p.ContextTokens, &enabled, &isDefault, &lastCheckAt, &lastCheckOK, &p.LastCheckMsg,
 		&p.CreatedBy, &createdAt, &updatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, err
