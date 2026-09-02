@@ -335,6 +335,14 @@ type AISession struct {
 	Archived      bool      `json:"archived"`
 	CreatedAt     time.Time `json:"createdAt"`
 	UpdatedAt     time.Time `json:"updatedAt"`
+	// Summary는 접어 둔 옛 대화의 요약이다. 비어 있으면 접은 적이 없다.
+	Summary string `json:"summary,omitempty"`
+	// SummaryThroughID는 요약이 담고 있는 마지막 메시지 아이디다.
+	//
+	// 어디까지 담겼는지 모르면 같은 대목을 두 번 담거나(요약 + 원문) 빠뜨린다.
+	// 사람이 자기 말을 고쳐 그 뒤를 지우면 그 자리를 담은 요약은 틀린 요약이 되는데,
+	// 그 판정도 이 값으로 한다.
+	SummaryThroughID int64 `json:"summaryThroughId,omitempty"`
 	// MessageCount는 목록 표시용이다.
 	MessageCount int `json:"messageCount"`
 	// PendingCount는 승인을 기다리는 제안 수다. 목록에서 눈에 띄게 표시한다.
@@ -371,7 +379,7 @@ func (s *Store) CreateAISession(ctx context.Context, p CreateAISessionParams) (*
 const aiSessionSelect = `SELECT
 	s.id, s.user_id, s.title, COALESCE(s.provider_id, ''), COALESCE(p.name, ''),
 	s.model, COALESCE(s.connection_id, ''), COALESCE(s.erd_document_id, ''),
-	s.input_tokens, s.output_tokens,
+	s.input_tokens, s.output_tokens, s.summary, s.summary_through_id,
 	s.archived, s.created_at, s.updated_at,
 	(SELECT COUNT(*) FROM ai_messages m WHERE m.session_id = s.id),
 	(SELECT COUNT(*) FROM ai_pending_actions a WHERE a.session_id = s.id AND a.status = 'pending')
@@ -462,6 +470,7 @@ func scanAISession(row interface{ Scan(...any) error }) (*AISession, error) {
 	var archived int
 	if err := row.Scan(&s.ID, &s.UserID, &s.Title, &s.ProviderID, &s.ProviderName,
 		&s.Model, &s.ConnectionID, &s.ERDDocumentID, &s.InputTokens, &s.OutputTokens,
+		&s.Summary, &s.SummaryThroughID,
 		&archived, &createdAt, &updatedAt, &s.MessageCount, &s.PendingCount); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, err
@@ -800,4 +809,17 @@ func (s *Store) ExpireAIPendingActions(ctx context.Context, sessionID string) (i
 	}
 	n, _ := res.RowsAffected()
 	return n, nil
+}
+
+// SetAISessionSummary는 접어 둔 옛 대화의 요약을 저장한다.
+//
+// 요약을 저장해 두는 이유: 접는 일은 프로바이더를 한 번 더 부르는 일이다. 매 차례
+// 다시 접으면 그 값을 매번 낸다. 한 번 접어 두면 그 뒤로는 공짜다.
+func (s *Store) SetAISessionSummary(ctx context.Context, id, summary string, through int64) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE ai_sessions
+		SET summary = ?, summary_through_id = ? WHERE id = ?`, summary, through, id)
+	if err != nil {
+		return fmt.Errorf("set ai session summary: %w", err)
+	}
+	return nil
 }
