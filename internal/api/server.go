@@ -404,6 +404,7 @@ func (s *Server) routes() {
 	docs.Get("/:docId", s.handleGetERDDocument)
 	docs.Patch("/:docId", s.handleUpdateERDDocument)
 	docs.Delete("/:docId", s.handleDeleteERDDocument)
+	docs.Post("/:docId/duplicate", s.handleDuplicateERDDocument)
 	docs.Get("/:docId/ops", s.handleERDOps)
 	docs.Get("/:docId/chat", s.handleERDChat)
 	// 문서에 매인 AI 대화. 대화 자체는 기존 /ai/sessions/:id/chat 으로 이어지고

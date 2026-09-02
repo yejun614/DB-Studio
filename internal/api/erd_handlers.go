@@ -205,6 +205,84 @@ func (s *Server) createStandaloneERDDocument(c *fiber.Ctx, name, projectID, dial
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"document": doc})
 }
 
+// handleDuplicateERDDocument는 초안을 베낀다.
+//
+// 왜 있는가: 설계는 "지금 것을 두고 다른 안을 시험해 보는" 일이 잦다. 그런데 그때
+// 쓸 수 있는 길이 SQL 내보내기 → 새 초안 → 불러오기뿐이었고, 그 길로는 배치·색·
+// 아이콘·논리명·도메인·메모가 모두 사라진다 — 정작 설계를 읽게 만드는 것들이다.
+//
+// 권한은 **읽기**를 요구한다(LevelMonitor). 사본은 새 문서이지만 담기는 내용은
+// 이미 볼 수 있는 것이고, 사본을 고칠 수 있는지는 그 사본의 대상 커넥션 등급이
+// 원본과 똑같이 판정한다.
+func (s *Server) handleDuplicateERDDocument(c *fiber.Ctx) error {
+	doc, conn, _, err := s.resolveERDDocument(c, c.Params("docId"), model.LevelMonitor)
+	if err != nil {
+		return err
+	}
+	// 구조 문서는 커넥션마다 하나다(store.GetStructureDocumentID). 그것을 베끼면
+	// 같은 대상을 가리키는 구조 문서가 둘이 되어, "지금 DB의 모습"을 어느 쪽에서
+	// 봐야 하는지 답할 수 없게 된다.
+	if doc.Kind == store.DocKindStructure {
+		return fail(c, fiber.StatusBadRequest, "not_duplicable",
+			"구조 문서는 복제할 수 없습니다. 설계 초안을 복제하세요")
+	}
+
+	var body struct {
+		Name string `json:"name"`
+	}
+	// 본문이 없어도 된다. 이름을 안 주면 "<원본> 사본"이다.
+	_ = c.BodyParser(&body)
+	name := strings.TrimSpace(body.Name)
+	if name == "" {
+		name = doc.Name + " 사본"
+	}
+	if len([]rune(name)) > 120 {
+		return fail(c, fiber.StatusBadRequest, "bad_request", "문서 이름이 너무 깁니다 (120자 제한)")
+	}
+
+	meta, err := s.st.GetERDDocumentMeta(c.Context(), doc.ID)
+	if err != nil {
+		return err
+	}
+
+	dup := doc.Clone()
+	dup.ID = uuid.NewString()
+	dup.Name = name
+	// 사본은 언제나 초안이다. 승인된 문서를 베끼면 "승인된 사본"이 되는데, 그
+	// 승인은 이 내용에 대해 아무도 한 적이 없다.
+	dup.Status = erd.StatusDraft
+	dup.Kind = store.DocKindDraft
+	// 편집 순번은 0에서 시작한다. 원본의 순번을 물려받으면 사본의 편집 이력이
+	// 비어 있는데 "편집 300회"로 보인다.
+	dup.Seq = 0
+
+	u := currentUser(c)
+	// 기준 스냅샷은 물려받지 않는다(nil).
+	//
+	// 물려받는 편이 뜻으로는 맞다 — 사본도 같은 상태를 보고 그린 그림이다. 다만
+	// 이 값은 지금 코드베이스에서 **쓰기만 하고 아무도 읽지 않는다**. 읽는 곳이
+	// 생기면 그때 문서 메타에 실어 함께 옮기면 된다. 읽지 않는 값을 옮기려고
+	// 저장 계층을 먼저 고치면, 무엇을 위한 필드인지 알 수 없는 코드가 남는다.
+	if err := s.st.CreateERDDocument(c.Context(), dup, u.ID, meta.Note, nil); err != nil {
+		return err
+	}
+	s.audit(c, store.AuditParams{
+		Action: "erd.duplicate", TargetType: "erd_document", TargetID: dup.ID,
+		Detail: map[string]any{
+			"name": name, "from": doc.ID, "fromName": doc.Name,
+			"tables": len(dup.Schema.Tables),
+		},
+	})
+	var connInfo any
+	if conn != nil {
+		connInfo = connSummary(conn)
+	}
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
+		"document":   dup,
+		"connection": connInfo,
+	})
+}
+
 // handleGetERDDocument는 문서 전체를 반환한다.
 // WebSocket을 열지 않고 읽기만 할 때(목록에서 미리보기) 사용한다.
 func (s *Server) handleGetERDDocument(c *fiber.Ctx) error {
