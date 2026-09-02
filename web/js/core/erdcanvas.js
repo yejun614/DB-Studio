@@ -101,6 +101,9 @@ export class ErdCanvas {
     // 화면 이동이다 — 그림 도구들의 공통 관례이고, 도구를 바꾸고 되돌리는 두 번의
     // 클릭보다 손이 덜 움직인다.
     this.spaceHeld = false;
+    // showDomain은 도메인이 걸린 컬럼에 도메인 이름을 보일지다(기본: 보인다).
+    // 구조 화면처럼 도구 줄이 없는 곳에서는 이 기본값이 그대로 쓰인다.
+    this.showDomain = true;
     // nameMode는 카드에 어느 이름을 보일지다: 'physical' | 'logical' | 'both'.
     // 기본은 물리명 — 논리명을 적지 않은 문서가 지금까지와 똑같이 보인다.
     this.nameMode = 'physical';
@@ -181,6 +184,18 @@ export class ErdCanvas {
   // setNameMode는 카드에 보일 이름을 바꾼다. 문서를 고치지 않는 **보기** 설정이다.
   setNameMode(mode) {
     this.nameMode = NAME_MODES.some((m) => m.value === mode) ? mode : 'physical';
+  }
+
+  // setShowDomain은 도메인이 걸린 컬럼에 도메인 이름을 보일지, 실제 타입을
+  // 보일지다. 이것도 문서를 고치지 않는 보기 설정이다.
+  //
+  // 왜 고를 수 있어야 하는가: 도메인 이름은 "이 컬럼이 무엇인가"를 말하고(설계
+  // 회의에서 필요한 것), 실제 타입은 "그것이 어떻게 구현돼 있는가"를 말한다
+  // (마이그레이션과 코드에서 필요한 것). 도메인을 쓰기 시작하면 도면에서
+  // VARCHAR(320) 이 아예 사라지는데, 그것을 확인하려고 컬럼마다 속성 창을 열게
+  // 된다 — 도면이 답하던 것을 도면이 못 답하게 되는 셈이다.
+  setShowDomain(on) {
+    this.showDomain = on !== false;
   }
 
   setTool(tool) {
@@ -324,7 +339,7 @@ export class ErdCanvas {
   // 캐시하는 이유: 길찾기는 카드 기하만 보고 정해지는데, 다시 그리기는 고르기가
   // 바뀔 때마다 일어난다. 카드를 건드리지도 않았는데 매번 다시 찾을 이유가 없다.
   routes(boxes, quick = false) {
-    let sig = `${quick ? 'q' : 'f'}|${this.nameMode ?? ''}`;
+    let sig = `${quick ? 'q' : 'f'}|${this.nameMode ?? ''}|${this.showDomain ? 'd' : 't'}`;
     for (const [key, g] of boxes) {
       sig += `|${key}:${round1(g.x)},${round1(g.y)},${round1(g.w)},${round1(g.h)}`;
     }
@@ -641,7 +656,8 @@ export class ErdCanvas {
         // 글자 수로 자르면(예전) 한글에서 넘친다 — 한글 한 자는 라틴 한 자보다
         // 두 배 가까이 넓어서, 같은 "20자"가 영문에서는 남고 한국어에서는 타입
         // 위로 올라탔다. 논리명과 물리명을 함께 보여 줄 때는 늘 겹쳤다.
-        const domain = (col.domain ?? '').trim();
+        // 도메인 이름을 보일지는 보는 사람이 정한다(setShowDomain).
+        const domain = this.showDomain ? (col.domain ?? '').trim() : '';
         const rawType = domain || (col.rawType || col.type?.base || '');
         const typeFont = cssFont(`erd-col-type${domain ? ' is-domain' : ''}`);
         // 타입은 카드의 절반을 넘지 않는다. 이름이 무엇인지 모르게 되면 도면이
@@ -682,7 +698,10 @@ export class ErdCanvas {
         const rowHit = svgEl('rect', {
           class: 'erd-hit', x: 0, y: y - ROW_H + 5, width: geom.w, height: ROW_H,
         });
-        this.bindTip(rowHit, () => tipForColumn(col, geom.layout, label, rawType, domain, room,
+        // 팝오버에는 도메인과 실제 타입이 늘 함께 나온다(tipForColumn). 지금
+        // 감춰 둔 쪽이 궁금해서 손을 올리는 것이므로, 보기 설정을 따르지 않는다.
+        this.bindTip(rowHit, () => tipForColumn(col, geom.layout, label, rawType,
+          (col.domain ?? '').trim(), room,
           pkCols.length > 1 && isPK ? { at: pkAt + 1, of: pkCols.length } : null));
         g.appendChild(rowHit);
       });

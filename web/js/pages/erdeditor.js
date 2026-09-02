@@ -53,6 +53,12 @@ const TABLE_ICONS = [
   'file', 'tag', 'location', 'truck', 'star', 'flag', 'shield', 'code', 'link',
 ];
 
+// 컬럼 타입 자리에 무엇을 보일지. 도메인이 걸린 컬럼에서만 갈린다.
+const TYPE_MODES = [
+  { value: 'domain', label: '도메인명' },
+  { value: 'actual', label: '실제 타입' },
+];
+
 // 새 컬럼의 기본 타입. 방언마다 "가장 흔한 문자열"이 다르다.
 function defaultColumnType(dialect) {
   if (dialect === 'postgres') return 'text';
@@ -192,6 +198,9 @@ class Editor {
     // 보는 사람의 설정이므로 사람마다 기억한다 — 같은 문서를 여는 두 사람이 서로
     // 다른 이름으로 볼 수 있어야 한다(설계자는 논리명, 개발자는 물리명).
     this.nameMode = readNameMode();
+    // showDomain은 도메인이 걸린 컬럼에 도메인 이름을 보일지다. 이름 보기와 같은
+    // 축의 설정이라 같은 자리에 두고 사람마다 기억한다.
+    this.showDomain = readShowDomain();
     // renamedSel은 이름 미리보기 때문에 선택 키를 옮겨 둔 기록이다({from, to}).
     // 이름이 거부되면 from으로 되돌린다(previewTableName의 주석 참고).
     this.renamedSel = null;
@@ -675,6 +684,14 @@ class Editor {
       // 바로 닿는 곳에 있어야 한다.
       h('div.erd-tool-group', {},
         ...NAME_MODES.map((m) => this.nameModeBtn(m)),
+        // 도메인 이름 ↔ 실제 타입. 이름 보기와 같은 묶음에 두는 이유: 둘 다
+        // "카드에 무엇을 적을까"이고, 설계 회의에서 함께 오간다.
+        //
+        // 하나짜리 토글이 아니라 둘로 두는 이유: 토글은 지금 어느 쪽인지 말하려면
+        // 글자가 바뀌어야 하고, 바뀌는 글자는 "지금 이것"인지 "누르면 이것"인지
+        // 알 수 없다. 이름 보기와 같은 모양이면 그 규칙을 한 번만 배우면 된다.
+        // (그리고 "도메인" 한 단어는 오른쪽 도메인 **탭**과 겹친다.)
+        ...TYPE_MODES.map((m) => this.typeModeBtn(m)),
       ),
       h('div.erd-tool-group', {},
         this.toolBtn('minus', '축소', () => this.zoom(1.25)),
@@ -761,6 +778,29 @@ class Editor {
     if (this.nameMode === mode) return;
     this.nameMode = mode;
     writeNameMode(mode);
+    this.renderToolbar();
+    this.renderCanvas();
+  }
+
+  // typeModeBtn은 컬럼 타입 자리에 무엇을 보일지 고르는 단추다.
+  typeModeBtn(mode) {
+    const on = (mode.value === 'domain') === this.showDomain;
+    return h('button.btn.btn-small.erd-name-mode', {
+      type: 'button',
+      class: on ? 'btn btn-small erd-name-mode is-on' : 'btn btn-small erd-name-mode',
+      'aria-pressed': String(on),
+      title: mode.value === 'domain'
+        ? '도메인이 걸린 컬럼에 도메인 이름을 보입니다'
+        : '도메인이 걸린 컬럼에도 실제 타입을 보입니다',
+      onclick: () => this.setShowDomain(mode.value === 'domain'),
+    }, mode.label);
+  }
+
+  // setShowDomain은 도메인 이름과 실제 타입 사이를 오간다. 보기 설정이라
+  // 다른 참여자에게 보내지 않는다.
+  setShowDomain(on) {
+    this.showDomain = Boolean(on);
+    writeShowDomain(this.showDomain);
     this.renderToolbar();
     this.renderCanvas();
   }
@@ -1136,6 +1176,7 @@ class Editor {
   // 화면이 항상 현재 문서와 같아지게 한다.
   renderCanvas() {
     this.canvas.setNameMode(this.nameMode);
+    this.canvas.setShowDomain(this.showDomain);
     this.canvas.setDoc(this.doc);
     this.canvas.setMarks(this.marks);
     this.canvas.setParticipants(this.participants, this.you?.clientId);
@@ -4836,6 +4877,7 @@ function singleColumnIndex(table, name, unique) {
 // 그 사람의 손버릇이고, 같은 문서를 보는 두 사람이 다른 도구를 쓸 수 있어야 한다.
 const TOOL_KEY = 'dbstudio.erd.tool';
 const NAME_MODE_KEY = 'dbstudio.erd.nameMode';
+const SHOW_DOMAIN_KEY = 'dbstudio.erd.showDomain';
 
 function readNameMode() {
   try {
@@ -4850,6 +4892,25 @@ function readNameMode() {
 function writeNameMode(mode) {
   try {
     localStorage.setItem(NAME_MODE_KEY, mode);
+  } catch {
+    // 기억하지 못할 뿐이다.
+  }
+}
+
+// 도메인 이름을 보일지. 기본은 보이는 것이다 — 도메인을 만들어 붙인 사람이
+// 도면에서 그것을 보려는 것이 자연스러운 기대다.
+function readShowDomain() {
+  try {
+    return localStorage.getItem(SHOW_DOMAIN_KEY) !== '0';
+  } catch {
+    return true;
+  }
+}
+
+function writeShowDomain(on) {
+  try {
+    if (on) localStorage.removeItem(SHOW_DOMAIN_KEY);
+    else localStorage.setItem(SHOW_DOMAIN_KEY, '0');
   } catch {
     // 기억하지 못할 뿐이다.
   }
