@@ -11,7 +11,7 @@ import {
   badge, envBadge, toast, toastError, relativeTime, openModal, confirmDialog,
   copyToClipboard,
 } from '../core/ui.js';
-import { navigate, currentPath } from '../core/router.js';
+import { navigate, currentPath, setLeaveGuard } from '../core/router.js';
 import { openFloatPanel, panelModal, isPanelOpen, closeFloatPanel } from '../core/floatpanel.js';
 import { renderMarkdown } from '../core/markdown.js';
 import { errorPanel } from './users.js';
@@ -69,6 +69,9 @@ export function toggleAssistantPopup(sessionId = '') {
 // 둔다 — 긴 조사를 할 때는 넓은 화면이 낫고, 주소로 공유할 수도 있어야 한다.
 export function openAssistantPopup(sessionId = '') {
   let cleanup = null;
+  // askClose는 지금 이 창 안의 대화에게 "닫아도 되나"를 묻는 함수다.
+  // 대화를 바꿀 때마다 새로 받는다(아래 guard).
+  let askClose = null;
   const panel = openFloatPanel({
     id: ASSISTANT_PANEL,
     title: 'AI 어시스턴트',
@@ -76,12 +79,16 @@ export function openAssistantPopup(sessionId = '') {
     width: 620,
     height: 680,
     onClose: () => cleanup?.(),
+    beforeClose: () => (askClose ? askClose() : true),
     render: (body, handle) => {
       const show = async (id) => {
         cleanup?.();
+        askClose = null;
         handle.sessionId = id;
         cleanup = await mountAssistant(body, {
           sessionId: id,
+          // 팝업의 X 는 라우터를 지나지 않는다. 그래서 닫기를 막는 길을 따로 받는다.
+          guard: (fn) => { askClose = fn; },
           // 팝업은 좁다. 대화 목록과 설정을 늘 펼쳐 두면 정작 대화가 보이는
           // 높이가 남지 않으므로, 둘 다 필요할 때만 겹쳐 연다(패널 안 모달).
           compact: true,
@@ -104,7 +111,7 @@ export function openAssistantPopup(sessionId = '') {
 // mountAssistant는 어시스턴트 화면 한 벌을 이 요소 안에 그린다.
 // 반환값은 정리 함수다 — 진행 중인 스트림을 끊는다.
 export async function mountAssistant(outlet, {
-  sessionId: wanted = '', nav, compact = false, panel = null,
+  sessionId: wanted = '', nav, compact = false, panel = null, guard = null,
 }) {
   mount(outlet, spinner('어시스턴트를 준비하는 중…'));
 
@@ -162,7 +169,28 @@ export async function mountAssistant(outlet, {
   const chat = new ChatView(sessionId, data, conns, ui, nav);
   chat.compact = compact;
   await chat.load();
-  return () => chat.stop();
+  // 답변을 받는 중에 나가려 하면 물어본다.
+  //
+  // 세 갈래를 각각 막아야 한다. (1) 팝업의 X — 라우터를 지나지 않으므로 부르는
+  // 쪽이 준 guard 로 막는다. (2) 앱 안에서 다른 화면으로 이동 — 라우터의
+  // leaveGuard 다. 팝업에는 걸지 않는다(팝업은 화면이 바뀌어도 남으므로 이동이
+  // 스트림을 끊지 않는다). (3) 새로고침·창 닫기 — beforeunload 다.
+  guard?.(() => chat.confirmAbort());
+  if (!panel) setLeaveGuard(() => chat.confirmAbort());
+  const onBeforeUnload = (e) => {
+    if (!chat.streamingNow()) return;
+    e.preventDefault();
+    // 브라우저는 우리 문장을 보여주지 않는다(자기 문구를 쓴다). 그래도 값을
+    // 채워야 물어보는 브라우저가 있다.
+    e.returnValue = '';
+  };
+  window.addEventListener('beforeunload', onBeforeUnload);
+
+  return () => {
+    window.removeEventListener('beforeunload', onBeforeUnload);
+    if (!panel) setLeaveGuard(null);
+    chat.stop();
+  };
 }
 
 // emptyHead는 대화가 없을 때의 머리글이다(팝업 전용).
@@ -476,6 +504,54 @@ class ChatView {
       this.controller.abort();
       this.controller = null;
     }
+  }
+
+  // streamingNow는 지금 답변을 받고 있는지다.
+  streamingNow() {
+    return Boolean(this.controller);
+  }
+
+  // confirmAbort는 답변을 받는 중에 나가려 할 때 묻는다.
+  //
+  // true 를 돌려주면 나간다(스트림은 정리 함수가 끊는다). false 면 그대로 남는다.
+  //
+  // 왜 묻는가: 툴을 쓰는 답변은 몇 분이 걸린다. 그 동안 창을 정리하려고 X 를
+  // 누르거나 다른 화면을 열면 답변이 조용히 중단되었고, 무엇을 잃었는지도
+  // 화면에 남지 않았다.
+  async confirmAbort() {
+    if (!this.streamingNow()) return true;
+    return new Promise((resolve) => {
+      // 답을 한 번만 낸다. openModal 의 onClose 는 footer 단추가 close() 를 부를
+      // 때도 함께 울리므로, 표시가 없으면 "계속 받기"가 언제나 먼저 결정된다.
+      let answered = false;
+      const done = (value, close) => {
+        answered = true;
+        close();
+        resolve(value);
+      };
+      openModal({
+        title: '답변을 받는 중입니다',
+        width: 460,
+        body: () => h('p.modal-message', {},
+          // 여기까지 온 것은 남는다 — 서버는 클라이언트가 사라지면 그때까지의
+          // 답변을 저장한다(agentRun 의 gone 처리). 남은 답변은 만들어지지 않는다.
+          '지금 나가면 답변 생성이 중단됩니다. 여기까지 받은 내용은 대화에 남고, '
+          + '나머지는 만들어지지 않습니다.'),
+        footer: (close) => [
+          h('button.btn', {
+            type: 'button',
+            onclick: () => done(false, close),
+          }, '계속 받기'),
+          h('button.btn.btn-danger', {
+            type: 'button',
+            onclick: () => done(true, close),
+          }, '중단하고 나가기'),
+        ],
+        // X 나 Esc 로 이 창을 닫는 것은 "아직 결정하지 않았다"다. 그때 나가 버리면
+        // 물어본 의미가 없다.
+        onClose: () => { if (!answered) resolve(false); },
+      });
+    });
   }
 
   render() {

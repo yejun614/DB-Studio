@@ -51,8 +51,13 @@ function saveGeometry(id, geo) {
 // 같은 창이 두 개 뜨면 어느 쪽이 진짜인지 알 수 없다.
 const open = new Map();
 
+// beforeClose는 닫기를 막을 기회다. false 를 돌려주면 창이 남는다.
+//
+// 왜 필요한가: 이 창들은 오래 걸리는 일을 담고 있다(AI 답변 스트리밍). X 를 누르는
+// 순간 그 일이 조용히 중단되면, 사람은 5분 기다린 답을 손짓 한 번으로 잃는다.
 export function openFloatPanel({
-  id, title, render, onClose, width = 560, height = 640, actions = [], iconName = 'menu',
+  id, title, render, onClose, beforeClose,
+  width = 560, height = 640, actions = [], iconName = 'menu',
 }) {
   const existing = open.get(id);
   if (existing) {
@@ -86,11 +91,15 @@ export function openFloatPanel({
       mount(titleEl, text);
       panel.setAttribute('aria-label', text);
     },
-    close() {
+    // force 는 묻지 않고 닫는 길이다. 로그아웃처럼 셸을 내리는 경우에 쓴다 —
+    // 세션이 이미 끝났으므로 "정말 중단할까요"는 물어볼 것이 없는 질문이다.
+    async close({ force = false } = {}) {
+      if (!force && beforeClose && (await beforeClose()) === false) return false;
       cleanup();
       panel.remove();
       open.delete(id);
       onClose?.();
+      return true;
     },
   };
 
@@ -257,7 +266,8 @@ export function closeFloatPanel(id) {
 // 그 모두가 셸을 내리는 한 곳을 지나므로, 닫는 일도 그 한 곳에서 한다.
 export function closeAllFloatPanels() {
   // close()가 registry를 지우므로 복사해 돌린다.
-  for (const handle of [...open.values()]) handle.close();
+  // 여기서는 묻지 않는다(force) — 세션이 끝나서 내리는 길이다.
+  for (const handle of [...open.values()]) handle.close({ force: true });
 }
 
 // panelModal은 **패널 안에서만** 덮는 작은 대화상자다.
