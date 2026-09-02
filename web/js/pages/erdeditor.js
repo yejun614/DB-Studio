@@ -3156,6 +3156,19 @@ class Editor {
   }
 
   toggleCollapse(key, geom) {
+    // 속성 창을 접어 둔 상태에서의 두 번 누르기는 **창을 여는** 것이다.
+    //
+    // 왜 접기가 아닌가: 창을 접어 두면 컬럼·제약을 볼 길이 도구 줄 맨 오른쪽의
+    // 작은 단추뿐이다. 그때 표를 두 번 누르는 손은 "이 표를 자세히 보자"는
+    // 뜻이고(다른 도구들이 그렇게 동작한다), 카드가 접히는 것은 그 반대다 —
+    // 보려고 눌렀는데 컬럼이 사라진다.
+    //
+    // 창이 열려 있으면 예전과 같다: 두 번 누르면 카드가 접힌다.
+    if (this.panelHidden) {
+      this.select({ kind: 'table', id: key });
+      this.togglePanel();
+      return;
+    }
     if (!this.editable()) return;
     this.send('table.move', {
       key, x: geom.x, y: geom.y, collapsed: !geom.layout.collapsed,
