@@ -829,6 +829,11 @@ func (s *Server) handleAIChat(c *fiber.Ctx) error {
 
 	// 여기서부터는 *fiber.Ctx를 만지면 안 된다: 스트림 라이터는 핸들러가 반환한 뒤
 	// 실행되고, 그때 요청 컨텍스트는 이미 해제되어 있다. 필요한 값은 위에서 복사했다.
+	//
+	// 연결도 지금 꺼내 둔다. 쓰기 마감을 다시 걸어야 하기 때문이다(sseWriter 주석) —
+	// 그러지 않으면 Server.WriteTimeout(60초)이 스트림 전체에 걸려, 오래 생각한
+	// 답변은 다 쓰지 못하고 끊긴다.
+	conn := s.streamConn(c)
 	srv := s
 	c.Context().SetBodyStreamWriter(fasthttp.StreamWriter(func(w *bufio.Writer) {
 		// 이 함수는 핸들러가 반환한 뒤 실행되므로 Fiber의 recover 미들웨어가 감싸지 않는다.
@@ -839,7 +844,12 @@ func (s *Server) handleAIChat(c *fiber.Ctx) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 		defer cancel()
 
-		out := &sseWriter{w: w}
+		out := &sseWriter{w: w, conn: conn}
+		// 조용한 구간에도 연결을 살려 둔다. 생각을 글로 보내지 않는 모델이나 오래
+		// 도는 툴에서는 몇 분 동안 아무것도 흐르지 않는다.
+		stopBeat := out.heartbeat(streamPingEvery)
+		defer stopBeat()
+
 		_ = out.send("start", map[string]any{
 			"sessionId": sess.ID, "provider": provider.Name, "model": cfg.Model,
 		})

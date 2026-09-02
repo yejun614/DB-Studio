@@ -6,8 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/gofiber/fiber/v2"
 
 	"dbstudio/internal/ai"
 	"dbstudio/internal/model"
@@ -99,7 +103,30 @@ func erdSystemPrompt(docName, dialect string) string {
 // 필요한 것은 bufio.Writer 하나뿐이다.
 type sseWriter struct {
 	w *bufio.Writer
+	// conn은 이 응답이 나가는 연결이다. 쓰기 마감을 다시 걸기 위해 들고 있다.
+	//
+	// 왜 필요한가: fasthttp는 응답을 쓰기 **직전에 한 번** 쓰기 마감을 걸고
+	// (Server.WriteTimeout), 그 마감은 스트리밍 본문 전체에 적용된다. 그래서
+	// WriteTimeout이 60초면 1분 넘게 이어지는 답변은 다 쓰지 못하고 연결이
+	// 끊긴다 — 브라우저에는 ERR_HTTP2_PROTOCOL_ERROR(또는 불완전한 청크)로
+	// 보이고, 사용자에게는 "한참 생각하더니 그냥 멈췄다"로 보인다.
+	//
+	// 마감은 "한 번의 쓰기"를 재는 것이어야 한다. 그래서 쓸 때마다 다시 건다.
+	conn net.Conn
+	// mu는 하트비트와 본 흐름이 같은 버퍼에 쓰는 것을 막는다.
+	mu sync.Mutex
 }
+
+// streamWriteWait은 한 번의 쓰기에 허용하는 시간이다.
+//
+// 마감을 아예 없애지 않는 이유: 읽지 않는 상대(끊긴 브라우저, 멈춘 프록시)에게
+// 영원히 매달린 고루틴이 남는다.
+const streamWriteWait = 30 * time.Second
+
+// streamPingEvery는 하트비트 간격이다. streamWriteWait보다 짧아야 한다 —
+// 마감은 쓸 때마다 다시 걸리므로, 그보다 오래 아무것도 쓰지 않으면 마감이
+// 먼저 지나간다.
+const streamPingEvery = 20 * time.Second
 
 // send는 이벤트를 쓰고 즉시 플러시한다.
 //
@@ -110,10 +137,70 @@ func (s *sseWriter) send(event string, payload any) error {
 	if err != nil {
 		return err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.conn != nil {
+		// 마감을 못 걸어도 쓰기는 시도한다. 여기서 멈추면 걸 수 없는 연결에서는
+		// 아무 답도 못 보내게 된다.
+		_ = s.conn.SetWriteDeadline(time.Now().Add(streamWriteWait))
+	}
 	if _, err := fmt.Fprintf(s.w, "event: %s\ndata: %s\n\n", event, data); err != nil {
 		return err
 	}
 	return s.w.Flush()
+}
+
+// streamConn은 이 요청이 나가는 연결이다(없으면 nil).
+//
+// 핸들러가 반환하기 **전에** 꺼내 두어야 한다. 스트림 라이터가 도는 동안 요청
+// 컨텍스트는 이미 해제되어 있어서 거기서 다시 꺼낼 수 없다.
+//
+// nil이 나올 수 있는 경우: 테스트의 가짜 연결. 그때는 마감을 걸지 않는다 —
+// 애초에 마감을 걸어야 하는 실제 소켓이 없다.
+func (s *Server) streamConn(c *fiber.Ctx) net.Conn {
+	if c == nil {
+		return nil
+	}
+	return c.Context().Conn()
+}
+
+// heartbeat는 조용한 구간에도 연결을 살려 둔다. 돌려주는 함수를 부르면 멈춘다.
+//
+// 두 가지를 막는다. (1) 위 마감이 지나 버리는 것 — 오래 생각하는 모델은 몇 분
+// 동안 한 글자도 보내지 않는다. (2) 프록시가 아무것도 흐르지 않는 연결을 끊는 것.
+// 우리 서버는 HTTP/2를 하지 않으므로, HTTP/2 오류가 보이는 환경에는 앞에 프록시가
+// 있다는 뜻이고 그쪽 유휴 시간도 우리가 감당해야 한다.
+//
+// 멈출 때 고루틴이 끝나기를 기다리는 이유: 스트림 라이터가 반환한 뒤에 버퍼에
+// 쓰면 이미 남의 것이 된 연결에 쓰게 된다.
+func (s *sseWriter) heartbeat(every time.Duration) func() {
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		t := time.NewTicker(every)
+		defer t.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-t.C:
+				// 실패는 상대가 끊긴 것이다. 그 판정은 본 흐름이 하므로 여기서는 멈춘다.
+				if s.send("ping", map[string]int64{"t": time.Now().Unix()}) != nil {
+					return
+				}
+			}
+		}
+	}()
+	stopped := false
+	return func() {
+		if stopped {
+			return
+		}
+		stopped = true
+		close(stop)
+		<-done
+	}
 }
 
 // ---------- 에이전트 루프 ----------

@@ -622,6 +622,9 @@ func (s *Server) handleStreamMacroRun(c *fiber.Ctx) error {
 	c.Set("Connection", "keep-alive")
 	c.Set("X-Accel-Buffering", "no")
 
+	// 쓰기 마감을 다시 걸기 위해 연결을 꺼내 둔다(sseWriter 주석). 매크로 실행은
+	// 몇 분씩 이어지므로, 이것 없이는 60초에 로그 스트림이 끊긴다.
+	conn := s.streamConn(c)
 	srv := s
 	runID := run.ID
 	c.Context().SetBodyStreamWriter(fasthttp.StreamWriter(func(w *bufio.Writer) {
@@ -629,7 +632,7 @@ func (s *Server) handleStreamMacroRun(c *fiber.Ctx) error {
 		defer applog.Recover("macro.run.stream")
 		defer unsubscribe()
 
-		out := &sseWriter{w: w}
+		out := &sseWriter{w: w, conn: conn}
 		lastSeq := after
 		for _, entry := range backlog {
 			if entry.Seq <= lastSeq {
