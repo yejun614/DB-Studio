@@ -317,28 +317,89 @@ export function makeRouter(boxes, { quick = false } = {}) {
   };
 }
 
-// oneMarker는 "하나" 쪽 짧은 막대다. 들어오는 방향과 직각이어야 선의 끝으로 읽힌다.
-export function oneMarker(b, side) {
-  if (SIDES[side].ny === 0) {
+// ---------- 선 끝 표식 (까마귀발 표기) ----------
+//
+// 표준 표기는 서로 다른 두 가지를 각각 다른 기호로 적는다. **몇 개인가**는 세
+// 갈래(여럿)나 짧은 막대(하나)로, **없을 수도 있는가**는 동그라미로 적는다.
+// 그래서 한 끝에 기호가 최대 둘 온다.
+//
+//   o<  없거나 여럿        |<  하나 이상
+//   o|  없거나 하나        ||  정확히 하나
+//
+// 예전에는 자식 쪽에 점, 부모 쪽에 막대 하나였다. 그것으로는 "여럿 → 하나"만
+// 읽히고 1:1 과 N:1 이 구별되지 않았다.
+//
+// 글자(N·1·0..1)를 이미 적는데 기호를 또 그리는 이유: 글자는 배울 것이 없어 처음
+// 보는 사람에게 좋고, 기호는 멀리서도 읽힌다. 회의실 스크린에서 10px 글자는 안
+// 보이지만 세 갈래는 보인다.
+
+// 표식의 크기. 카드 테두리에서 **선이 온 쪽으로** 얼마나 나가는지다.
+const FORK_LEN = 11;
+const FORK_SPREAD = 5.5;
+const BAR_AT = 5;
+const BAR_HALF = 5;
+const BAR_GAP = 5.5;
+const RING_R = 3.2;
+const RING_GAP = 2.5;
+
+/**
+ * endMarker는 한쪽 끝의 표식이다.
+ *
+ * 돌아주는 것:
+ *   d     — 갈래와 막대를 그릴 path
+ *   ring  — 동그라미({cx, cy, r}) 또는 null
+ *   reach — 카드에서 이 표식이 차지하는 길이. 글자를 그 밖에 두는 데 쓴다.
+ */
+export function endMarker(p, side, { many = false, optional = false } = {}) {
+  const n = SIDES[side] ?? SIDES.right;
+  // t는 선과 직각인 방향이다. 표식은 이 두 축으로만 그린다 — 비스듬한 선에서도
+  // 표식이 카드 변에 맞춰 서야 "선의 끝"으로 읽힌다.
+  const t = { x: -n.ny, y: n.nx };
+  const at = (d, o = 0) => ({
+    x: n1(p.x + n.nx * d + t.x * o),
+    y: n1(p.y + n.ny * d + t.y * o),
+  });
+  const seg = (a, b) => `M${a.x},${a.y}L${b.x},${b.y}`;
+
+  const parts = [];
+  let reach;
+  if (many) {
+    // 세 갈래. 넓은 쪽이 카드에 닿고 꼭지가 선 쪽을 본다 — 뒤집으면 화살표로
+    // 읽혀 개수가 아니라 방향으로 보인다.
+    const apex = at(FORK_LEN);
+    parts.push(seg(apex, at(0, FORK_SPREAD)));
+    parts.push(seg(apex, at(0, -FORK_SPREAD)));
+    parts.push(seg(apex, at(0)));
+    reach = FORK_LEN;
+  } else {
+    parts.push(seg(at(BAR_AT, BAR_HALF), at(BAR_AT, -BAR_HALF)));
+    reach = BAR_AT;
+  }
+  if (optional) {
+    const c = at(reach + RING_GAP + RING_R);
     return {
-      x: b.x - 1, y: b.y - 5, width: 2, height: 10, rx: 1,
+      d: parts.join(' '),
+      ring: { cx: c.x, cy: c.y, r: RING_R },
+      reach: reach + RING_GAP + RING_R * 2,
     };
   }
-  return {
-    x: b.x - 5, y: b.y - 1, width: 10, height: 2, rx: 1,
-  };
+  // 반드시 하나면 막대를 하나 더 둔다(||).
+  parts.push(seg(at(reach + BAR_GAP, BAR_HALF), at(reach + BAR_GAP, -BAR_HALF)));
+  return { d: parts.join(' '), ring: null, reach: reach + BAR_GAP };
 }
 
 // endLabelSpot은 선 끝에 붙일 글자의 자리다.
 //
-// 끝점 그대로에 두면 카드 테두리 위에 글자가 얹혀 읽히지 않는다. 들어오는 방향의
-// **반대쪽**(선이 온 쪽)으로 조금 물리고, 선과 겹치지 않게 직각 방향으로도 비킨다.
+// gap 은 카드 테두리에서 **선이 온 쪽으로** 나가는 거리다(표식이 차지하는 만큼
+// 밖으로 밀어야 한다). 부호를 반대로 두면 글자가 카드 안으로 들어가고, 카드는
+// 선보다 위에 그려지므로 글자가 보이지 않는다 — 실제로 그렇게 두었던 적이 있다.
+//
+// off 는 선과 겹치지 않게 직각으로 비키는 거리다. 가로로 붙는 선은 글자를 선 위에
+// 얹고(가운데 정렬), 세로로 붙는 선은 오른쪽에 세운다.
 export function endLabelSpot(p, side, gap = 13, off = 9) {
   const n = SIDES[side] ?? SIDES.right;
-  return {
-    x: p.x - n.nx * gap - (n.ny === 0 ? 0 : off),
-    y: p.y - n.ny * gap - (n.ny === 0 ? off : 0),
-    // 가로로 들어오는 선은 글자를 선 위에 얹고, 세로로 들어오는 선은 옆에 둔다.
-    anchor: n.ny === 0 ? 'middle' : 'start',
-  };
+  if (n.ny === 0) {
+    return { x: n1(p.x + n.nx * gap), y: n1(p.y - off), anchor: 'middle' };
+  }
+  return { x: n1(p.x + off * 0.7), y: n1(p.y + n.ny * gap), anchor: 'start' };
 }

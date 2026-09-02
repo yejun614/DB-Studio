@@ -2158,11 +2158,22 @@ option { background: var(--surface); color: var(--text); }
 .erd-link-hit {
   fill: none; stroke: transparent; stroke-width: 12; cursor: pointer;
 }
-.erd-link-many { fill: var(--text-dim); pointer-events: none; }
-/* 선 끝의 개수 표기(N · 1 · 0..1).
+/* 선 끝 표식. 선과 같은 굵기로 그려야 선의 일부로 읽힌다 — 굵게 하면 도형
+ * 하나가 따로 붙어 있는 것처럼 보인다. */
+.erd-link-mark {
+  fill: none; stroke: var(--text-dim); stroke-width: 1.4;
+  stroke-linecap: round; pointer-events: none;
+}
+/* "없을 수도 있다"의 동그라미. 속을 비우는 이유: 선이 이 자리를 지나간다.
+ * 배경색으로 채우면 카드 위·캔버스 위에서 각각 다른 색이 필요하고, 그중 하나는
+ * 반드시 어긋난다(도면 배경은 반투명 격자다). */
+.erd-link-ring {
+  fill: none; stroke: var(--text-dim); stroke-width: 1.4; pointer-events: none;
+}
+/* 선 끝의 개수 표기(N · 1 · 0..1). **가리킨 선에만** 붙는다.
  *
- * 점과 막대만으로도 "여럿 → 하나"는 읽히지만, 1:1 과 N:1 은 그 표식이 같아서
- * 구별되지 않았다. 그리고 점·막대의 뜻은 배워야 아는 것이고, 글자는 배울 것이 없다.
+ * 기호(까마귀발)와 같은 것을 말한다. 기호는 멀리서도 읽히지만 뜻을 배워야 알고,
+ * 글자는 배울 것이 없다 — 그래서 기호는 늘 두고 글자는 가리킬 때만 둔다.
  *
  * 선보다 옅게 두지 않는 이유: 이 글자는 8px 남짓이라 옅게 하면 그냥 안 보인다.
  * 대신 작게 두어 도면의 주인공이 표와 선임을 지킨다. */
@@ -2178,7 +2189,6 @@ option { background: var(--surface); color: var(--text); }
   stroke-width: 2.5px;
   stroke-linejoin: round;
 }
-.erd-link-one { fill: var(--text-dim); pointer-events: none; }
 
 /* 테이블 카드 */
 .erd-card-g { cursor: move; }
@@ -2617,12 +2627,26 @@ tr.is-destructive td { background: hsl(var(--h-danger) / 0.08); }
   grid-template-rows: minmax(0, 1fr);
 }
 .erd-editor.is-present .erd-panel { display: none; }
-/* 고른 것이 있을 때만 상세 창이 자리를 얻는다. 편집기보다 넓게 두는 이유: 발표에서
- * 이 창은 회의실 뒤쪽에서도 읽혀야 하고, 그래서 글자가 크다. */
-.erd-editor.is-present.is-present-panel .erd-body {
-  grid-template-columns: minmax(0, 1fr) clamp(320px, 30vw, 460px);
+/* 상세는 도면 **위에 떠 있다**. 그리드 칸이 아니다.
+ *
+ * 칸으로 두면 상세가 뜰 때마다 캔버스가 좁아지고, 같은 viewBox 가 좁아진 칸에
+ * 다시 맞춰지며 도면이 왼쪽으로 밀리고 조금 작아진다. 발표에서 그것은 방금
+ * 가리킨 표가 눈앞에서 움직이는 일이다. 떠 있으면 도면은 그대로 있다.
+ *
+ * 편집기 인스펙터보다 넓게 두는 이유: 이 창은 회의실 뒤쪽에서도 읽혀야 하고,
+ * 그래서 글자가 크다. */
+.erd-editor.is-present .erd-body { position: relative; }
+.erd-editor.is-present.is-present-panel .erd-panel {
+  display: flex;
+  position: absolute;
+  /* 발표 막대(오른쪽 위) 아래로 내려 앉는다. 그것이 유일한 나갈 길이라 덮으면 안 된다. */
+  top: 58px; right: 12px; bottom: 12px;
+  width: clamp(300px, 30vw, 440px);
+  max-width: calc(100% - 24px);
+  z-index: 24;
+  /* 떠 있다는 것은 그림자로 말한다. 테두리만 있으면 도면의 일부로 보인다. */
+  box-shadow: 0 18px 50px hsl(0 0% 0% / 0.45);
 }
-.erd-editor.is-present.is-present-panel .erd-panel { display: flex; }
 
 /* 발표 중 화면에 남는 유일한 도구. 도면을 가리지 않게 옅게 두고, 손이 오면
  * 또렷해진다 — 늘 켜져 있으므로 눈에 덜 띄어야 하지만, 찾을 때는 있어야 한다. */

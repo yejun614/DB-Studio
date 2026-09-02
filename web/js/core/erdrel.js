@@ -69,11 +69,19 @@ export function cardinality(childTable, fk) {
   const oneToOne = coversUnique(childTable, cols);
 
   const parent = optional ? '0..1' : '1';
-  // 자식 쪽: 유일하면 한 줄뿐이고, 그 한 줄조차 없을 수 있다(부모만 있는 경우).
-  const child = oneToOne ? (optional ? '0..1' : '1') : 'N';
+  // 자식 쪽은 **언제나** 없을 수 있다.
+  //
+  // 외래키가 말하는 것은 "자식이 부모를 가리킨다"뿐이다. 부모 한 줄에 자식이
+  // 반드시 있어야 한다는 것은 평범한 DDL로 적을 수 없다 — 그것을 적으려면 서로를
+  // 가리키는 외래키나 트리거가 필요하다. 그래서 1:1 이라도 짝이 없는 부모가 있을
+  // 수 있고, 자식 쪽에 '1'을 적으면 스키마가 보장하지 않는 것을 도면이 주장한다.
+  const child = oneToOne ? '0..1' : 'N';
   return {
     child, parent, optional, oneToOne,
     label: `${oneToOne ? '1' : 'N'}:1`,
+    // 도면에 그릴 표식(erdroute.endMarker). 글자와 같은 것을 말한다.
+    childMark: { many: !oneToOne, optional: true },
+    parentMark: { many: false, optional },
   };
 }
 

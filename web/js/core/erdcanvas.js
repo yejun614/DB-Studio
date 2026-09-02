@@ -14,7 +14,7 @@ import { h, mount, icon } from './dom.js';
 import { columnIcon, chosenIconFor } from './colicon.js';
 import { NAME_MODES, tableLabel, columnLabel } from './logical.js';
 import { fitText, measure, cssFont, forgetFonts } from './textfit.js';
-import { makeRouter, oneMarker, endLabelSpot } from './erdroute.js';
+import { makeRouter, endMarker, endLabelSpot } from './erdroute.js';
 import { cardinality, isJunction, junctionPartners } from './erdrel.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -350,33 +350,24 @@ export class ErdCanvas {
       this.layers.links.appendChild(svgEl('path', {
         class: fkClass, d: r.d, 'data-fk': fkID,
       }));
-      // 참조하는 쪽(다수)에 점, 참조되는 쪽(하나)에 짧은 막대를 둔다.
-      // 끝 표식에도 data-fk 를 단다. 그림을 범위만 골라 내보낼 때 어느 선의
-      // 조각인지 알아야 함께 빠진다 — 선만 빠지고 점이 남으면 아무 데도 닿지
-      // 않는 점 하나가 그림에 남는다.
-      this.layers.links.appendChild(svgEl('circle', {
-        class: 'erd-link-many', 'data-fk': fkID, cx: r.a.x, cy: r.a.y, r: 3.5,
-      }));
-      this.layers.links.appendChild(svgEl('rect', {
-        class: 'erd-link-one', 'data-fk': fkID, ...oneMarker(r.b, r.sb),
-      }));
-
-      // 양 끝에 개수를 적는다.
+      // 양 끝 표식(까마귀발). 세 갈래는 여럿, 막대는 하나, 동그라미는 "없을
+      // 수도 있다"다 — erdroute.endMarker 의 주석에 표기법을 적어 두었다.
       //
-      // 점과 막대만으로도 "여럿 → 하나"는 읽히지만, 1:1 과 N:1 은 그 표식이
-      // 같아서 구별되지 않았다. 그리고 처음 보는 사람에게 점·막대의 뜻은
-      // 배워야 아는 것이다 — 글자는 배울 것이 없다.
-      if (r.card) {
-        const at = endLabelSpot(r.a, r.sa);
-        this.layers.links.appendChild(svgEl('text', {
-          class: 'erd-link-card', 'data-fk': fkID,
-          x: at.x, y: at.y, 'text-anchor': at.anchor,
-        }, r.card.child));
-        const bt = endLabelSpot(r.b, r.sb);
-        this.layers.links.appendChild(svgEl('text', {
-          class: 'erd-link-card', 'data-fk': fkID,
-          x: bt.x, y: bt.y, 'text-anchor': bt.anchor,
-        }, r.card.parent));
+      // 끝 표식에도 data-fk 를 단다. 그림을 범위만 골라 내보낼 때 어느 선의
+      // 조각인지 알아야 함께 빠진다 — 선만 빠지고 표식이 남으면 아무 데도 닿지
+      // 않는 도형이 그림에 남는다.
+      //
+      // card 가 없는 경우(표를 못 찾은 선)에는 예전 모양인 N:1 로 그린다.
+      // 아무 표식도 없는 끝은 "덜 그려진 그림"으로 보인다.
+      for (const [at, side, spec] of endSpecs(r)) {
+        const mark = endMarker(at, side, spec);
+        this.layers.links.appendChild(svgEl('path', {
+          class: 'erd-link-mark', 'data-fk': fkID, d: mark.d,
+        }));
+        if (!mark.ring) continue;
+        this.layers.links.appendChild(svgEl('circle', {
+          class: 'erd-link-ring', 'data-fk': fkID, ...mark.ring,
+        }));
       }
       this.linkSpots.set(fkID, r);
     }
@@ -421,7 +412,39 @@ export class ErdCanvas {
           + `${this.isSelected('link', fkID) ? ' is-selected' : ''}${temp}`,
         d: r.d, 'data-fk': fkID,
       }));
+
+      // 개수 글자(N · 1 · 0..1)는 **가리킨 선에만** 붙인다.
+      //
+      // 기호(까마귀발)는 늘 있다. 거기에 글자까지 늘 붙이면 표 스무 개짜리 도면의
+      // 끝점마다 기호와 글자가 겹쳐 쌓이고, 카드가 가까이 붙은 곳에서는 양쪽
+      // 글자가 서로 부딪친다. 반대로 선에 손을 올린 순간은 "이 선이 무엇인가"가
+      // 궁금한 순간이라, 그때는 배울 것 없는 글자가 기호보다 낫다.
+      //
+      // 표 하나를 고르면 그 표의 선이 모두 올라오므로, 한 표의 관계를 한 번에
+      // 글자로 읽을 수 있다.
+      if (!r.card || !this.pointedLink(fkID, r)) continue;
+      for (const [at, side, spec, text] of endSpecs(r)) {
+        const spot = endLabelSpot(at, side, endMarker(at, side, spec).reach + 9);
+        layer.appendChild(svgEl('text', {
+          // 언제나 erd-link-temp 다. 그림 파일에는 손을 올린 상태가 남아서는
+          // 안 된다 — 내보낸 그림에 왜 이 선만 글자가 있는지 설명할 길이 없다.
+          class: 'erd-link-card erd-link-temp', 'data-fk': fkID,
+          x: spot.x, y: spot.y, 'text-anchor': spot.anchor,
+        }, text));
+      }
     }
+  }
+
+  // pointedLink는 지금 사람이 가리키고 있는 선인지다.
+  //
+  // 막혀서 올라온 선(blocked)은 여기에 들지 않는다. 그것은 사람이 가리킨 것이
+  // 아니라 그릴 데가 없어 올라온 것이라, 글자까지 붙으면 그 선만 이유 없이
+  // 시끄러워진다.
+  pointedLink(fkID, r) {
+    return this.hoverLink === fkID
+      || this.isSelected('link', fkID)
+      || this.isSelected('table', r.fromKey)
+      || this.isSelected('table', r.toKey);
   }
 
   setHoverLink(fkID) {
@@ -1702,6 +1725,22 @@ function tipForTable(tbl, layout, shown, maxWidth) {
     rows.push(['N:N', `${junctionPartners(tbl).join(' ↔ ')} 를 잇는 연결 표`]);
   }
   return rows.length ? rows : null;
+}
+
+// endSpecs는 관계선 양 끝의 [자리, 변, 표식 종류, 글자]다.
+//
+// 한곳에서 만드는 이유: 표식과 글자는 같은 것을 말하므로 같은 값에서 나와야 한다.
+// 따로 계산하면 한쪽만 고쳐 기호와 글자가 다른 말을 하는 날이 온다.
+//
+// card 가 없는 선(표를 못 찾은 경우)에는 예전 모양인 N:1 로 그린다. 아무 표식도
+// 없는 끝은 덜 그려진 그림으로 보인다.
+function endSpecs(r) {
+  const child = r.card?.childMark ?? { many: true, optional: true };
+  const parent = r.card?.parentMark ?? { many: false, optional: false };
+  return [
+    [r.a, r.sa, child, r.card?.child ?? 'N'],
+    [r.b, r.sb, parent, r.card?.parent ?? '1'],
+  ];
 }
 
 // tipForColumn은 컬럼 줄에 띄울 줄들이다. 띄울 것이 없으면 null.
