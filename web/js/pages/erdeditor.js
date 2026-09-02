@@ -33,6 +33,7 @@ import { navigate } from '../core/router.js';
 import { panelResizeHandle, attachPanelResize } from '../core/panelresize.js';
 import { renderMarkdown } from '../core/markdown.js';
 import { openImageExportDialog } from '../core/erdimage.js';
+import { findInDocument, hitCenter, KIND_LABEL } from '../core/erdfind.js';
 import { streamAIChat } from '../core/aistream.js';
 import { errorPanel } from './users.js';
 import { statusBadge } from './erd.js';
@@ -89,6 +90,9 @@ function buildLayout(initial) {
   // 캔버스 위에 겹쳐 뜨는 것들. 캔버스 자체(SVG)를 건드리지 않으려고 형제로 둔다 —
   // SVG 안에 HTML을 넣으려면 foreignObject가 필요하고, 그 안에서는 스크롤·클릭이
   // 브라우저마다 다르게 동작한다.
+  // 찾기 판. 캔버스 위에 겹쳐 뜬다 — 도구 줄에 넣으면 결과 목록이 갈 곳이 없고,
+  // 오른쪽 속성 창에 넣으면 찾는 동안 속성 창을 못 쓴다.
+  const findBox = h('div.erd-find', { hidden: true });
   const chatStack = h('div.erd-chat-stack');
   const followBar = h('div.erd-follow-bar', { hidden: true });
   // 인스펙터 폭 손잡이. 컬럼이 많은 테이블에서는 340px에 타입까지 들어가지 않고,
@@ -113,13 +117,14 @@ function buildLayout(initial) {
     ),
     toolbar,
     h('div.erd-body', {},
-      h('div.erd-canvas-area', {}, canvasWrap, chatStack, followBar),
+      h('div.erd-canvas-area', {}, canvasWrap, findBox, chatStack, followBar),
       panelResize,
       panel),
   );
 
   return {
-    root, panel, toolbar, participants, statusChip, canvasWrap, chatStack, followBar, panelResize,
+    root, panel, toolbar, participants, statusChip, canvasWrap, findBox,
+    chatStack, followBar, panelResize,
   };
 }
 
@@ -329,6 +334,18 @@ class Editor {
         }
       }
       if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      // Ctrl+F: 이 도면에서 찾기.
+      //
+      // 브라우저의 찾기를 가로채는 이유: 도면은 SVG라 브라우저 찾기가 글자를
+      // 찾아도 화면을 그리로 옮겨 주지 못하고, 접힌 카드와 "…"으로 잘린 이름은
+      // 아예 문서에 없다. 즉 여기서 Ctrl+F 는 원래 하려던 일을 못 한다.
+      //
+      // 입력 중일 때는 넘긴다 — 긴 주석을 쓰다가 그 안에서 찾으려는 손이 있다.
+      if (e.key.toLowerCase() === 'f' && !e.shiftKey && !busy) {
+        e.preventDefault();
+        this.toggleFind(true);
+        return;
+      }
       // Ctrl+A: 모두 고르기.
       if (e.key.toLowerCase() === 'a' && !busy) {
         e.preventDefault();
@@ -622,6 +639,7 @@ class Editor {
         this.toolBtn('minus', '축소', () => this.zoom(1.25)),
         this.toolBtn('plus', '확대', () => this.zoom(0.8)),
         this.toolBtn('maximize', '화면에 맞추기', () => { this.fitView(); this.renderCanvas(); }),
+        this.toolBtn('search', '이 도면에서 찾기 (Ctrl+F)', () => this.toggleFind()),
       ),
       h('div.erd-tool-group', {},
         this.toolBtn('database', 'SQL 불러오기', () => this.importSQL(), { needsEdit: true }),
@@ -1024,6 +1042,119 @@ class Editor {
       else if (m.kind === 'note') this.send('note.update', { id: m.id, x: m.x, y: m.y }, batch);
       else if (m.kind === 'group') this.send('group.update', { id: m.id, x: m.x, y: m.y }, batch);
     }
+  }
+
+  // ---------- 이 도면에서 찾기 ----------
+
+  // toggleFind는 찾기 판을 열고 닫는다.
+  toggleFind(open) {
+    const box = this.ui.findBox;
+    const want = open === undefined ? box.hidden : open;
+    box.hidden = !want;
+    if (!want) {
+      // 닫을 때는 캔버스로 초점을 돌려준다. 판 안에 초점이 남으면 방향키가
+      // 사라진 목록을 훑는다.
+      this.canvas?.svg?.focus?.();
+      return;
+    }
+    if (!this.findInput) this.buildFind();
+    this.findInput.focus();
+    this.findInput.select();
+    this.runFind();
+  }
+
+  buildFind() {
+    this.findInput = input({ placeholder: '표·컬럼·주석·메모에서 찾기' });
+    this.findCount = h('span.erd-find-count');
+    this.findList = h('div.erd-find-list');
+    this.findHits = [];
+    this.findAt = -1;
+
+    this.findInput.addEventListener('input', () => this.runFind());
+    this.findInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); this.toggleFind(false); return; }
+      // 위아래로 결과를 훑고 Enter로 간다. 목록까지 손을 옮기지 않아도 되는 것이
+      // 찾기의 거의 전부다.
+      if (e.key === 'ArrowDown') { e.preventDefault(); this.moveFind(1); return; }
+      if (e.key === 'ArrowUp') { e.preventDefault(); this.moveFind(-1); return; }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (this.findAt < 0 && this.findHits.length) this.findAt = 0;
+        const hit = this.findHits[this.findAt];
+        if (hit) this.gotoHit(hit);
+      }
+    });
+
+    mount(this.ui.findBox,
+      h('div.erd-find-head', {},
+        icon('search', 14),
+        this.findInput,
+        this.findCount,
+        h('button.icon-btn', {
+          type: 'button', 'aria-label': '찾기 닫기', onclick: () => this.toggleFind(false),
+        }, icon('x', 14))),
+      this.findList);
+  }
+
+  runFind() {
+    const q = this.findInput.value.trim();
+    this.findHits = q ? findInDocument(this.doc, q) : [];
+    this.findAt = -1;
+    mount(this.findCount, q === '' ? '' : `${this.findHits.length}개`);
+    this.renderFindList();
+  }
+
+  renderFindList() {
+    if (!this.findInput.value.trim()) {
+      mount(this.findList, h('p.muted.small', {},
+        '표 이름, 컬럼 이름, 주석, 논리명, 타입, 메모 글에서 찾습니다.'));
+      return;
+    }
+    if (this.findHits.length === 0) {
+      mount(this.findList, h('p.muted.small', {}, '찾는 것이 없습니다.'));
+      return;
+    }
+    mount(this.findList, this.findHits.map((hit, i) => h(
+      `button.erd-find-row${i === this.findAt ? '.is-at' : ''}`,
+      { type: 'button', onclick: () => { this.findAt = i; this.gotoHit(hit); } },
+      h('span.erd-find-kind', {}, KIND_LABEL[hit.kind] ?? hit.kind),
+      h('span.erd-find-label', {}, hit.label),
+      hit.where ? h('span.erd-find-where', {}, hit.where) : null,
+      hit.sub ? h('span.erd-find-sub', {}, hit.sub) : null,
+    )));
+  }
+
+  moveFind(step) {
+    if (!this.findHits.length) return;
+    this.findAt = (this.findAt + step + this.findHits.length) % this.findHits.length;
+    this.renderFindList();
+    // 고른 줄이 목록 밖으로 나가면 훑는 일이 끊긴다.
+    this.findList.querySelector('.is-at')?.scrollIntoView({ block: 'nearest' });
+    const hit = this.findHits[this.findAt];
+    if (hit) this.gotoHit(hit, { keepFocus: true });
+  }
+
+  // gotoHit는 그 자리로 화면을 옮기고 고른다.
+  gotoHit(hit, { keepFocus = false } = {}) {
+    const at = hitCenter(this.doc, hit);
+    if (at) this.canvas.centerOn(at.x, at.y);
+    // 컬럼을 골라도 선택은 그 표다. 컬럼은 표의 속성 창 안에 있고, 거기로 가는 것이
+    // 사람이 다음에 하려는 일이다.
+    if (hit.kind === 'table' || hit.kind === 'column') {
+      this.select({ kind: 'table', id: hit.tableKey });
+    } else if (hit.kind === 'note') {
+      this.select({ kind: 'note', id: hit.key });
+    } else if (hit.kind === 'group') {
+      this.select({ kind: 'group', id: hit.key });
+    } else {
+      // 도메인은 도면 위에 자리가 없다. 대신 도메인 탭을 열어 준다 — 찾았는데
+      // 아무 일도 일어나지 않으면 못 찾은 것과 구별되지 않는다.
+      this.tab = 'domain';
+      this.renderToolbar();
+      this.renderPanel();
+      this.ensureTypeCatalog();
+    }
+    if (!keepFocus) this.findInput.focus();
   }
 
   // select는 선택을 바꾸고 화면과 프레즌스를 맞춘다.
