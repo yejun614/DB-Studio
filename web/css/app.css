@@ -385,19 +385,47 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   background: var(--bg-alt);
   color: var(--text-mute);
 }
-.project-select {
-  flex: 1;
-  min-width: 0;
-  border: none;
-  background: none;
-  color: var(--text);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  appearance: none;
+/* 프로젝트 고르기 단추. 눌러서 창을 연다(main.openProjectDialog). */
+.project-switch-btn {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center; gap: 6px;
+  border: none; background: none; padding: 0;
+  color: var(--text); font: inherit; font-size: 13px; font-weight: 600;
+  cursor: pointer; text-align: left;
 }
-.project-select:focus { outline: none; }
+.project-switch-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+/* 이름은 한 줄로 자른다. 사이드바 폭은 정해져 있고, 긴 이름이 접히면 그 아래
+ * 메뉴가 밀려 내려간다. 전체 이름은 창에서 보인다. */
+.project-switch-name {
+  flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.project-switch-btn > .icon:last-child { color: var(--text-mute); flex: none; }
+
+/* 창 안의 프로젝트 목록. 한 줄이 곧 결정이라 줄 전체가 단추다. */
+.project-pick-list { display: flex; flex-direction: column; gap: 6px; }
+.project-pick {
+  display: flex; align-items: center; gap: 12px;
+  width: 100%; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--text);
+  font: inherit; text-align: left; cursor: pointer;
+}
+.project-pick:hover { border-color: var(--primary); background: var(--bg-alt); }
+.project-pick:focus-visible { outline: 2px solid var(--primary); outline-offset: -1px; }
+/* 지금 보고 있는 것. 눌러도 아무 일이 없는 줄이므로 손가락 모양을 거둔다. */
+.project-pick.is-current { border-color: hsl(var(--h-success) / 0.45); cursor: default; }
+.project-pick.is-current:hover { background: var(--surface); }
+.project-pick-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.project-pick-name { font-size: 14px; font-weight: 600; }
+.project-pick-note {
+  font-size: 12.5px; color: var(--text-dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.project-pick-stat { font-size: 11.5px; color: var(--text-mute); }
+.project-pick > .icon { flex: none; color: var(--text-mute); }
+/* 창 아래줄에서 왼쪽 단추와 오른쪽 단추를 갈라 놓는다. */
+.modal-foot-spacer { flex: 1; }
 .project-switch-more {
   display: inline-flex;
   color: var(--text-mute);

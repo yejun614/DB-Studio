@@ -3,7 +3,7 @@ import {
   api, setUnauthorizedHandler, setPasswordChangeHandler, setTOTPSetupHandler,
 } from './core/api.js';
 import { state, loadSession, loadMeta, clearSession, subscribe } from './core/store.js';
-import { h, mount, icon, toast, toastError } from './core/ui.js';
+import { h, mount, icon, toast, toastError, openModal, badge } from './core/ui.js';
 import * as router from './core/router.js';
 import * as theme from './core/theme.js';
 import { avatarNode } from './core/avatars.js';
@@ -232,25 +232,87 @@ function projectSwitcher() {
         icon('box', 15), h('span', {}, '프로젝트 만들기')));
       return;
     }
-    const sel = h('select.project-select', {
-      title: '보고 있는 프로젝트',
-      onchange: async (e) => {
-        if (!setCurrentProject(e.currentTarget.value)) return;
-        // 프로젝트가 바뀌면 지금 화면의 내용이 통째로 달라진다. 다시 그리지
-        // 않으면 남의 프로젝트 자료를 그대로 보고 있게 된다.
-        await router.render();
-        highlightNav();
-      },
-    }, list.map((p) => h('option', { value: p.id }, p.name)));
-    sel.value = currentProjectID() ?? '';
-    mount(box, icon('box', 15), sel,
-      h('a.project-switch-more', { href: '/projects', title: '프로젝트 관리' },
-        icon('settings', 14)));
+    const now = list.find((p) => p.id === currentProjectID()) ?? list[0];
+    // 고르개(select)가 아니라 단추다.
+    //
+    // 사이드바는 좁아서 고르개에는 이름 말고 아무것도 들어가지 않는다. 프로젝트를
+    // 바꾸는 것은 화면의 모든 내용을 갈아 치우는 일인데, 이름만 스치듯 보고 고르면
+    // "왜 여기엔 없지"가 그 다음에 온다. 창을 열면 설명과 규모(서버·DB·초안·참여자)를
+    // 함께 보고 고를 수 있고, 잘못 열었으면 취소할 수 있다.
+    mount(box, h('button.project-switch-btn', {
+      type: 'button',
+      title: '보고 있는 프로젝트 — 눌러서 바꿉니다',
+      onclick: () => openProjectDialog(),
+    }, icon('box', 15), h('span.project-switch-name', {}, now?.name ?? '프로젝트'),
+    icon('chevron-down', 13)),
+    h('a.project-switch-more', { href: '/projects', title: '프로젝트 관리' },
+      icon('settings', 14)));
   };
 
   render();
   unsubscribeProject = onProjectChange(render);
   return box;
+}
+
+// openProjectDialog는 프로젝트를 고르는 창이다.
+//
+// 고른 즉시 닫고 화면을 다시 그린다. "고르기 → 확인"의 두 걸음을 두지 않는 이유:
+// 고르는 항목이 곧 결정이고, 잘못 눌렀으면 다시 열어 바꾸면 된다. 대신 아무것도
+// 고르지 않고 나갈 길(취소·Esc·X)은 남겨 둔다 — 창을 연 이유의 절반은 "지금 어디를
+// 보고 있는지" 확인하는 것이다.
+function openProjectDialog() {
+  const list = projects();
+  const currentID = currentProjectID();
+
+  const close = openModal({
+    title: '프로젝트 고르기',
+    width: 520,
+    body: () => [
+      h('p.field-help', {},
+        'DB 서버·초안·마이그레이션·용어 사전은 모두 프로젝트 안에 있습니다. '
+        + '고르면 화면의 내용이 그 프로젝트의 것으로 바뀝니다.'),
+      h('div.project-pick-list', {}, list.map((p) => {
+        const isCurrent = p.id === currentID;
+        const row = h(`button.project-pick${isCurrent ? '.is-current' : ''}`, {
+          type: 'button',
+          // 지금 보고 있는 것에 포커스를 준다. 창을 열자마자 방향키로 위아래를
+          // 훑을 수 있고, "지금 여기"가 어디인지도 초점으로 한 번 더 보인다.
+          // 빈 문자열이 아니라 true 다. autofocus 는 요소의 속성(property)이라
+          // h() 가 el.autofocus 에 그대로 넣는데, '' 는 거짓이라 아무 일도
+          // 일어나지 않는다(그래서 초점이 대화상자에 남았다).
+          autofocus: isCurrent ? true : null,
+          onclick: async () => {
+            close();
+            if (isCurrent) return;
+            if (!setCurrentProject(p.id)) return;
+            // 이름 뒤에 조사를 붙이지 않는다. 받침에 따라 "로/으로"가 갈리고,
+            // 프로젝트 이름에 "프로젝트"가 들어 있으면 말이 두 번 겹친다
+            // ("검사 프로젝트 프로젝트로").
+            toast(`프로젝트를 바꿨습니다 — ${p.name}`, 'success');
+            // 프로젝트가 바뀌면 지금 화면의 내용이 통째로 달라진다. 다시 그리지
+            // 않으면 남의 프로젝트 자료를 그대로 보고 있게 된다.
+            await router.render();
+            highlightNav();
+          },
+        },
+          h('div.project-pick-main', {},
+            h('span.project-pick-name', {}, p.name),
+            p.note ? h('span.project-pick-note', {}, p.note) : null,
+            h('span.project-pick-stat', {},
+              `서버 ${p.servers ?? 0} · DB ${p.connections ?? 0} · `
+              + `초안 ${p.documents ?? 0} · 참여자 ${p.members ?? 0}`)),
+          isCurrent ? badge('보는 중', 'ok') : icon('chevron-right', 14),
+        );
+        return row;
+      })),
+    ],
+    footer: (closeFn) => [
+      h('a.btn.btn-small', { href: '/projects', onclick: () => closeFn() },
+        icon('settings', 13), '프로젝트 관리'),
+      h('span.modal-foot-spacer'),
+      h('button.btn', { type: 'button', onclick: closeFn }, '취소'),
+    ],
+  });
 }
 
 // versionLine은 사이드바 아래에 지금 돌고 있는 버전을 적는다.

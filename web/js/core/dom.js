@@ -102,6 +102,7 @@ const ICONS = {
   minus: ['M5 12h14'],
   // 화면에 맞추기: 네 귀퉁이로 펼치는 화살표
   maximize: ['M15 3h6v6', 'M9 21H3v-6', 'M21 3l-7 7', 'M3 21l7-7'],
+  'chevron-down': ['M6 9l6 6 6-6'],
   'chevron-left': ['M15 18l-6-6 6-6'],
   'chevron-right': ['M9 18l6-6-6-6'],
   check: ['M20 6L9 17l-5-5'],
