@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gofiber/fiber/v2"
 
@@ -509,9 +510,22 @@ func asJSON(v any) (string, error) {
 		return "", fmt.Errorf("결과를 직렬화할 수 없습니다: %w", err)
 	}
 	// 툴 결과가 지나치게 크면 컨텍스트를 다 먹는다. 상한을 두고 잘렸음을 알린다.
+	//
+	// 여기서 잘린 결과는 **JSON으로서 깨져 있다**. 그러니 이 자리에 오는 것 자체가
+	// 마지막 방어선이지 정상 경로가 아니다 — 툴은 인자로 범위를 좁힐 수 있어야 하고
+	// (read_schema의 offset처럼), 스스로 먼저 멈춰 온전한 JSON을 주어야 한다.
 	const maxResult = 24_000
 	if len(data) > maxResult {
-		return string(data[:maxResult]) + "\n… (결과가 너무 커서 잘렸습니다. 조건을 좁혀 다시 조회하세요)", nil
+		// 글자 중간에서 자르지 않는다. UTF-8 한 글자가 반 토막 나면 그 바이트는
+		// U+FFFD로 바뀌어 나가고, 한국어 주석이 있는 스키마에서는 매번 그렇게 된다.
+		cut := maxResult
+		for cut > 0 && !utf8.RuneStart(data[cut]) {
+			cut--
+		}
+		return string(data[:cut]) + fmt.Sprintf(
+			"\n… (전체 %d바이트 중 %d바이트에서 잘렸습니다. 여기까지는 JSON이 완결되지 "+
+				"않았으니 그대로 믿지 마세요. 범위를 좁히는 인자(table·offset·limit 등)가 "+
+				"있으면 나눠서 다시 부르세요)", len(data), cut), nil
 	}
 	return string(data), nil
 }

@@ -72,10 +72,40 @@ func erdTools() map[string]*erdTool {
 	list := []*erdTool{
 		{
 			Name: "read_schema",
-			Description: "이 초안의 현재 스키마를 읽는다. 테이블·컬럼·기본키·외래키·인덱스를 반환한다. " +
-				"무언가를 바꾸기 전에 먼저 부른다 — 지금 무엇이 있는지 모르고 고치면 이름이 겹치거나 없는 것을 참조한다.",
-			Schema: objectSchema(nil),
-			Run:    erdReadSchema,
+			Description: "이 초안의 현재 스키마를 읽는다. 테이블·컬럼·기본키·외래키·인덱스와 " +
+				"논리명을 반환한다. 무언가를 바꾸기 전에 먼저 부른다 — 지금 무엇이 있는지 " +
+				"모르고 고치면 이름이 겹치거나 없는 것을 참조한다. " +
+				"결과가 한 번에 다 들어가지 않으면 nextOffset을 알려주므로 offset을 바꿔 이어서 부른다.",
+			Schema: objectSchema(map[string]any{
+				"table":  str("이 테이블 하나만 자세히 본다 (생략하면 전체)"),
+				"offset": num("몇 번째 테이블부터 읽을지 (기본 0). 이어 읽을 때 쓴다"),
+				"limit":  num("최대 몇 개를 읽을지 (생략하면 들어가는 만큼)"),
+			}),
+			Run: erdReadSchema,
+		},
+		{
+			Name: "set_logical_names",
+			Description: "테이블과 컬럼에 논리명(설계용 이름, 보통 한국어)을 붙인다. " +
+				"여러 테이블을 한 번에 보낼 수 있다 — 표마다 따로 부르면 툴 왕복 횟수를 금방 넘긴다. " +
+				"논리명은 DB에 만들어지지 않는 설계 메모여서 마이그레이션과 구조 지문에는 들어가지 않는다. " +
+				"빈 문자열을 주면 그 논리명을 지운다.",
+			Schema: objectSchema(map[string]any{
+				"tables": map[string]any{
+					"type":        "array",
+					"description": "논리명을 붙일 테이블 목록",
+					"items": objectSchema(map[string]any{
+						"table":   str("테이블 이름"),
+						"logical": str("테이블 논리명 (선택)"),
+						"columns": map[string]any{
+							"type": "object",
+							"description": "컬럼 이름 → 논리명. 보낸 컬럼만 바뀐다 " +
+								"(예: {\"user_id\": \"회원 번호\"})",
+							"additionalProperties": map[string]any{"type": "string"},
+						},
+					}, "table"),
+				},
+			}, "tables"),
+			Run: erdSetLogicalNames,
 		},
 		{
 			Name: "add_table",
@@ -259,55 +289,232 @@ func findERDTable(doc *erd.Document, name string) *schema.Table {
 	return nil
 }
 
-func erdReadSchema(ec *erdToolContext, _ json.RawMessage) (string, error) {
+// erdSchemaBudget은 read_schema 한 번에 담을 대략의 바이트 수다.
+//
+// asJSON의 상한(maxResult)보다 넉넉히 낮게 잡는다. 상한에 걸려 잘리면 JSON이
+// 문장 중간에서 끊겨 모델이 아무것도 못 읽지만, 여기서 미리 멈추면 온전한 JSON에
+// "여기까지 담았고 다음은 몇 번부터"를 함께 줄 수 있다.
+const erdSchemaBudget = 16_000
+
+type erdColOut struct {
+	Name     string `json:"name"`
+	Type     string `json:"type"`
+	Nullable bool   `json:"nullable"`
+	Comment  string `json:"comment,omitempty"`
+	Logical  string `json:"logical,omitempty"`
+}
+
+type erdTblOut struct {
+	Name       string      `json:"name"`
+	Comment    string      `json:"comment,omitempty"`
+	Logical    string      `json:"logical,omitempty"`
+	Columns    []erdColOut `json:"columns"`
+	PrimaryKey []string    `json:"primaryKey,omitempty"`
+	ForeignKey []string    `json:"foreignKeys,omitempty"`
+	Indexes    []string    `json:"indexes,omitempty"`
+}
+
+// erdTableOut은 테이블 하나를 툴 결과 모양으로 만든다.
+//
+// 논리명을 함께 싣는 이유: 논리명은 스키마가 아니라 배치(Box)에 담겨 있어서,
+// 스키마만 읽으면 이미 붙어 있는 이름이 보이지 않는다. 그러면 모델은 다 붙었는지
+// 알 수 없어 매번 전부 다시 붙인다.
+func erdTableOut(doc *erd.Document, t *schema.Table) erdTblOut {
+	out := erdTblOut{Name: t.Name, Comment: t.Comment}
+	box := doc.Layout[t.Key()]
+	if box != nil {
+		out.Logical = box.Logical
+	}
+	for _, c := range t.Columns {
+		col := erdColOut{
+			Name: c.Name, Type: c.RawType, Nullable: c.Nullable, Comment: c.Comment,
+		}
+		if box != nil {
+			col.Logical = box.ColumnLogical[strings.ToLower(c.Name)]
+		}
+		out.Columns = append(out.Columns, col)
+	}
+	if t.PrimaryKey != nil {
+		out.PrimaryKey = t.PrimaryKey.Columns
+	}
+	for _, fk := range t.ForeignKeys {
+		out.ForeignKey = append(out.ForeignKey, fmt.Sprintf("%s: %s → %s(%s)",
+			fk.Name, strings.Join(fk.Columns, ","), fk.RefTable, strings.Join(fk.RefColumns, ",")))
+	}
+	for _, idx := range t.Indexes {
+		cols := make([]string, 0, len(idx.Columns))
+		for _, c := range idx.Columns {
+			cols = append(cols, c.Column)
+		}
+		label := idx.Name
+		if idx.Unique {
+			label = "UNIQUE " + label
+		}
+		out.Indexes = append(out.Indexes, fmt.Sprintf("%s (%s)", label, strings.Join(cols, ",")))
+	}
+	return out
+}
+
+func erdReadSchema(ec *erdToolContext, args json.RawMessage) (string, error) {
+	var in struct {
+		Table  string `json:"table"`
+		Offset int    `json:"offset"`
+		Limit  int    `json:"limit"`
+	}
+	if err := parseArgs(args, &in); err != nil {
+		return "", err
+	}
 	doc, err := ec.document()
 	if err != nil {
 		return "", err
 	}
-	type colOut struct {
-		Name     string `json:"name"`
-		Type     string `json:"type"`
-		Nullable bool   `json:"nullable"`
-		Comment  string `json:"comment,omitempty"`
+	all := doc.Schema.Tables
+
+	// 테이블 하나만 달라고 하면 그것만 준다. 컬럼이 아주 많은 표 하나 때문에
+	// 나머지를 못 읽는 일이 없어야 한다.
+	if name := strings.TrimSpace(in.Table); name != "" {
+		t := findERDTable(doc, name)
+		if t == nil {
+			return "", fmt.Errorf("테이블 %q을(를) 찾을 수 없습니다", name)
+		}
+		return asJSON(map[string]any{
+			"document": doc.Name, "dialect": doc.Dialect,
+			"tables": []erdTblOut{erdTableOut(doc, t)},
+		})
 	}
-	type tblOut struct {
-		Name       string   `json:"name"`
-		Comment    string   `json:"comment,omitempty"`
-		Columns    []colOut `json:"columns"`
-		PrimaryKey []string `json:"primaryKey,omitempty"`
-		ForeignKey []string `json:"foreignKeys,omitempty"`
-		Indexes    []string `json:"indexes,omitempty"`
+
+	start := in.Offset
+	if start < 0 {
+		start = 0
 	}
-	tables := make([]tblOut, 0, len(doc.Schema.Tables))
-	for _, t := range doc.Schema.Tables {
-		out := tblOut{Name: t.Name, Comment: t.Comment}
-		for _, c := range t.Columns {
-			out.Columns = append(out.Columns, colOut{
-				Name: c.Name, Type: c.RawType, Nullable: c.Nullable, Comment: c.Comment,
-			})
+	if start > len(all) {
+		start = len(all)
+	}
+
+	// 들어가는 만큼 담는다. 개수로 자르면 컬럼이 많은 표에서는 그래도 넘치고,
+	// 적은 표에서는 쓸데없이 여러 번 부르게 된다.
+	tables := make([]erdTblOut, 0, len(all)-start)
+	size := 0
+	next := 0
+	for i := start; i < len(all); i++ {
+		if in.Limit > 0 && len(tables) >= in.Limit {
+			next = i
+			break
 		}
-		if t.PrimaryKey != nil {
-			out.PrimaryKey = t.PrimaryKey.Columns
-		}
-		for _, fk := range t.ForeignKeys {
-			out.ForeignKey = append(out.ForeignKey, fmt.Sprintf("%s: %s → %s(%s)",
-				fk.Name, strings.Join(fk.Columns, ","), fk.RefTable, strings.Join(fk.RefColumns, ",")))
-		}
-		for _, idx := range t.Indexes {
-			cols := make([]string, 0, len(idx.Columns))
-			for _, c := range idx.Columns {
-				cols = append(cols, c.Column)
-			}
-			label := idx.Name
-			if idx.Unique {
-				label = "UNIQUE " + label
-			}
-			out.Indexes = append(out.Indexes, fmt.Sprintf("%s (%s)", label, strings.Join(cols, ",")))
+		out := erdTableOut(doc, all[i])
+		n := erdOutSize(out)
+		// 첫 표는 아무리 커도 담는다. 안 그러면 큰 표 하나에서 영영 못 나아간다.
+		if len(tables) > 0 && size+n > erdSchemaBudget {
+			next = i
+			break
 		}
 		tables = append(tables, out)
+		size += n
 	}
+
+	res := map[string]any{
+		"document": doc.Name, "dialect": doc.Dialect,
+		"tableCount": len(all), "offset": start, "tables": tables,
+	}
+	if next > 0 {
+		res["nextOffset"] = next
+		res["note"] = fmt.Sprintf(
+			"테이블 %d개 중 %d~%d번째만 담았습니다. 나머지는 offset=%d 으로 이어서 부르세요.",
+			len(all), start, next-1, next)
+	}
+	return asJSON(res)
+}
+
+// erdOutSize는 이 테이블이 결과에서 차지할 대략의 바이트 수다.
+func erdOutSize(t erdTblOut) int {
+	data, err := json.Marshal(t)
+	if err != nil {
+		return 0
+	}
+	// MarshalIndent로 다시 찍히므로 들여쓰기만큼 늘어난다. 넉넉히 잡는다.
+	return len(data) * 3 / 2
+}
+
+// erdSetLogicalNames는 테이블·컬럼에 논리명을 붙인다.
+//
+// 논리명이 table.move 로 가는 이유: 논리명은 스키마가 아니라 배치에 담긴 설계
+// 메모다(색·아이콘과 같은 자리). 그래서 좌표를 함께 보내야 하고, 지금 좌표를
+// 읽어 그대로 되돌려 준다 — 안 그러면 이름을 붙이는 동안 카드가 (0,0)으로 모인다.
+func erdSetLogicalNames(ec *erdToolContext, args json.RawMessage) (string, error) {
+	var in struct {
+		Tables []struct {
+			Table   string            `json:"table"`
+			Logical *string           `json:"logical"`
+			Columns map[string]string `json:"columns"`
+		} `json:"tables"`
+	}
+	if err := parseArgs(args, &in); err != nil {
+		return "", err
+	}
+	if len(in.Tables) == 0 {
+		return "", fmt.Errorf("tables가 비어 있습니다. 논리명을 붙일 테이블을 적어주세요")
+	}
+
+	doc, err := ec.document()
+	if err != nil {
+		return "", err
+	}
+
+	type done struct {
+		Table   string `json:"table"`
+		Logical string `json:"logical,omitempty"`
+		Columns int    `json:"columns"`
+	}
+	out := make([]done, 0, len(in.Tables))
+	for _, item := range in.Tables {
+		t := findERDTable(doc, item.Table)
+		if t == nil {
+			return "", fmt.Errorf("테이블 %q을(를) 찾을 수 없습니다", item.Table)
+		}
+		key := t.Key()
+
+		// 없는 컬럼에 이름을 붙이면 화면 어디에도 나타나지 않는다. 조용히 넘기면
+		// 모델은 붙였다고 믿으므로, 어느 컬럼인지 짚어 거절한다.
+		cols := map[string]string{}
+		for name, label := range item.Columns {
+			col := t.Column(name)
+			if col == nil {
+				return "", fmt.Errorf("%s 테이블에 %q 컬럼이 없습니다", t.Name, name)
+			}
+			cols[col.Name] = label
+		}
+
+		box := doc.Layout[key]
+		payload := map[string]any{"key": key}
+		if box != nil {
+			payload["x"], payload["y"] = box.X, box.Y
+		}
+		if item.Logical != nil {
+			payload["logical"] = strings.TrimSpace(*item.Logical)
+		}
+		if len(cols) > 0 {
+			payload["columnLogical"] = cols
+		}
+		if item.Logical == nil && len(cols) == 0 {
+			continue
+		}
+		next, err := ec.submit(erd.OpTableMove, payload)
+		if err != nil {
+			return "", err
+		}
+		doc = next
+
+		rec := done{Table: t.Name, Columns: len(cols)}
+		if item.Logical != nil {
+			rec.Logical = strings.TrimSpace(*item.Logical)
+		}
+		out = append(out, rec)
+	}
+
 	return asJSON(map[string]any{
-		"document": doc.Name, "dialect": doc.Dialect, "tables": tables,
+		"ok": true, "updated": out,
+		"note": "논리명은 설계 메모입니다. 도구 줄의 논리명/둘 다 보기에서 보이고, " +
+			"마이그레이션 SQL에는 들어가지 않습니다.",
 	})
 }
 

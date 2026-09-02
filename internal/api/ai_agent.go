@@ -162,10 +162,19 @@ func (r *agentRun) run(ctx context.Context, history []ai.Message) {
 		var text strings.Builder
 		var calls []ai.ToolCall
 		var usage ai.Usage
+		stopReason := ""
 		streamErr := error(nil)
 
 		for ev := range stream {
 			switch ev.Type {
+			case ai.EventThinking:
+				// 생각은 저장하지 않고 화면으로만 보낸다. 이력에 쌓으면 다음
+				// 차례의 문맥을 결론이 아닌 글로 채우고, 새로고침하면 어차피
+				// 사라질 것을 DB에 남기게 된다.
+				if err := r.out.send("thinking", map[string]string{"text": ev.Text}); err != nil {
+					r.saveAssistant(text.String(), nil, usage, "")
+					return
+				}
 			case ai.EventText:
 				text.WriteString(ev.Text)
 				if err := r.out.send("text", map[string]string{"text": ev.Text}); err != nil {
@@ -178,6 +187,7 @@ func (r *agentRun) run(ctx context.Context, history []ai.Message) {
 					calls = append(calls, *ev.ToolCall)
 				}
 			case ai.EventDone:
+				stopReason = ev.StopReason
 				if ev.Usage != nil {
 					usage = *ev.Usage
 				}
@@ -196,6 +206,14 @@ func (r *agentRun) run(ctx context.Context, history []ai.Message) {
 		if usage.InputTokens > 0 || usage.OutputTokens > 0 {
 			_ = r.srv.st.AddAISessionUsage(r.tc.ctx, r.session.ID,
 				usage.InputTokens, usage.OutputTokens)
+		}
+		// 답이 온전히 끝난 것인지 알린다.
+		//
+		// 예전에는 이 값을 읽지 않았다. 그래서 길이 한계로 문장 중간에서 잘린
+		// 답과 끝까지 온 답이 화면에서 똑같아 보였다 — 사람은 모델이 그렇게
+		// 답했다고 믿고, 잘렸다는 사실은 아무 데도 적히지 않았다.
+		if note := stopNotice(stopReason); note != "" {
+			_ = r.out.send("notice", map[string]string{"message": note})
 		}
 		if len(calls) == 0 {
 			// 툴을 부르지 않았으면 이 턴은 끝이다.
@@ -229,6 +247,24 @@ func (r *agentRun) run(ctx context.Context, history []ai.Message) {
 		"message": fmt.Sprintf("툴 호출이 %d회를 넘어 중단했습니다. 질문을 좁혀 다시 시도하세요", maxToolRounds),
 	})
 	r.done("max_rounds")
+}
+
+// stopNotice는 끝난 이유가 사람에게 알릴 만한 것이면 그 문장이다.
+//
+// 정상 종료(stop·tool_calls·빈 값)에는 아무 말도 하지 않는다. 잘 끝난 답마다
+// 안내가 붙으면 그 안내는 곧 배경이 되고, 정작 잘린 답에서도 읽히지 않는다.
+func stopNotice(reason string) string {
+	switch reason {
+	case ai.StopReasonLength:
+		return "모델의 길이 한계에 닿아 답이 중간에서 끊겼습니다. " +
+			"생각이 긴 모델은 생각에도 이 한계를 씁니다 — 질문을 좁히거나, " +
+			"이어서 답해 달라고 요청하세요"
+	case ai.StopReasonIncomplete:
+		return "응답이 끝났다는 표시 없이 연결이 끊겼습니다. 답이 중간에서 " +
+			"멈췄을 수 있습니다 — 로컬 모델이라면 메모리가 모자라 내려갔는지 확인하세요"
+	default:
+		return ""
+	}
 }
 
 // executeCalls는 툴 호출을 처리한다.
