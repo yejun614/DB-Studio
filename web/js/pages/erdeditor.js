@@ -1406,7 +1406,9 @@ class Editor {
     if (this.tab === 'chat') {
       mount(this.ui.panel, this.chatView());
       const list = this.ui.panel.querySelector('.erd-chat-list');
-      if (list) list.scrollTop = list.scrollHeight;
+      // 따라가는 중일 때만 맨 아래로 내린다. AI 답변이 끝나면 저장된 상태로
+      // 다시 그리는데, 그때 위로 올려 읽던 사람을 끌어내리지 않는다.
+      if (list && this.aiFollow !== false) list.scrollTop = list.scrollHeight;
       return;
     }
     // 여럿을 골랐으면 하나를 고치는 대신 **함께 할 수 있는 일**을 보여준다.
@@ -2733,6 +2735,22 @@ class Editor {
         else if (ev.event === 'tool_result') node.setToolResult(ev.data);
         else if (ev.event === 'notice') node.addNotice(ev.data.message ?? '');
         else if (ev.event === 'error') node.setError(ev.data.message ?? '오류가 발생했습니다');
+        // 바닥에 닿아 있으면 따라가기를 다시 켠다(assistant.js 의 같은 자리 참고).
+        if (this.aiFollow === false && this.aiLog
+          && this.aiLog.scrollHeight - this.aiLog.scrollTop - this.aiLog.clientHeight <= 60) {
+          this.aiFollow = true;
+        }
+        // 따라가는 중일 때만, 그리고 한 프레임 뒤에 내린다 — 말풍선이 이 프레임에
+        // 다시 그려지므로 지금 내리면 늘어난 만큼이 화면 밖에 남는다.
+        if (this.aiFollow !== false && this.aiLog && !this.aiScrollFrame) {
+          this.aiScrollFrame = requestAnimationFrame(() => {
+            this.aiScrollFrame = 0;
+            if (this.aiFollow === false || !this.aiLog) return;
+            // 즉시 내린다. 이 목록에 smooth 가 걸리게 되어도 따라가기는 토큰마다
+            // 일어나므로, 애니메이션이 끝나기 전에 다음 글자가 와 계속 뒤처진다.
+            this.aiLog.scrollTo({ top: this.aiLog.scrollHeight, behavior: 'instant' });
+          });
+        }
       }, this.controller.signal);
     } catch (err) {
       if (err.name !== 'AbortError') {
@@ -2808,6 +2826,17 @@ class Editor {
         '테이블을 만들거나 컬럼을 고쳐 달라고 말해보세요. 변경은 초안에 바로 반영됩니다.')
       : this.aiMessages.flatMap((m) => aiMessageNode(m, (t) => this.shareToRoom(t))));
 
+    // 위로 올리면 따라가기를 멈추고, 바닥까지 내리면 다시 켠다.
+    // 방향으로 판단하는 이유는 assistant.js 의 같은 자리에 적어 두었다 — 내용이
+    // 자라며 오는 스크롤 이벤트로 판단하면 바닥에 있는데도 꺼진다.
+    let lastTop = 0;
+    log.addEventListener('scroll', () => {
+      const top = log.scrollTop;
+      if (top < lastTop - 2) this.aiFollow = false;
+      else if (log.scrollHeight - top - log.clientHeight <= 60) this.aiFollow = true;
+      lastTop = top;
+    }, { passive: true });
+
     const box = input({ placeholder: 'AI에게 설계를 요청하세요' });
     const send = () => {
       const text = box.value.trim();
@@ -2816,9 +2845,12 @@ class Editor {
       const node = erdStreamNode();
       log.querySelector('.erd-chat-empty')?.remove();
       log.append(h('div.erd-chat-msg.is-me', {}, h('p.erd-chat-body', {}, text)), node.el);
+      // 내 말을 보낸 순간은 맨 아래를 보고 싶은 것이 분명하다.
+      this.aiFollow = true;
       log.scrollTop = log.scrollHeight;
       this.sendAI(text, node);
     };
+    this.aiLog = log;
     box.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         e.preventDefault();

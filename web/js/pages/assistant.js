@@ -426,6 +426,17 @@ class ChatView {
     this.controller = null;
     // streaming은 현재 응답 중인 assistant 메시지의 임시 상태다.
     this.streaming = null;
+    // follow는 "새 내용을 따라 맨 아래로 내릴까"다.
+    //
+    // 예전에는 이벤트가 올 때마다 무조건 내렸다. 그러면 위로 올려 읽던 대화가
+    // 토큰마다 끌려 내려와, 생각이 길어지는 동안에는 기록을 읽을 수가 없다.
+    // 지금은 사람이 자기 말을 보낼 때 켜고(그때는 맨 아래를 보고 싶은 것이
+    // 분명하다), 위로 올리는 순간 끈다.
+    this.follow = true;
+    // logTop은 다시 그릴 때 되돌릴 스크롤 자리다. 대화 전체를 다시 만들면
+    // 스크롤이 맨 위로 돌아가는데, 따라가지 않는 사람에게 그것은 읽던 자리를
+    // 잃는 일이다.
+    this.logTop = 0;
   }
 
   async load() {
@@ -469,7 +480,26 @@ class ChatView {
 
   render() {
     const conn = this.conns.items.find((i) => i.connection.id === this.session.connectionId);
+    // 지금 보고 있던 자리를 기억해 둔다(아래 mount 가 이 요소를 버린다).
+    if (this.log) this.logTop = this.log.scrollTop;
     this.log = h('div.ai-log');
+    // 위로 올리면 따라가기를 멈추고, 바닥까지 내리면 다시 켠다.
+    //
+    // **방향**으로 판단하는 이유: 내용이 자라도 스크롤 이벤트가 온다. 그때의
+    // 자리만 보고 판단하면, 바닥에 있는데도 방금 늘어난 만큼(여유보다 큰 간격)을
+    // 보고 따라가기가 꺼진다. 반대로 위로 움직이는 것은 사람만 한다 — 아래에
+    // 글이 붙는 것으로는 스크롤 위치가 위로 가지 않는다.
+    //
+    // 휠·손가락·스크롤바 끌기·키보드를 따로 듣지 않아도 되는 것이 이 방식의
+    // 이점이다. 무엇으로 올렸든 위치가 줄어든다.
+    let lastTop = 0;
+    this.log.addEventListener('scroll', () => {
+      const top = this.log.scrollTop;
+      // 2px 여유: 부드러운 스크롤과 소수점 때문에 1px씩 오르내리는 일이 있다.
+      if (top < lastTop - 2) this.follow = false;
+      else if (atLogBottom(this.log)) this.follow = true;
+      lastTop = top;
+    }, { passive: true });
     this.inputBox = h('textarea.input.ai-input', {
       rows: 3,
       placeholder: '무엇을 도와드릴까요? (Enter 전송, Shift+Enter 줄바꿈)',
@@ -713,7 +743,9 @@ class ChatView {
       items.push(this.suggestions());
     }
     mount(this.log, items);
-    this.log.scrollTop = this.log.scrollHeight;
+    // 따라가는 중이면 맨 아래로, 아니면 읽던 자리로.
+    if (this.follow) toLogEnd(this.log);
+    else if (this.logTop) this.log.scrollTop = this.logTop;
   }
 
   suggestions() {
@@ -941,6 +973,9 @@ class ChatView {
     if (!overrideText) this.inputBox.value = '';
     this.sendBtn.disabled = true;
     this.streaming = createStreamingNode();
+    // 내 말을 보낸 순간은 맨 아래를 보고 싶은 것이 분명하다. 답변이 자라는
+    // 동안에는 위로 올리는 순간 멈춘다(위 follow 주석).
+    this.follow = true;
     this.renderLog();
     // 생각을 글로 보내지 않는 모델을 위해, 잠깐 기다려도 소식이 없으면
     // 그때 "생각 중"을 띄운다. 바로 띄우면 빠른 답에서도 깜박여 어수선하다.
@@ -995,8 +1030,48 @@ class ChatView {
       default:
         break;
     }
-    this.log.scrollTop = this.log.scrollHeight;
+    this.followDown();
   }
+
+  // followDown은 따라가는 중이면 맨 아래로 내린다.
+  //
+  // 한 프레임 뒤에 내리는 이유: 말풍선은 토큰이 올 때마다 requestAnimationFrame 으로
+  // 다시 그린다(createStreamingNode). 지금 당장 내리면 그 그리기 **전의** 높이로
+  // 내려서, 새로 늘어난 만큼이 늘 화면 밖에 남는다 — 따라간다면서 조금씩 뒤처진다.
+  followDown() {
+    // 바닥에 닿아 있으면 따라가기를 다시 켠다.
+    //
+    // 스크롤 이벤트만으로 켜지 않는 이유: 사람이 바닥까지 내려 놓고 다음 글자를
+    // 기다리는 동안에는 스크롤 이벤트가 오지 않는다. 그 사이에 내용이 자라면
+    // "바닥에 있는데 따라오지 않는" 상태로 남는다.
+    if (!this.follow && atLogBottom(this.log)) this.follow = true;
+    if (!this.follow || this.scrollFrame) return;
+    this.scrollFrame = requestAnimationFrame(() => {
+      this.scrollFrame = 0;
+      if (this.follow && this.log) toLogEnd(this.log);
+    });
+  }
+}
+
+// atLogBottom은 대화가 맨 아래에 닿아 있는지다.
+//
+// 여유를 두는 이유: 줄 높이와 소수점 때문에 정확히 0이 되는 일은 드물고, 몇 px
+// 차이로 따라가기가 꺼지면 "왜 어떤 때는 따라가고 어떤 때는 안 따라가나"가 된다.
+const LOG_BOTTOM_SLACK = 60;
+
+function atLogBottom(el) {
+  if (!el) return true;
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= LOG_BOTTOM_SLACK;
+}
+
+// toLogEnd는 맨 아래로 **즉시** 내린다.
+//
+// .ai-log 에는 scroll-behavior: smooth 가 걸려 있다(사람이 어딘가로 뛸 때 부드럽게
+// 가는 것이 좋다). 그런데 따라가기는 토큰마다 일어나므로, 부드럽게 두면 애니메이션이
+// 끝나기 전에 다음 글자가 와서 계속 뒤처진다 — 따라가는데 바닥에 닿지 않는다.
+function toLogEnd(el) {
+  if (!el) return;
+  el.scrollTo({ top: el.scrollHeight, behavior: 'instant' });
 }
 
 // createStreamingNode는 응답 중인 메시지 노드와 갱신 함수를 만든다.
