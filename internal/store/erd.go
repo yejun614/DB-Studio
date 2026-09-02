@@ -241,6 +241,32 @@ func (s *Store) UpdateERDDocumentMeta(ctx context.Context, id, name, status, not
 	return nil
 }
 
+// UpdateERDDocumentTarget은 문서가 향하는 대상을 바꾼다(커넥션·문법·프로젝트).
+//
+// 메타 갱신과 나누어 둔 이유: 이름·상태·메모는 문서에 대한 **설명**이고, 이쪽은
+// 문서가 무엇을 향하는가다. 대상이 바뀌면 마이그레이션이 실행될 DB와 권한 판정의
+// 근거가 함께 바뀌므로, 두 가지를 한 함수에 섞으면 이름을 고치는 코드가 실수로
+// 대상까지 옮길 수 있다.
+//
+// 프로젝트를 함께 받는 이유: 커넥션이 붙은 문서의 프로젝트는 그 커넥션의 것이어야
+// 한다(CreateERDDocument 와 같은 규칙). 두 곳에 적힌 값이 어긋나면 어느 쪽이 참인지
+// 판정이 답할 수 없게 된다.
+func (s *Store) UpdateERDDocumentTarget(ctx context.Context, id, connectionID, dialect, projectID string) error {
+	if projectID == "" {
+		return fmt.Errorf("update erd target: 프로젝트가 없습니다")
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE erd_documents
+		SET connection_id = ?, dialect = ?, project_id = ?, updated_at = ? WHERE id = ?`,
+		nullString(connectionID), dialect, projectID, nowString(), id)
+	if err != nil {
+		return fmt.Errorf("update erd target: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) DeleteERDDocument(ctx context.Context, id string) error {
 	res, err := s.db.ExecContext(ctx, `DELETE FROM erd_documents WHERE id = ?`, id)
 	if err != nil {

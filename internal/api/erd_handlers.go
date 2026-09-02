@@ -180,15 +180,9 @@ func (s *Server) createStandaloneERDDocument(c *fiber.Ctx, name, projectID, dial
 		return fail(c, fiber.StatusBadRequest, "bad_request",
 			"대상 커넥션이 없으면 어떤 DB 문법으로 설계할지 골라야 합니다")
 	}
-	kind := model.DBKind(dialect)
-	if !kind.Valid() {
-		return fail(c, fiber.StatusBadRequest, "invalid_dialect", "알 수 없는 DB 종류입니다")
-	}
-	// 관계형이 아닌 종류는 애초에 테이블·제약이 없어 그릴 것이 없다.
-	adapter, err := dbx.Get(kind)
-	if err != nil || !adapter.Capabilities().Migrate {
+	if !erdDialectOK(dialect) {
 		return fail(c, fiber.StatusBadRequest, "invalid_dialect",
-			"이 데이터베이스 종류는 ERD 설계를 지원하지 않습니다")
+			"ERD 설계를 지원하지 않는 DB 종류입니다")
 	}
 
 	docID := uuid.NewString()
@@ -203,6 +197,75 @@ func (s *Server) createStandaloneERDDocument(c *fiber.Ctx, name, projectID, dial
 		Detail: map[string]any{"name": name, "standalone": true, "dialect": dialect},
 	})
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"document": doc})
+}
+
+// erdDialectOK는 그 DB 종류로 ERD 를 그릴 수 있는지다.
+//
+// 관계형이 아닌 종류는 테이블·제약이 없어 그릴 것이 없고, 마이그레이션도 만들 수
+// 없다(어댑터의 Migrate 능력이 그 판정이다).
+func erdDialectOK(dialect string) bool {
+	kind := model.DBKind(strings.TrimSpace(dialect))
+	if !kind.Valid() {
+		return false
+	}
+	adapter, err := dbx.Get(kind)
+	return err == nil && adapter.Capabilities().Migrate
+}
+
+// updateERDTarget은 문서가 향하는 대상 DB와 문법을 바꾼다.
+//
+// 규칙은 하나다: **대상이 있으면 문법은 그 대상의 것이다.** 두 값을 따로 받아 두면
+// "PostgreSQL 커넥션을 향하는데 문법은 MySQL"인 문서가 생기고, 그 문서가 만드는
+// 마이그레이션은 대상 DB가 거부한다 — 그것도 실행하는 순간에야 알게 된다.
+// 문법을 직접 고르는 것은 대상이 없는 초안에서만 뜻이 있다.
+func (s *Server) updateERDTarget(c *fiber.Ctx, doc *erd.Document,
+	meta *store.ERDDocumentMeta, wantConn, wantDialect *string) error {
+	connID := doc.ConnectionID
+	if wantConn != nil {
+		connID = strings.TrimSpace(*wantConn)
+	}
+	dialect := doc.Dialect
+	projectID := meta.ProjectID
+
+	if connID != "" {
+		// 붙이려는 커넥션에 편집 등급이 있어야 한다. 볼 수만 있는 DB를 향하게
+		// 해 두면, 그 문서로 만든 마이그레이션은 만들 수는 있어도 실행할 수 없다.
+		conn, err := s.resolveERDConnection(c, connID)
+		if err != nil {
+			return err
+		}
+		dialect = string(conn.Kind)
+		projectID = conn.ProjectID
+	} else if wantDialect != nil {
+		next := strings.TrimSpace(*wantDialect)
+		if !erdDialectOK(next) {
+			return fail(c, fiber.StatusBadRequest, "invalid_dialect",
+				"ERD 설계를 지원하지 않는 DB 종류입니다")
+		}
+		dialect = next
+	}
+
+	if connID == doc.ConnectionID && dialect == doc.Dialect {
+		return nil
+	}
+	if err := s.st.UpdateERDDocumentTarget(c.Context(), doc.ID, connID, dialect, projectID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return fiber.NewError(fiber.StatusNotFound, "문서를 찾을 수 없습니다")
+		}
+		return err
+	}
+	s.audit(c, store.AuditParams{
+		Action: "erd.retarget", TargetType: "erd_document", TargetID: doc.ID,
+		Detail: map[string]any{
+			"from": doc.ConnectionID, "to": connID,
+			"fromDialect": doc.Dialect, "dialect": dialect,
+		},
+	})
+	// 열려 있는 편집기들이 같은 문서를 보고 있다. 대상이 바뀐 것은 다음에 문서를
+	// 받을 때 반영된다(소켓은 스키마 op 만 다룬다) — 화면 쪽에서 다시 읽는다.
+	doc.ConnectionID = connID
+	doc.Dialect = dialect
+	return nil
 }
 
 // handleDuplicateERDDocument는 초안을 베낀다.
@@ -406,6 +469,10 @@ func (s *Server) handleUpdateERDDocument(c *fiber.Ctx) error {
 		Name   *string `json:"name"`
 		Status *string `json:"status"`
 		Note   *string `json:"note"`
+		// 대상 DB와 문법. 빈 문자열은 "대상 없음"이라는 뜻이라 포인터로 받는다 —
+		// 값을 보내지 않은 것과 비워 달라는 것은 다른 요청이다.
+		ConnectionID *string `json:"connectionId"`
+		Dialect      *string `json:"dialect"`
 	}
 	if err := c.BodyParser(&body); err != nil {
 		return fail(c, fiber.StatusBadRequest, "bad_request", "요청 본문을 해석할 수 없습니다")
@@ -431,6 +498,17 @@ func (s *Server) handleUpdateERDDocument(c *fiber.Ctx) error {
 	}
 	if body.Note != nil {
 		note = strings.TrimSpace(*body.Note)
+	}
+
+	// 대상 DB·문법을 함께 바꿀 수 있다.
+	//
+	// 왜 필요한가: 대상 없이 시작한 초안이 실제 DB를 갖게 되는 것이 흔한 흐름이다
+	// (그림을 먼저 그리고 나중에 붙인다). 그때까지는 SQL 내보내기만 되고
+	// 마이그레이션은 만들 수 없었는데, 그 길이 문서를 새로 만드는 것뿐이었다.
+	if body.ConnectionID != nil || body.Dialect != nil {
+		if err := s.updateERDTarget(c, doc, meta, body.ConnectionID, body.Dialect); err != nil {
+			return err
+		}
 	}
 
 	if err := s.st.UpdateERDDocumentMeta(c.Context(), doc.ID, name, status, note); err != nil {
