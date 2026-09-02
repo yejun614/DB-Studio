@@ -288,6 +288,13 @@ export class ErdCanvas {
       //   - 고른 선, 고른 카드에 붙은 선, 마우스를 올린 선. 어디로 가는지
       //     따라가려는 순간에는 카드보다 선이 중요하다.
       linksTop: svgEl('g', { class: 'erd-layer-links-top' }),
+      // 메모는 카드보다 **앞에** 그린다.
+      //
+      // 뒤에 두었더니 새 메모가 카드 밑에서 태어나는 일이 있었다(빈자리를 찾아
+      // 놓는 것이 아니라 화면 가운데에 놓기 때문이다). 그러면 적어 둔 사람도
+      // 그것을 찾지 못한다 — 메모는 사람이 방금 쓴 말이라 안 보이면 잃은 것과 같다.
+      // 묶음은 반대로 늘 맨 뒤다: 카드를 감싸는 배경이고, 앞에 있으면 카드를
+      // 고를 수 없다.
       notes: svgEl('g', { class: 'erd-layer-notes' }),
       cursors: svgEl('g', { class: 'erd-layer-cursors' }),
       // 범위 선택 사각형은 맨 위에 그린다. 카드 밑에 깔리면 무엇을 훑고 있는지
@@ -296,8 +303,8 @@ export class ErdCanvas {
     };
     svg.appendChild(layers.groups);
     svg.appendChild(layers.links);
-    svg.appendChild(layers.notes);
     svg.appendChild(layers.cards);
+    svg.appendChild(layers.notes);
     svg.appendChild(layers.linksTop);
     svg.appendChild(layers.cursors);
     svg.appendChild(layers.band);
