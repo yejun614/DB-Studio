@@ -278,8 +278,17 @@ func (p *openaiProvider) Stream(ctx context.Context, cfg Config, req Request) (<
 				var chunk struct {
 					Choices []struct {
 						Delta struct {
-							Content   string `json:"content"`
-							ToolCalls []struct {
+							Content string `json:"content"`
+							// 생각(reasoning) 델타. 규약에 없는 필드라 서버마다
+							// 이름이 다르다 — Ollama는 reasoning, DeepSeek·다수의
+							// 호환 서버는 reasoning_content, 일부는 thinking을 쓴다.
+							// 셋 다 받는 이유: 안 읽으면 조용히 버려지고, 생각만
+							// 하다 끝난 차례는 **빈 답**으로 보인다. 그게 지금
+							// 로컬 모델에서 겪는 증상이다.
+							Reasoning        string `json:"reasoning"`
+							ReasoningContent string `json:"reasoning_content"`
+							Thinking         string `json:"thinking"`
+							ToolCalls        []struct {
 								// Index를 포인터로 받는 이유: 규약은 필수라고 하지만
 								// 보내지 않는 구현이 있다(Gemini의 OpenAI 호환 계층).
 								// 값 타입으로 받으면 없는 것과 0번이 구분되지 않아
@@ -330,6 +339,13 @@ func (p *openaiProvider) Stream(ctx context.Context, cfg Config, req Request) (<
 					usage.OutputTokens = chunk.Usage.CompletionTokens
 				}
 				for _, ch := range chunk.Choices {
+					if think := firstNonEmpty(
+						ch.Delta.Reasoning, ch.Delta.ReasoningContent, ch.Delta.Thinking,
+					); think != "" {
+						if !sendEvent(streamCtx, out, Event{Type: EventThinking, Text: think}) {
+							return false
+						}
+					}
 					if ch.Delta.Content != "" {
 						if !sendEvent(streamCtx, out, Event{Type: EventText, Text: ch.Delta.Content}) {
 							return false
@@ -397,7 +413,26 @@ func (p *openaiProvider) Stream(ctx context.Context, cfg Config, req Request) (<
 		if !flush() {
 			return
 		}
+		// 끝났다는 표시 없이 닫혔으면 그렇게 말한다.
+		//
+		// 예전에는 그냥 성공이었다. 그래서 로컬 LLM이 메모리 부족으로 죽거나
+		// 프록시가 끊었을 때, 문장 중간에서 멈춘 답이 **끝까지 온 답과 똑같이**
+		// 보였다. 오류로 올리지 않고 이유만 붙이는 이유는 여기까지 온 글은
+		// 쓸모가 있고, 판단은 위에서 하기 때문이다.
+		if stopReason == "" {
+			stopReason = StopReasonIncomplete
+		}
 		sendEvent(streamCtx, out, Event{Type: EventDone, StopReason: stopReason, Usage: &usage})
 	}()
 	return out, nil
+}
+
+// firstNonEmpty는 처음으로 비어 있지 않은 값이다.
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

@@ -125,6 +125,12 @@ const (
 	EventText EventType = "text"
 	// EventToolCall은 완성된 툴 호출이다 (인자 JSON이 모두 도착한 뒤 한 번).
 	EventToolCall EventType = "tool_call"
+	// EventThinking은 모델이 생각하는 동안 나오는 글이다.
+	//
+	// 답과 나눠 두는 이유: 생각은 답이 아니다. 답에 섞으면 사람이 그것을 결론으로
+	// 읽고, 이력에 저장하면 다음 차례의 문맥을 쓸데없이 채운다. 화면에는 "지금
+	// 생각하고 있다"는 신호로만 쓴다.
+	EventThinking EventType = "thinking"
 	// EventDone은 응답이 끝났음을 알린다.
 	EventDone EventType = "done"
 	// EventError는 스트림 중 발생한 오류다.
@@ -140,6 +146,19 @@ type Event struct {
 	Usage      *Usage
 	Err        error
 }
+
+// 스트림이 끝난 이유. 프로바이더마다 이름이 다르므로 여기서 하나로 모은다.
+const (
+	// StopReasonLength는 길이 한계로 잘렸다는 뜻이다(OpenAI: length,
+	// Anthropic: max_tokens). 답이 문장 중간에서 끊긴다.
+	StopReasonLength = "length"
+	// StopReasonIncomplete는 끝났다는 표시 없이 연결이 닫혔다는 뜻이다.
+	//
+	// 이것을 따로 두는 이유: 그냥 성공으로 넘기면 끊긴 답과 끝까지 온 답을
+	// 구별할 수 없다. 로컬 LLM이 메모리 부족으로 죽거나 프록시가 시간 초과로
+	// 끊었을 때가 정확히 이 경우다.
+	StopReasonIncomplete = "incomplete"
+)
 
 // Usage는 토큰 사용량이다. 비용 추적과 컨텍스트 관리에 쓴다.
 type Usage struct {
