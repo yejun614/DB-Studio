@@ -38,6 +38,15 @@ const GAP = 12;
 // 한 줄일 때도 같이 34로 둔다. 보이는 이름 설정에 따라 카드 높이가 달라지면,
 // 같은 문서를 여는 두 사람이 서로 다른 높이의 카드를 보고(설계자는 논리명,
 // 개발자는 물리명) 이름 보기를 바꾸는 순간 도면 전체가 들썩인다.
+// 관계선 끝 글자(N · 1 · 0..1)의 **화면에서의** 크기다.
+//
+// 도면 좌표가 아니라 화면 기준인 이유: SVG 글자는 확대율에 따라 함께 커지고
+// 작아진다. 도면 전체를 한눈에 보려고 축소하면 이 글자가 가장 먼저 못 읽게 되는데,
+// 하필 그때가 "이 선이 몇 대 몇인지" 훑어보는 순간이다.
+const CARD_LABEL_PX = 12.5;
+// 글자 뒤에 두르는 테두리(선에 묻히지 않게). 글자와 같은 비율로 함께 커져야
+// 두께가 늘 같아 보인다.
+const CARD_LABEL_HALO = 3;
 const HEAD_H = 34;
 // 제목 기준선. 두 줄일 때는 위로 올려 아래 줄 자리를 낸다.
 const TITLE_Y = 22;
@@ -433,13 +442,20 @@ export class ErdCanvas {
       // 표 하나를 고르면 그 표의 선이 모두 올라오므로, 한 표의 관계를 한 번에
       // 글자로 읽을 수 있다.
       if (!r.card || !this.pointedLink(fkID, r)) continue;
+      // 확대율만큼 키워 화면에서는 늘 같은 크기로 보이게 한다. 자리도 같이 밀어야
+      // 한다 — 표식은 도면 좌표라 축소하면 화면에서 작아지는데, 글자만 커지면
+      // 축소할수록 글자가 표식을 덮는다.
+      const scale = this.viewScale();
+      const size = round1(CARD_LABEL_PX * scale);
       for (const [at, side, spec, text] of endSpecs(r)) {
-        const spot = endLabelSpot(at, side, endMarker(at, side, spec).reach + 9);
+        const spot = endLabelSpot(at, side, endMarker(at, side, spec).reach + 9 * scale,
+          9 * scale);
         layer.appendChild(svgEl('text', {
           // 언제나 erd-link-temp 다. 그림 파일에는 손을 올린 상태가 남아서는
           // 안 된다 — 내보낸 그림에 왜 이 선만 글자가 있는지 설명할 길이 없다.
           class: 'erd-link-card erd-link-temp', 'data-fk': fkID,
           x: spot.x, y: spot.y, 'text-anchor': spot.anchor,
+          style: `font-size:${size}px;stroke-width:${round1(CARD_LABEL_HALO * scale)}px`,
         }, text));
       }
     }
@@ -1527,6 +1543,32 @@ export class ErdCanvas {
   applyViewBox() {
     this.svg.setAttribute('viewBox',
       `${this.view.x} ${this.view.y} ${this.view.w} ${this.view.h}`);
+    // 확대율이 바뀌면 화면 기준으로 크기를 맞춰 둔 것들을 다시 잡는다.
+    //
+    // 여기서 하는 이유: 확대·축소는 다시 그리지 않고 viewBox만 바꾼다(그래서 빠르다).
+    // 그 길에 얹지 않으면 휠을 돌리는 동안 글자만 예전 배율에 남는다.
+    // 옮기기(팬)에서는 배율이 그대로이므로 scaleChanged가 걸러 낸다.
+    // 위 레이어가 비어 있으면 맞출 것이 없다. 옮기는 동안 프레임마다 폭을 재지
+    // 않으려고 먼저 걸러 낸다.
+    if (this.layers?.linksTop?.firstChild && this.scaleChanged()) this.syncLiftedLinks();
+  }
+
+  // viewScale은 도면 좌표 한 칸이 화면에서 몇 픽셀인지의 역수다.
+  //
+  // 화면에서 12.5px 로 보이려면 도면 좌표에서는 12.5 * viewScale 이어야 한다.
+  // 폭을 못 재는 순간(화면에 붙기 전)에는 1로 둔다 — 그때 그린 것은 곧 다시 그려진다.
+  viewScale() {
+    const width = this.svg?.clientWidth || this.wrap?.clientWidth || 0;
+    if (!width || !this.view?.w) return 1;
+    return this.view.w / width;
+  }
+
+  // scaleChanged는 마지막으로 글자 크기를 맞춘 뒤 배율이 달라졌는지다.
+  scaleChanged() {
+    const now = Math.round(this.viewScale() * 1000);
+    if (now === this.labelScale) return false;
+    this.labelScale = now;
+    return true;
   }
 
   toCanvas(clientX, clientY) {

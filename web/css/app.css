@@ -2179,14 +2179,17 @@ option { background: var(--surface); color: var(--text); }
  * 대신 작게 두어 도면의 주인공이 표와 선임을 지킨다. */
 .erd-link-card {
   fill: var(--text-mute);
-  /* 크기는 타입 글자(10.5px)에 맞춘다. 9px로 두었더니 화면에 맞춘 배율에서
-   * 아예 보이지 않았다 — 안 보이는 표기는 없는 것과 같다. */
-  font: 600 10.5px var(--mono);
+  font-weight: 600;
+  font-family: var(--mono);
+  /* 크기는 JS가 확대율에 맞춰 인라인으로 정한다(CARD_LABEL_PX). 여기 값은 아직
+   * 폭을 재지 못한 순간의 기본값이다 — SVG 글자는 확대율에 따라 함께 작아지는데,
+   * 도면을 한눈에 보려고 축소한 그때가 하필 이 표기를 훑어보는 순간이다. */
+  font-size: 12.5px;
   pointer-events: none;
   /* 선 위에 얹히는 자리라, 뒤에 얇은 테두리를 둘러 글자가 선에 묻히지 않게 한다. */
   paint-order: stroke;
   stroke: var(--bg);
-  stroke-width: 2.5px;
+  stroke-width: 3px;
   stroke-linejoin: round;
 }
 
