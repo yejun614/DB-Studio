@@ -150,51 +150,37 @@ func (r *agentRun) run(ctx context.Context, history []ai.Message) {
 	}
 
 	for round := 0; round < maxToolRounds; round++ {
-		stream, err := provider.Stream(ctx, r.cfg, ai.Request{
-			Model: r.cfg.Model, System: r.system,
-			Messages: history, Tools: r.tools,
-		})
-		if err != nil {
-			r.fail(err)
+		turn, gone := r.runTurn(ctx, provider, history)
+		if gone {
+			// 클라이언트가 끊었다. 지금까지의 응답은 저장하고 조용히 끝낸다.
+			r.saveAssistant(turn.text.String(), nil, turn.usage, "")
 			return
 		}
 
-		var text strings.Builder
-		var calls []ai.ToolCall
-		var usage ai.Usage
-		stopReason := ""
-		streamErr := error(nil)
-
-		for ev := range stream {
-			switch ev.Type {
-			case ai.EventThinking:
-				// 생각은 저장하지 않고 화면으로만 보낸다. 이력에 쌓으면 다음
-				// 차례의 문맥을 결론이 아닌 글로 채우고, 새로고침하면 어차피
-				// 사라질 것을 DB에 남기게 된다.
-				if err := r.out.send("thinking", map[string]string{"text": ev.Text}); err != nil {
-					r.saveAssistant(text.String(), nil, usage, "")
-					return
-				}
-			case ai.EventText:
-				text.WriteString(ev.Text)
-				if err := r.out.send("text", map[string]string{"text": ev.Text}); err != nil {
-					// 클라이언트가 끊었다. 지금까지의 응답은 저장하고 조용히 끝낸다.
-					r.saveAssistant(text.String(), nil, usage, "")
-					return
-				}
-			case ai.EventToolCall:
-				if ev.ToolCall != nil {
-					calls = append(calls, *ev.ToolCall)
-				}
-			case ai.EventDone:
-				stopReason = ev.StopReason
-				if ev.Usage != nil {
-					usage = *ev.Usage
-				}
-			case ai.EventError:
-				streamErr = ev.Err
+		// 아무것도 나오지 않은 채 상류가 실패했으면 다시 해 본다.
+		//
+		// 이것이 필요한 이유: 툴을 쓰는 대화는 한 차례에 프로바이더를 여러 번
+		// 부른다. 그중 하나가 일시적으로 실패하면 그때까지 조회하고 고친 것이 다
+		// 헛일이 된다 — Ollama Cloud가 같은 요청에 절반쯤 500을 내는 것을 겪었다.
+		//
+		// 무엇이라도 나온 뒤에는 다시 하지 않는다. 같은 말이 두 번 보이고, 이미
+		// 실행된 툴이 두 번 실행된다.
+		for attempt := 0; attempt < retryAttempts; attempt++ {
+			if turn.err == nil || turn.started || !ai.Retryable(turn.err) {
+				break
+			}
+			if !r.waitBeforeRetry(ctx, attempt, turn.err) {
+				break
+			}
+			turn, gone = r.runTurn(ctx, provider, history)
+			if gone {
+				r.saveAssistant(turn.text.String(), nil, turn.usage, "")
+				return
 			}
 		}
+
+		text, calls, usage := turn.text, turn.calls, turn.usage
+		stopReason, streamErr := turn.stopReason, turn.err
 
 		if streamErr != nil {
 			r.saveAssistant(text.String(), calls, usage, streamErr.Error())
@@ -247,6 +233,90 @@ func (r *agentRun) run(ctx context.Context, history []ai.Message) {
 		"message": fmt.Sprintf("툴 호출이 %d회를 넘어 중단했습니다. 질문을 좁혀 다시 시도하세요", maxToolRounds),
 	})
 	r.done("max_rounds")
+}
+
+// turnResult는 프로바이더를 한 번 부른 결과다.
+type turnResult struct {
+	text  strings.Builder
+	calls []ai.ToolCall
+	usage ai.Usage
+	// stopReason은 프로바이더가 말한 종료 이유다.
+	stopReason string
+	err        error
+	// started는 이 시도에서 무엇이라도 나왔는지다. 다시 해 볼지를 이 값으로
+	// 정한다 — 글자가 이미 나간 뒤에 다시 하면 같은 말이 두 번 보인다.
+	started bool
+}
+
+// runTurn은 프로바이더를 한 번 부르고 나오는 것을 화면으로 보낸다.
+//
+// 두 번째 반환값이 true면 클라이언트가 끊긴 것이다(화면에 보낼 곳이 없다).
+//
+// 재시도가 이 함수를 다시 부르는 구조로 둔 이유: 이벤트를 받아 처리하는 코드가
+// 두 벌이 되면 그 둘은 반드시 어긋나고, 어긋난 쪽에서 빠지는 것은 대개 저장이나
+// 사용량 집계처럼 눈에 안 보이는 것이다.
+func (r *agentRun) runTurn(ctx context.Context, provider ai.Provider,
+	history []ai.Message) (turnResult, bool) {
+
+	var out turnResult
+	stream, err := provider.Stream(ctx, r.cfg, ai.Request{
+		Model: r.cfg.Model, System: r.system,
+		Messages: history, Tools: r.tools,
+	})
+	if err != nil {
+		out.err = err
+		return out, false
+	}
+
+	for ev := range stream {
+		switch ev.Type {
+		case ai.EventThinking:
+			out.started = true
+			// 생각은 저장하지 않고 화면으로만 보낸다. 이력에 쌓으면 다음 차례의
+			// 문맥을 결론이 아닌 글로 채우고, 새로고침하면 어차피 사라질 것을
+			// DB에 남기게 된다.
+			if serr := r.out.send("thinking", map[string]string{"text": ev.Text}); serr != nil {
+				return out, true
+			}
+		case ai.EventText:
+			out.started = true
+			out.text.WriteString(ev.Text)
+			if serr := r.out.send("text", map[string]string{"text": ev.Text}); serr != nil {
+				return out, true
+			}
+		case ai.EventToolCall:
+			out.started = true
+			if ev.ToolCall != nil {
+				out.calls = append(out.calls, *ev.ToolCall)
+			}
+		case ai.EventDone:
+			out.stopReason = ev.StopReason
+			if ev.Usage != nil {
+				out.usage = *ev.Usage
+			}
+		case ai.EventError:
+			out.err = ev.Err
+		}
+	}
+	return out, false
+}
+
+// retryAttempts는 한 차례에 다시 해 볼 횟수다.
+//
+// 두 번인 이유: 일시적 실패는 대개 한 번 더 하면 지나간다. 더 늘리면 상류가
+// 정말 내려간 경우에 사람을 오래 기다리게 만든다 — 그때 필요한 것은 빠른 오류다.
+const retryAttempts = 2
+
+// waitBeforeRetry는 다시 하기 전에 잠깐 쉰다. 쉬었으면 true.
+func (r *agentRun) waitBeforeRetry(ctx context.Context, attempt int, cause error) bool {
+	wait := time.Duration(attempt+1) * 700 * time.Millisecond
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(wait):
+	}
+	slog.Warn("AI 응답 재시도", "session", r.session.ID, "attempt", attempt+1, "cause", cause)
+	return true
 }
 
 // stopNotice는 끝난 이유가 사람에게 알릴 만한 것이면 그 문장이다.

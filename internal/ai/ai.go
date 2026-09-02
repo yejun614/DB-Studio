@@ -292,3 +292,19 @@ func sendEvent(ctx context.Context, out chan<- Event, ev Event) bool {
 		return false
 	}
 }
+
+// Retryable은 잠깐 뒤에 다시 해 볼 만한 오류인지다.
+//
+// 5xx와 429만 참인 이유: 4xx는 요청이 잘못된 것이라 다시 보내도 같은 답이 온다.
+// 5xx는 상류의 사정이고, 429는 "지금은 말고"라는 뜻이다.
+//
+// 이것이 필요한 이유: 툴을 여러 번 쓰는 대화는 한 차례에 프로바이더를 여러 번
+// 부른다. 그중 하나가 일시적으로 실패하면 그때까지 한 일이 다 헛일이 된다 —
+// 실제로 Ollama Cloud가 같은 요청에 절반쯤 500을 내는 것을 겪었다.
+func Retryable(err error) bool {
+	var ae *APIError
+	if errors.As(err, &ae) {
+		return ae.Status == 429 || ae.Status >= 500
+	}
+	return false
+}
