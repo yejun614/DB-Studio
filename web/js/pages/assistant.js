@@ -580,9 +580,10 @@ class ChatView {
       rows: 3,
       placeholder: '무엇을 도와드릴까요? (Enter 전송, Shift+Enter 줄바꿈)',
     });
-    this.sendBtn = h('button.btn.btn-primary', {
-      type: 'button', onclick: () => this.send(),
-    }, icon('play'), '보내기');
+    // 입력 줄은 상태에 따라 달라진다(보내기 ↔ 중단). 그 자리를 따로 들고 있으면
+     // 스트림이 시작·끝날 때 그 줄만 다시 그릴 수 있다 — 대화 전체를 다시 그리면
+     // 스크롤이 움직이고, 답변이 오는 동안 그것이 계속 일어난다.
+    this.composer = h('div.ai-composer');
 
     this.inputBox.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
@@ -631,14 +632,44 @@ class ChatView {
         ),
       );
 
-    mount(this.ui.main,
-      head,
-      this.log,
-      h('div.ai-composer', {}, this.inputBox, this.sendBtn),
-    );
+    mount(this.ui.main, head, this.log, this.composer);
 
+    this.renderComposer();
     this.renderLog();
     this.inputBox.focus();
+  }
+
+  // renderComposer는 입력 줄을 지금 상태에 맞춘다.
+  //
+  // 답변을 받는 동안 단추가 **중단**이 되는 이유: 예전에는 보내기가 회색으로
+  // 죽어 있을 뿐이어서, 잘못 물어본 것을 알아차려도 끝까지 기다리거나 창을
+  // 닫아야 했다. 툴을 쓰는 답변은 몇 분이 걸린다.
+  //
+  // 한 단추가 두 일을 하는 것이 맞는 자리다 — 글자가 바뀌는 것이 상태가 아니라
+  // **지금 할 수 있는 일**이고, 그 둘은 동시에 성립하지 않는다(보내는 중에는
+  // 보낼 수 없다).
+  renderComposer() {
+    if (!this.composer) return;
+    this.sendBtn = this.streamingNow()
+      ? h('button.btn.btn-danger', {
+        type: 'button', title: '지금까지 받은 내용은 대화에 남습니다',
+        onclick: () => this.abort(),
+      }, icon('stop'), '중단')
+      : h('button.btn.btn-primary', {
+        type: 'button', onclick: () => this.send(),
+      }, icon('play'), '보내기');
+    mount(this.composer, this.inputBox, this.sendBtn);
+  }
+
+  // abort는 받고 있는 답변을 끊는다.
+  //
+  // 서버는 상대가 사라진 것을 다음 쓰기에서 알고 그때까지의 답변을 저장한다
+  // (agentRun 의 gone 처리). 그래서 여기서는 끊기만 하면 된다 — send() 의
+  // finally 가 저장된 상태로 다시 읽어 온다.
+  abort() {
+    if (!this.controller) return;
+    this.controller.abort();
+    toast('답변을 중단했습니다. 여기까지 받은 내용은 대화에 남습니다', 'info');
   }
 
   // openSettings는 좁은 팝업에서 감춰 둔 것들을 겹쳐 보여준다.
@@ -1047,7 +1078,6 @@ class ChatView {
     }
     this.messages.push({ role: 'user', text });
     if (!overrideText) this.inputBox.value = '';
-    this.sendBtn.disabled = true;
     this.streaming = createStreamingNode();
     // 내 말을 보낸 순간은 맨 아래를 보고 싶은 것이 분명하다. 답변이 자라는
     // 동안에는 위로 올리는 순간 멈춘다(위 follow 주석).
@@ -1058,6 +1088,8 @@ class ChatView {
     const waitTimer = setTimeout(() => this.streaming?.waiting(), 1500);
 
     this.controller = new AbortController();
+    // 여기서부터 단추는 **중단**이다.
+    this.renderComposer();
     try {
       await streamAIChat(this.sessionId, text, (ev) => this.handleEvent(ev),
         this.controller.signal, replaceFrom);
@@ -1068,7 +1100,7 @@ class ChatView {
       }
     } finally {
       this.controller = null;
-      this.sendBtn.disabled = false;
+      this.renderComposer();
       // 시계를 멈춘다. 끊겼든 끝났든, 안 멈추면 화면을 떠난 뒤에도 계속 돈다.
       this.streaming?.stop();
       clearTimeout(waitTimer);

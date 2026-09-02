@@ -2764,9 +2764,24 @@ class Editor {
   // 스트리밍 중에는 패널 전체를 다시 그리지 않고 이 노드만 갱신한다 — 토큰마다
   // 재렌더하면 입력 포커스가 날아가고 스크롤이 튄다. 툴이 초안을 고치면 그 변화는
   // 방금 그 op가 브로드캐스트되어 캔버스 쪽에서 알아서 들어온다.
+  // abortAI는 받고 있는 답변을 끊는다. 서버는 상대가 사라진 것을 알고 그때까지의
+  // 답변을 저장한다(agentRun 의 gone 처리) — sendAI 의 finally 가 그것을 다시 읽는다.
+  abortAI() {
+    if (!this.controller) return;
+    this.controller.abort();
+    toast('답변을 중단했습니다. 여기까지 받은 내용은 대화에 남습니다', 'info');
+  }
+
+  // aiButtons는 보내기/중단 중 어느 쪽을 보일지 맞춘다.
+  aiButtons() {
+    if (this.aiSendBtn) this.aiSendBtn.hidden = Boolean(this.aiBusy);
+    if (this.aiStopBtn) this.aiStopBtn.hidden = !this.aiBusy;
+  }
+
   async sendAI(text, node) {
     const id = this.chatMode;
     this.aiBusy = true;
+    this.aiButtons();
     this.aiMessages.push({ role: 'user', text });
     this.controller = new AbortController();
     try {
@@ -2801,6 +2816,7 @@ class Editor {
     } finally {
       this.controller = null;
       this.aiBusy = false;
+      this.aiButtons();
       // 저장된 상태로 다시 읽는다. 스트림 중에는 툴 호출이 축약돼 있고
       // 제목도 첫 질문으로 서버에서 정해진다.
       if (this.chatMode === id) {
@@ -2879,6 +2895,16 @@ class Editor {
     }, { passive: true });
 
     const box = input({ placeholder: 'AI에게 설계를 요청하세요' });
+    // 중단 단추는 미리 만들어 두고 숨긴다.
+    //
+    // 스트리밍 중에 이 창을 다시 그릴 수 없어서다: 목록은 저장된 메시지로만
+    // 만들어지므로(aiMessages), 다시 그리면 지금 글자가 붙고 있는 말풍선이
+    // 사라진다. 그래서 단추 두 개를 두고 보이는 쪽만 바꾼다.
+    this.aiStopBtn = h('button.btn.btn-small.btn-danger', {
+      type: 'button', hidden: !this.aiBusy,
+      title: '지금까지 받은 내용은 대화에 남습니다',
+      onclick: () => this.abortAI(),
+    }, '중단');
     const send = () => {
       const text = box.value.trim();
       if (!text || this.aiBusy) return;
@@ -2904,8 +2930,10 @@ class Editor {
         ? h('p.muted.small.erd-chat-note', {}, '읽기 권한만 있어 AI도 초안을 고칠 수 없습니다')
         : null,
       log,
-      h('div.erd-chat-input', {}, box,
-        h('button.btn.btn-small.btn-primary', { type: 'button', onclick: send }, '보내기')),
+      h('div.erd-chat-input', {}, box, this.aiStopBtn,
+        this.aiSendBtn = h('button.btn.btn-small.btn-primary', {
+          type: 'button', hidden: Boolean(this.aiBusy), onclick: send,
+        }, '보내기')),
     ];
   }
 
