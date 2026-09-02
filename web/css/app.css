@@ -1854,7 +1854,14 @@ option { background: var(--surface); color: var(--text); }
   grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
   gap: 14px;
 }
-.erd-card { display: flex; flex-direction: column; gap: 10px; }
+.erd-card {
+  display: flex; flex-direction: column; gap: 10px;
+  /* .card 의 overflow-x: auto 를 되돌린다(.version-item 과 같은 이유). 이 카드에는
+   * 표가 없고, 스크롤 상자가 되면 두 가지가 어긋난다: 단추 이름 popover 가 카드
+   * 경계에서 잘리고, 그 popover 가 넘치는 것으로 세어져 카드마다 세로 스크롤바가
+   * 생긴다(가로만 auto 로 두어도 세로가 함께 auto 가 되기 때문이다). */
+  overflow: visible;
+}
 .erd-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .erd-card-title {
   font-size: 16px;
@@ -1877,13 +1884,15 @@ option { background: var(--surface); color: var(--text); }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 /* 카드 아래의 단추 줄.
  *
- * 줄바꿈을 허용하는 이유: 카드 폭은 그리드가 정하고(최소 300px), 단추는 넷이다
- * (열기·복제·설정·삭제). 한 줄로 묶어 두면 좁은 칸에서 줄이 카드보다 넓어지고,
- * 카드는 표를 위해 overflow-x: auto 라서 그 순간 **카드 안에 가로 스크롤바가**
- * 생긴다 — 단추 하나를 더한 것이 카드마다 스크롤바를 만든 이유였다. */
-/* 간격을 6px 로 줄인 이유: 가장 좁은 칸(300px)에서 네 단추가 딱 한 줄에 들어간다.
- * 8px 이면 몇 px 이 모자라 마지막 단추만 아래로 내려가 줄이 어긋나 보인다. */
-.erd-card-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; }
+ * 아이콘만 두므로 오른쪽 끝에 모아 둔다 — 왼쪽에 두면 위쪽 통계 줄과 어긋난 작은
+ * 덩어리가 카드 아래에 떠 있는 모양이 된다. 넷을 합쳐도 100px 남짓이라 좁은 칸
+ * (그리드 최소 340px)에서도 한 줄에 들어가지만, 줄바꿈은 열어 둔다. */
+.erd-card-actions {
+  display: flex; flex-wrap: wrap; gap: 2px;
+  justify-content: flex-end; margin-top: auto;
+}
+.erd-card-actions .icon-btn { border-color: var(--border-soft); }
+.erd-card-actions .icon-btn:hover { border-color: var(--border); }
 
 /* ---------- ERD: 편집기 ---------- */
 

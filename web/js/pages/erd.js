@@ -104,22 +104,31 @@ function docCard(item, reload) {
     item.activeEditors > 0
       ? h('p.erd-card-live', {}, h('span.live-dot'), `${item.activeEditors}명 편집 중`)
       : null,
+    // 단추는 아이콘만 둔다.
+    //
+    // 글자까지 넣으면 네 개가 카드 폭을 넘어 두 줄이 되고, 카드마다 그 줄이 있는지
+    // 없는지가 달라(설정·삭제는 권한이 있는 사람에게만 보인다) 카드 높이가 들쭉날쭉해진다.
+    // 이름은 손을 올리면 popover 로 뜬다(.btn-tip).
     h('div.erd-card-actions', {},
-      h('a.btn.btn-small', { href: `/erd/${encodeURIComponent(doc.id)}` },
-        icon('edit'), '열기'),
+      h('a.icon-btn.btn-tip', {
+        href: `/erd/${encodeURIComponent(doc.id)}`,
+        'data-tip': '열기', 'aria-label': `${doc.name} 열기`,
+      }, icon('edit')),
       // 복제는 **볼 수 있으면** 할 수 있다. 담기는 내용은 이미 보고 있는 것이고,
       // 만들어지는 것은 내 새 초안이다 — 원본은 건드리지 않으므로 설정·삭제와 같은
       // 문턱을 세울 이유가 없다.
-      h('button.btn.btn-small', {
-        type: 'button', onclick: () => openDuplicateDialog(doc, reload),
-      }, icon('copy'), '복제'),
+      h('button.icon-btn.btn-tip', {
+        type: 'button', 'data-tip': '복제', 'aria-label': `${doc.name} 복제`,
+        onclick: () => openDuplicateDialog(doc, reload),
+      }, icon('copy')),
       // 설정과 삭제는 되돌릴 수 없거나 남에게 영향을 준다. 대상 DB 없는 초안에서는
       // 만든 사람과 어드민만 할 수 있으므로, 할 수 없는 사람에게는 아예 보이지 않는다.
-      !item.canManage ? null : h('button.btn.btn-small', {
-        type: 'button', onclick: () => openRenameDialog(doc, reload),
-      }, icon('settings'), '설정'),
-      !item.canManage ? null : h('button.btn.btn-small.btn-danger-ghost', {
-        type: 'button',
+      !item.canManage ? null : h('button.icon-btn.btn-tip', {
+        type: 'button', 'data-tip': '문서 설정', 'aria-label': `${doc.name} 설정`,
+        onclick: () => openRenameDialog(doc, reload),
+      }, icon('settings')),
+      !item.canManage ? null : h('button.icon-btn.btn-tip.danger', {
+        type: 'button', 'data-tip': '삭제', 'aria-label': `${doc.name} 삭제`,
         onclick: async () => {
           const ok = await confirmDialog({
             title: '초안 삭제',
@@ -136,7 +145,7 @@ function docCard(item, reload) {
             toastError(err);
           }
         },
-      }, icon('trash'), '삭제'),
+      }, icon('trash')),
     ),
   );
 }
