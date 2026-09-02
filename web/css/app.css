@@ -2164,6 +2164,14 @@ option { background: var(--surface); color: var(--text); }
   fill: none; stroke: var(--text-dim); stroke-width: 1.4;
   stroke-linecap: round; pointer-events: none;
 }
+/* 고른 관계선이 붙은 표에서는 다른 선의 표식을 감춘다(erdcanvas.links).
+ *
+ * display:none 인 이유(opacity 0 이 아니라): 그림 내보내기는 계산된 색·굵기만
+ * 박아 넣고 display 는 옮기지 않는다. 그래서 화면에서는 감춰지고 내보낸 그림에는
+ * 남는다 — 표식은 표기법(내용)이고, 무엇을 고르고 있는지는 지금 이 화면의 상태다. */
+.erd-link-mark.is-muted,
+.erd-link-ring.is-muted { display: none; }
+
 /* "없을 수도 있다"의 동그라미. 속을 비우는 이유: 선이 이 자리를 지나간다.
  * 배경색으로 채우면 카드 위·캔버스 위에서 각각 다른 색이 필요하고, 그중 하나는
  * 반드시 어긋난다(도면 배경은 반투명 격자다). */

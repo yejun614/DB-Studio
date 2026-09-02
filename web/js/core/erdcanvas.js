@@ -357,6 +357,23 @@ export class ErdCanvas {
     while (layer.firstChild) layer.removeChild(layer.firstChild);
 
     const routed = this.routes(boxes, quick);
+    // 고른 관계선이 닿는 두 표.
+    //
+    // 관계가 다섯 개 붙은 표의 변에는 표식이 촘촘히 늘어선다. 그중 하나를 골라
+    // "이게 몇 대 몇인가"를 보려 할 때 나머지가 그대로 있으면, 고른 선의 것이
+    // 어느 것인지 세어 봐야 한다. 그래서 이 두 표에서는 고른 선의 표식만 남긴다.
+    //
+    // 고르기(클릭)에서만 한다. 손을 올릴 때마다 하려면 아래 레이어를 매번 다시
+    // 그려야 하는데, 표가 많은 도면에서 그것은 마우스를 움직이는 손이 뻑뻑해지는
+    // 값이다(선을 올려 그리는 일만 따로 두는 이유와 같다).
+    const focusTables = new Set();
+    if (this.selection?.kind === 'link') {
+      const sel = routed.get(this.selection.id);
+      if (sel) {
+        focusTables.add(sel.fromKey);
+        focusTables.add(sel.toKey);
+      }
+    }
     this.linkSpots = new Map();
     for (const [fkID, r] of routed) {
       const selected = this.isSelected('link', fkID);
@@ -390,14 +407,18 @@ export class ErdCanvas {
       //
       // card 가 없는 경우(표를 못 찾은 선)에는 예전 모양인 N:1 로 그린다.
       // 아무 표식도 없는 끝은 "덜 그려진 그림"으로 보인다.
-      for (const [at, side, spec] of endSpecs(r)) {
+      for (const [at, side, spec, , atKey] of endSpecs(r)) {
         const mark = endMarker(at, side, spec);
+        // 감추는 것은 **그 끝** 하나다. 고른 선과 상관없는 표에 붙은 반대쪽 끝은
+        // 그대로 둔다 — 거기서는 가릴 것도 없고, 통째로 감추면 도면의 다른
+        // 구석에서 표기가 이유 없이 사라진다.
+        const muted = !selected && focusTables.has(atKey) ? ' is-muted' : '';
         this.layers.links.appendChild(svgEl('path', {
-          class: 'erd-link-mark', 'data-fk': fkID, d: mark.d,
+          class: `erd-link-mark${muted}`, 'data-fk': fkID, d: mark.d,
         }));
         if (!mark.ring) continue;
         this.layers.links.appendChild(svgEl('circle', {
-          class: 'erd-link-ring', 'data-fk': fkID, ...mark.ring,
+          class: `erd-link-ring${muted}`, 'data-fk': fkID, ...mark.ring,
         }));
       }
       this.linkSpots.set(fkID, r);
@@ -1824,9 +1845,10 @@ function tipForTable(tbl, layout, shown, maxWidth) {
 function endSpecs(r) {
   const child = r.card?.childMark ?? { many: true, optional: true };
   const parent = r.card?.parentMark ?? { many: false, optional: false };
+  // 마지막 값은 그 끝이 붙은 표다(a는 외래키를 가진 쪽, b는 참조되는 쪽).
   return [
-    [r.a, r.sa, child, r.card?.child ?? 'N'],
-    [r.b, r.sb, parent, r.card?.parent ?? '1'],
+    [r.a, r.sa, child, r.card?.child ?? 'N', r.fromKey],
+    [r.b, r.sb, parent, r.card?.parent ?? '1', r.toKey],
   ];
 }
 
