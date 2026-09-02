@@ -1843,9 +1843,13 @@ option { background: var(--surface); color: var(--text); }
 
 /* ---------- ERD: 문서 목록 ---------- */
 
+/* 칸 최소 폭이 340px 인 이유: 카드 아래 단추가 넷이고(열기·복제·설정·삭제) 각
+ * 70px 이라, 간격까지 296px 이 필요하다. 여기에 카드 안쪽 여백 40px 을 더한 값이다.
+ * 300px 이던 때에는 마지막 단추만 아래로 내려가 줄이 어긋났다 — 단추를 하나 더한
+ * 것이 칸 폭을 다시 정하게 만든 이유다. */
 .erd-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
   gap: 14px;
 }
 .erd-card { display: flex; flex-direction: column; gap: 10px; }
@@ -1869,7 +1873,15 @@ option { background: var(--surface); color: var(--text); }
   animation: pulse 1.6s ease-in-out infinite;
 }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
-.erd-card-actions { display: flex; gap: 8px; margin-top: auto; }
+/* 카드 아래의 단추 줄.
+ *
+ * 줄바꿈을 허용하는 이유: 카드 폭은 그리드가 정하고(최소 300px), 단추는 넷이다
+ * (열기·복제·설정·삭제). 한 줄로 묶어 두면 좁은 칸에서 줄이 카드보다 넓어지고,
+ * 카드는 표를 위해 overflow-x: auto 라서 그 순간 **카드 안에 가로 스크롤바가**
+ * 생긴다 — 단추 하나를 더한 것이 카드마다 스크롤바를 만든 이유였다. */
+/* 간격을 6px 로 줄인 이유: 가장 좁은 칸(300px)에서 네 단추가 딱 한 줄에 들어간다.
+ * 8px 이면 몇 px 이 모자라 마지막 단추만 아래로 내려가 줄이 어긋나 보인다. */
+.erd-card-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; }
 
 /* ---------- ERD: 편집기 ---------- */
 
