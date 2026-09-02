@@ -47,6 +47,9 @@ const CARD_LABEL_PX = 12.5;
 // 글자 뒤에 두르는 테두리(선에 묻히지 않게). 글자와 같은 비율로 함께 커져야
 // 두께가 늘 같아 보인다.
 const CARD_LABEL_HALO = 3;
+// 휠 1px 당 확대율. exp(100 * 0.0014) ≈ 1.15 이므로 마우스 휠 한 칸(100px)은
+// 예전의 고정 1.12배와 비슷하다.
+const ZOOM_PER_PX = 0.0014;
 const HEAD_H = 34;
 // 제목 기준선. 두 줄일 때는 위로 올려 아래 줄 자리를 낸다.
 const TITLE_Y = 22;
@@ -868,8 +871,7 @@ export class ErdCanvas {
       // 화면이 움직이면 설명이 가리키던 자리도 움직인다. 제자리에 남은 설명은
       // 엉뚱한 것을 가리킨다.
       this.hideTip();
-      const p = this.toCanvas(e.clientX, e.clientY);
-      this.zoomAt(e.deltaY > 0 ? 1.12 : 0.89, p);
+      this.queueZoom(e.deltaY, e.deltaMode, e.clientX, e.clientY);
     };
     const onPointerDown = (e) => {
       // 오른쪽 버튼은 우리 것이 아니다(브라우저 메뉴). 잡으면 메뉴가 뜬 채로
@@ -1358,12 +1360,16 @@ export class ErdCanvas {
     // 지금 손에 쥔 요소는 재렌더로 버려지고, 버려진 요소를 옮기면 화면에서
     // 아무 일도 일어나지 않는다.
     this.render();
-    if (!this.canEdit) return;
     // 화면 이동 도구에서는 여기까지(고르기)만 하고 끌기는 화면 이동이다.
+    //
+    // canEdit 검사보다 **앞에** 두어야 한다. 뒤에 두었더니 고칠 수 없는 문서
+    // (읽기 전용 참여자, 발표 모드)에서 카드·메모·묶음 위를 끌면 아무 일도 일어나지
+    // 않았다 — 하필 그 화면들은 끌어서 보는 것이 유일한 조작이다.
     if (this.panDrag) {
       this.startPan(e);
       return;
     }
+    if (!this.canEdit) return;
     if (this.startMultiDrag(e)) return;
     const p = this.toCanvas(e.clientX, e.clientY);
     const el = this.svg.querySelector(`.erd-card-g[data-key="${cssEscape(key)}"]`);
@@ -1390,12 +1396,13 @@ export class ErdCanvas {
       this.opts.onSelectNote?.(note.id);
     }
     this.render();
-    if (!this.canEdit) return;
     // 크기 조절도 배치를 바꾸는 일이라 화면 이동 도구에서는 하지 않는다.
+    // (canEdit 보다 앞에 두는 이유는 onCardPointerDown 에 적어 두었다.)
     if (this.panDrag) {
       this.startPan(e);
       return;
     }
+    if (!this.canEdit) return;
     if (mode !== 'resize' && this.startMultiDrag(e)) return;
     const p = this.toCanvas(e.clientX, e.clientY);
     const el = this.svg.querySelector(`.erd-note-g[data-note="${cssEscape(note.id)}"]`);
@@ -1425,11 +1432,12 @@ export class ErdCanvas {
       this.opts.onSelectGroup?.(group.id);
     }
     this.render();
-    if (!this.canEdit) return;
+    // 화면 이동 도구가 먼저다(onCardPointerDown 의 주석 참고).
     if (this.panDrag) {
       this.startPan(e);
       return;
     }
+    if (!this.canEdit) return;
     if (mode !== 'resize' && this.startMultiDrag(e)) return;
     const p = this.toCanvas(e.clientX, e.clientY);
     const el = this.svg.querySelector(`.erd-group-g[data-group="${cssEscape(group.id)}"]`);
@@ -1653,6 +1661,34 @@ export class ErdCanvas {
 
   // zoomAt은 지정한 캔버스 좌표를 고정한 채 확대/축소한다.
   // 화면 중앙 기준으로만 확대하면 마우스가 가리키는 곳이 화면에서 벗어난다.
+  // queueZoom은 휠 한 번을 모아 두고 다음 프레임에 한 번만 적용한다.
+  //
+  // 왜 모으는가: 휠 이벤트는 화면 갱신보다 훨씬 자주 온다 — 트랙패드나 정밀 휠은
+  // 한 프레임에 대여섯 번을 보낸다. 그때마다 viewBox 를 갈면 표가 많은 도면에서
+  // 프레임마다 큰 SVG 를 몇 번씩 다시 그리게 되고, 그것이 "확대가 뚝뚝 끊긴다"로
+  // 나타난다. 한 프레임에 한 번만 그리면 같은 일을 한 번의 그리기로 끝낸다.
+  //
+  // 그리고 **휠이 굴러간 양에 비례**하게 바꾼다. 예전에는 방향만 보고 한 칸을
+  // 1.12배로 고정했는데, 트랙패드는 작은 값을 여러 번 보내므로 살짝 밀어도 크게
+  // 튀었다. 마우스 휠 한 칸(대개 100px)은 예전과 비슷한 배율이 되도록 상수를 잡았다.
+  queueZoom(deltaY, deltaMode, clientX, clientY) {
+    // 줄 단위로 오는 브라우저가 있다(deltaMode 1). 한 줄을 16px 로 본다.
+    const px = deltaMode === 1 ? deltaY * 16 : deltaY;
+    this.zoomDelta = (this.zoomDelta ?? 0) + px;
+    // 기준점은 마지막 휠 자리다. 한 프레임 안에서 손은 거의 움직이지 않는다.
+    this.zoomFocus = this.toCanvas(clientX, clientY);
+    if (this.zoomFrame) return;
+    this.zoomFrame = requestAnimationFrame(() => {
+      this.zoomFrame = 0;
+      const delta = this.zoomDelta ?? 0;
+      this.zoomDelta = 0;
+      if (!delta || !this.zoomFocus) return;
+      // 한 프레임에 너무 많이 몰리면(관성 스크롤) 한 번에 튀어 버린다. 상한을 둔다.
+      const capped = clamp(delta, -400, 400);
+      this.zoomAt(Math.exp(capped * ZOOM_PER_PX), this.zoomFocus);
+    });
+  }
+
   zoomAt(factor, focus) {
     const nw = clamp(this.view.w * factor, 200, 12000);
     const nh = this.view.h * (nw / this.view.w);
@@ -1885,11 +1921,15 @@ function tipForColumn(col, layout, label, rawType, domain, room, pk = null) {
   if (cut || logical || label.sub) rows.push(['', col.name]);
   if (logical) rows.push(['논리명', logical]);
 
-  // 타입은 늘 적는다. 도메인이 걸린 컬럼은 도면에 도메인 이름만 보이는데,
-  // 그때 실제 타입이 무엇인지가 가장 자주 궁금해지는 것이다.
+  // 도메인이 걸린 컬럼은 **두 줄로** 적는다.
+  //
+  // 도면에는 둘 중 한쪽만 보인다(도구 줄의 도메인명/실제 타입). 손을 올리는 것은
+  // 대개 감춰 둔 쪽이 궁금해서이므로, 여기서는 둘을 나란히 보여준다. 한 줄에
+  // "이메일 (varchar(320))" 로 묶었을 때는 NOT NULL 이 어디에도 없었다 — 타입
+  // 줄에만 붙는 값이라 도메인 줄에 넣을 자리가 없었다.
   const actual = col.rawType || col.type?.base || '';
-  if (domain) rows.push(['도메인', `${domain}${actual ? ` (${actual})` : ''}`]);
-  else if (actual) rows.push(['타입', actual + (col.nullable ? '' : ' NOT NULL')]);
+  if (domain) rows.push(['도메인', domain]);
+  if (actual) rows.push(['타입', actual + (col.nullable ? '' : ' NOT NULL')]);
 
   if (pk) rows.push(['기본키', `복합키의 ${pk.at}번째 (전체 ${pk.of}개)`]);
   if ((col.default ?? '') !== '') rows.push(['기본값', String(col.default)]);
