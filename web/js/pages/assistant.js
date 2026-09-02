@@ -46,6 +46,24 @@ export async function renderAssistant(outlet, params, query) {
   return mountAssistant(outlet, { sessionId: query.get('s') ?? '', nav: pageNav() });
 }
 
+// liveChats는 지금 화면에 붙어 있는 대화들이다(페이지·팝업이 함께 열릴 수 있다).
+//
+// 왜 모아 두는가: 로그아웃은 어시스턴트를 지나지 않는다 — 사이드바의 단추가 셸을
+// 통째로 내린다. 그 길에서도 "받는 중인 답변이 있다"를 알려면, 밖에서 물어볼 수
+// 있는 자리가 하나 있어야 한다.
+const liveChats = new Set();
+
+// confirmAssistantAbort는 받고 있는 답변이 있으면 물어본다.
+//
+// 답변을 받는 중이 아니면 아무것도 묻지 않고 true 다. 여러 개가 열려 있어도 한 번만
+// 묻는다 — 로그아웃하려는 사람에게 창마다 같은 질문을 하는 것은 확인이 아니라 방해다.
+export async function confirmAssistantAbort() {
+  for (const chat of liveChats) {
+    if (chat.streamingNow()) return chat.confirmAbort();
+  }
+  return true;
+}
+
 // ASSISTANT_PANEL은 떠 있는 어시스턴트 창의 이름이다. 하나만 열린다.
 export const ASSISTANT_PANEL = 'assistant';
 
@@ -177,6 +195,8 @@ export async function mountAssistant(outlet, {
   // 스트림을 끊지 않는다). (3) 새로고침·창 닫기 — beforeunload 다.
   guard?.(() => chat.confirmAbort());
   if (!panel) setLeaveGuard(() => chat.confirmAbort());
+  // 로그아웃처럼 어시스턴트를 지나지 않는 길에서도 물어볼 수 있게 등록한다.
+  liveChats.add(chat);
   const onBeforeUnload = (e) => {
     if (!chat.streamingNow()) return;
     e.preventDefault();
@@ -187,6 +207,7 @@ export async function mountAssistant(outlet, {
   window.addEventListener('beforeunload', onBeforeUnload);
 
   return () => {
+    liveChats.delete(chat);
     window.removeEventListener('beforeunload', onBeforeUnload);
     if (!panel) setLeaveGuard(null);
     chat.stop();
@@ -958,8 +979,16 @@ class ChatView {
     if (m.role === 'assistant') {
       const parts = [];
       if (m.text) parts.push(assistantBubble(m.text));
-      for (const call of m.toolCalls ?? []) {
-        parts.push(toolCallNode(call));
+      // 도구 호출은 답 아래에 접어 둔다(스트림 중과 같은 모양이다). 스트림이
+      // 끝나면 이 노드로 바뀌므로, 두 모양이 다르면 답이 끝나는 순간 화면이
+      // 달라 보인다.
+      const calls = m.toolCalls ?? [];
+      if (calls.length) {
+        parts.push(h('details.ai-tools', {},
+          h('summary', {}, icon('settings', 13),
+            h('span', {}, '도구 호출'),
+            h('span.ai-tool-count', {}, `${calls.length}개`)),
+          h('div.ai-tool-list', {}, calls.map((call) => toolCallNode(call)))));
       }
       if (m.error) {
         parts.push(h('div.notice.notice-danger', {}, icon('alert'), m.error));
@@ -1261,7 +1290,16 @@ function toLogEnd(el) {
 // 재생성하면 스크롤 위치가 튀고 긴 대화에서 눈에 보이게 느려진다.
 function createStreamingNode() {
   const bubble = h('div.ai-bubble.is-markdown.is-streaming', {}, h('span.ai-cursor', {}, '▌'));
+  // 알림·승인 대기·오류가 놓이는 자리. 이쪽은 접지 않는다 — 승인 대기를 접어 두면
+  // 사람이 눌러야 할 것이 화면에 없어진다.
   const toolBox = h('div.ai-stream-tools');
+  // 도구 호출은 접어 둔다(아래 toolFold). 답을 읽는 데 방해가 되고, 조사가 긴
+  // 대화에서는 도구 목록이 답보다 길어진다. 몇 개를 불렀는지는 접힌 채로 보인다.
+  const toolList = h('div.ai-tool-list');
+  const toolCount = h('span.ai-tool-count', {}, '0개');
+  const toolFold = h('details.ai-tools', { hidden: true },
+    h('summary', {}, icon('settings', 13), h('span', {}, '도구 호출'), toolCount),
+    toolList);
 
   // 생각 표시.
   //
@@ -1276,7 +1314,9 @@ function createStreamingNode() {
       h('span.ai-think-label', {}, '생각 중'), thinkTime),
     thinkBody);
 
-  const node = h('div.ai-msg.is-assistant', {}, thinkBox, bubble, toolBox);
+  // 순서: 생각 → 답 말풍선 → 도구(접힘) → 알림.
+  // 도구가 말풍선 **아래**인 이유: 읽는 사람이 먼저 보고 싶은 것은 답이다.
+  const node = h('div.ai-msg.is-assistant', {}, thinkBox, bubble, toolFold, toolBox);
   let text = '';
   let thinking = '';
   let frame = 0;
@@ -1313,10 +1353,15 @@ function createStreamingNode() {
       if (!thinkFrame) {
         thinkFrame = requestAnimationFrame(() => {
           thinkFrame = 0;
-          // 생각은 길다. 뒤쪽(지금 하고 있는 생각)이 보이는 것이 앞쪽보다 쓸모 있다.
+          // 생각은 길다. 뒤쪽(지금 하고 있는 생각)이 보이는 것이 앞쪽보다 쓸모 있어
+          // 뒤에서 4000자만 남긴다.
+          //
+          // 스크롤은 건드리지 않는다. 예전에는 글이 붙을 때마다 맨 아래로 내렸는데,
+          // 그러면 펼쳐서 읽는 동안 한 줄도 붙잡을 수 없다 — 읽으려고 펼친 것을
+          // 읽지 못하게 만드는 셈이다. 지금 하는 생각을 보고 싶으면 직접 내리면
+          // 되고, 그 자리는 아무도 다시 옮기지 않는다.
           thinkBody.textContent = thinking.length > 4000
             ? `…${thinking.slice(-4000)}` : thinking;
-          thinkBody.scrollTop = thinkBody.scrollHeight;
         });
       }
     },
@@ -1340,7 +1385,9 @@ function createStreamingNode() {
       settle();
       const el = toolCallNode(data, true);
       toolNodes.set(data.id, el);
-      toolBox.appendChild(el);
+      toolList.appendChild(el);
+      toolFold.hidden = false;
+      toolCount.textContent = `${toolNodes.size}개`;
     },
     setToolResult(data) {
       const el = toolNodes.get(data.id);

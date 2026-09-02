@@ -38,7 +38,9 @@ import { renderBackups } from './pages/backups.js';
 import { renderMacros, renderMacroRuns } from './pages/macros.js';
 import { renderMacroEditor } from './pages/macroeditor.js';
 import { renderTriggers } from './pages/triggers.js';
-import { renderAssistant, toggleAssistantPopup } from './pages/assistant.js';
+import {
+  renderAssistant, toggleAssistantPopup, confirmAssistantAbort,
+} from './pages/assistant.js';
 import { renderManual } from './pages/manual.js';
 import { renderAbout } from './pages/about.js';
 import { renderAudit } from './pages/audit.js';
@@ -537,6 +539,12 @@ function highlightNav() {
 }
 
 async function logout() {
+  // 받고 있는 AI 답변이 있으면 먼저 묻는다.
+  //
+  // 로그아웃은 어시스턴트를 지나지 않는다 — 사이드바 단추가 셸을 통째로 내리고,
+  // 그때 떠 있던 창도 함께 닫힌다(closeAllFloatPanels). 그래서 팝업의 X 와
+  // 화면 이동은 물어보는데 로그아웃만 조용히 답변을 끊고 있었다.
+  if (!(await confirmAssistantAbort())) return;
   try {
     await api.post('/auth/logout');
   } catch {
