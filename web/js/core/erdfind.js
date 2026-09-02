@@ -11,6 +11,8 @@
 //
 // 상한을 두는 이유: 두 글자만 쳐도 수백 줄이 나오는 도면이 있고, 그 목록은
 // 아무도 읽지 않는다. 더 좁히라는 신호가 목록 길이보다 낫다.
+import { cardHeight } from './erdcanvas.js';
+
 const MAX_HITS = 60;
 
 function norm(v) {
@@ -128,8 +130,7 @@ export function hitCenter(doc, hit) {
       .find((t) => (t.namespace ? `${t.namespace}.${t.name}` : t.name) === hit.tableKey)
       ?.columns?.length ?? 0;
     const w = box.w || 260;
-    const hgt = box.collapsed ? 38 : 30 + rows * 20 + 8;
-    return { x: box.x + w / 2, y: box.y + hgt / 2 };
+    return { x: box.x + w / 2, y: box.y + cardHeight(rows, box.collapsed) / 2 };
   }
   if (hit.kind === 'note') {
     const n = (doc.notes ?? []).find((x) => x.id === hit.key);

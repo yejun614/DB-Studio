@@ -2814,13 +2814,15 @@ tr.is-destructive td { background: hsl(var(--h-danger) / 0.08); }
 .erd-card-sub {
   font-size: 8.5px;
   fill: var(--text-mute);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* 도면 안의 글자는 고정폭(--mono)이다. 여기만 시스템 고정폭으로 남아 있어서
+     제목과 그 아래 줄의 글자 모양이 달랐다. */
+  font-family: var(--mono);
 }
 /* 컬럼 줄은 좁아 위아래로 나눌 수 없다. 물리명을 옆에 옅게 이어 붙인다. */
 .erd-col-sub {
   font-size: 8.5px;
   fill: var(--text-mute);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--mono);
 }
 /* 도구 줄의 이름 보기 고르개. 고른 것이 눌린 채로 보여야 지금 무엇을 보고 있는지 안다. */
 .erd-name-mode.is-on {

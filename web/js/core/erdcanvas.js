@@ -32,7 +32,17 @@ export const CARD_MAX_W = 720;
 const NAME_X = 26;
 const PAD_R = 10;
 const GAP = 12;
-const HEAD_H = 30;
+// 머리글 높이. 34인 이유: 논리명과 물리명을 함께 보일 때 여기에 글자 두 줄이
+// 들어간다(11.5px + 8.5px). 30에서는 아래 줄의 글자가 머리글 바닥선에 닿았다.
+//
+// 한 줄일 때도 같이 34로 둔다. 보이는 이름 설정에 따라 카드 높이가 달라지면,
+// 같은 문서를 여는 두 사람이 서로 다른 높이의 카드를 보고(설계자는 논리명,
+// 개발자는 물리명) 이름 보기를 바꾸는 순간 도면 전체가 들썩인다.
+const HEAD_H = 34;
+// 제목 기준선. 두 줄일 때는 위로 올려 아래 줄 자리를 낸다.
+const TITLE_Y = 22;
+const TITLE_Y_2 = 16;
+const SUB_Y = 27;
 const ROW_H = 20;
 const CARD_PAD = 8;
 
@@ -281,7 +291,7 @@ export class ErdCanvas {
       const rows = layout.collapsed ? 0 : (tbl.columns?.length ?? 0);
       out.set(key, {
         x: layout.x, y: layout.y, w: cardWidth(layout),
-        h: HEAD_H + rows * ROW_H + (layout.collapsed ? 0 : CARD_PAD),
+        h: cardHeight(rows, layout.collapsed),
         rows, layout, table: tbl,
       });
     }
@@ -489,16 +499,21 @@ export class ErdCanvas {
 
     // 아이콘이 지정되어 있으면 이름 왼쪽에 붙이고 제목을 그만큼 민다.
     const iconName = geom.layout.icon;
+    const { main, sub } = tableLabel(tbl, geom.layout, this.nameMode);
+    // 제목 기준선은 줄 수에 따라 다르다. 아이콘·컬럼 수·N:N 표시가 모두 이 줄에
+    // 맞춰야 한다 — 하나만 머리글 가운데에 남으면 그것만 어긋나 보인다.
+    const titleY = sub ? TITLE_Y_2 : TITLE_Y;
     let titleX = 10;
     if (iconName) {
       const mark = icon(iconName, 13);
       mark.setAttribute('x', 9);
-      mark.setAttribute('y', 9);
+      // 13px 아이콘의 가운데를 제목 기준선보다 조금 위에 둔다(글자는 기준선
+      // 위로 올라가고 아래로는 거의 내려오지 않는다).
+      mark.setAttribute('y', titleY - 9);
       mark.classList.add('erd-card-icon');
       g.appendChild(mark);
       titleX = 28;
     }
-    const { main, sub } = tableLabel(tbl, geom.layout, this.nameMode);
     // 제목 자리를 덮는 투명한 판. 글자 위에만 손을 올려야 뜨면, 짧은 이름에서는
     // 겨냥할 곳이 몇 픽셀뿐이다.
     const headHit = svgEl('rect', {
@@ -511,7 +526,7 @@ export class ErdCanvas {
     const titleMax = geom.w - titleX - PAD_R - 22;
     g.appendChild(svgEl('text', {
       class: `erd-card-name${isLogical ? ' is-logical' : ''}`,
-      x: titleX, y: sub ? 17 : 20,
+      x: titleX, y: titleY,
     }, fitText(main, titleMax, cssFont(`erd-card-name${isLogical ? ' is-logical' : ''}`))));
     // 연결 표(N:N)임을 제목 줄에 적는다.
     //
@@ -523,7 +538,7 @@ export class ErdCanvas {
     // N:N 으로 잇는다"이고, 그것은 이 표의 성질이다.
     if (isJunction(tbl)) {
       g.appendChild(svgEl('text', {
-        class: 'erd-card-nn', x: geom.w - PAD_R - 14, y: sub ? 17 : 20,
+        class: 'erd-card-nn', x: geom.w - PAD_R - 14, y: titleY,
         'text-anchor': 'end',
       }, 'N:N'));
     }
@@ -534,13 +549,13 @@ export class ErdCanvas {
     // 진짜 이름인지 알 수 없고, 긴 한국어 이름에서 물리명이 먼저 잘린다.
     if (sub) {
       g.appendChild(svgEl('text', {
-        class: 'erd-card-sub', x: titleX, y: 28,
+        class: 'erd-card-sub', x: titleX, y: SUB_Y,
       }, fitText(sub, titleMax, cssFont('erd-card-sub'))));
     }
 
     const count = tbl.columns?.length ?? 0;
     g.appendChild(svgEl('text', {
-      class: 'erd-card-count', x: geom.w - 10, y: 20, 'text-anchor': 'end',
+      class: 'erd-card-count', x: geom.w - 10, y: titleY, 'text-anchor': 'end',
     }, `${count}`));
 
     if (!geom.layout.collapsed) {
@@ -1610,6 +1625,18 @@ export const NOTE_W = 200;
 export function noteHeight(note) {
   const perLine = Math.max(8, Math.floor(((note.w || NOTE_W) - 16) / 7));
   return 16 + wrapText(note.text || '(빈 메모)', perLine).length * 16;
+}
+
+/**
+ * cardHeight는 카드 높이다.
+ *
+ * 내보내는 이유: 이 계산이 두 곳에 있었다. 찾기(erdfind)가 화면을 옮길 자리를
+ * 잡을 때 같은 식을 손으로 베껴 두었고, 접힌 카드에서는 이미 값이 달랐다(38 대
+ * 30). 머리글 높이를 바꾸는 순간 그 사본은 조용히 어긋난다.
+ */
+export function cardHeight(rows, collapsed = false) {
+  if (collapsed) return HEAD_H;
+  return HEAD_H + rows * ROW_H + CARD_PAD;
 }
 
 export function tableKey(tbl) {
