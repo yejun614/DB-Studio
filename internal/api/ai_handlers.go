@@ -41,6 +41,15 @@ func (s *Server) handleListAIProviders(c *fiber.Ctx) error {
 				"keyHint":   "Authorization: Bearer 로 전송되는 키 (로컬 LLM은 임의 값)",
 				"modelHint": "예: gpt-4o-mini, llama3.1",
 			},
+			{
+				"value": ai.Ollama, "label": "Ollama",
+				"baseHint": "로컬은 " + ai.OllamaLocalBaseURL + ", 클라우드는 " + ai.OllamaCloudBaseURL,
+				// 로컬 Ollama는 키를 쓰지 않지만, 프로바이더 저장은 키를 요구한다.
+				// 없는 것을 있는 것처럼 적어 두면 저장 단계에서 막히고 이유를 알 수 없다.
+				"keyHint": "Ollama Cloud의 API 키. 로컬은 아무 값이나 넣으면 됩니다(쓰이지 않습니다)",
+				// 컨텍스트 크기를 정할 수 있는 것이 OpenAI 호환과의 차이다.
+				"modelHint": "예: glm-5.3, gpt-oss:120b, qwen3.5:397b",
+			},
 		},
 		// 주소를 외우게 하지 않는다. 특히 Google의 호환 엔드포인트는 경로가
 		// /v1beta/openai 라서 손으로 적으면 틀리기 쉽다(그리고 틀리면 404만 보인다).
@@ -48,7 +57,8 @@ func (s *Server) handleListAIProviders(c *fiber.Ctx) error {
 		"presets": []fiber.Map{
 			{"label": "OpenAI", "provider": ai.OpenAICompatible, "baseUrl": ""},
 			{"label": "Google Gemini", "provider": ai.OpenAICompatible, "baseUrl": ai.GoogleCompatBaseURL},
-			{"label": "Ollama (로컬)", "provider": ai.OpenAICompatible, "baseUrl": "http://localhost:11434/v1"},
+			{"label": "Ollama Cloud", "provider": ai.Ollama, "baseUrl": ai.OllamaCloudBaseURL},
+			{"label": "Ollama (로컬)", "provider": ai.Ollama, "baseUrl": ai.OllamaLocalBaseURL},
 			{"label": "Anthropic", "provider": ai.Anthropic, "baseUrl": ""},
 		},
 	})
@@ -100,6 +110,8 @@ type aiProviderRequest struct {
 	Provider     string `json:"provider"`
 	BaseURL      string `json:"baseUrl"`
 	DefaultModel string `json:"defaultModel"`
+	// ContextTokens는 이 프로바이더가 한 번에 받는 토큰 수다. 0이면 모른다.
+	ContextTokens int `json:"contextTokens"`
 	// Models가 비어 있으면 모델 제한이 없다.
 	Models    []string `json:"models"`
 	APIKey    *string  `json:"apiKey"`
@@ -116,7 +128,13 @@ func (r *aiProviderRequest) validate() error {
 		return errors.New("이름이 너무 깁니다 (80자 제한)")
 	}
 	if !ai.Kind(r.Provider).Valid() {
-		return errors.New("종류는 anthropic 또는 openai여야 합니다")
+		return errors.New("종류는 anthropic, openai, ollama 중 하나여야 합니다")
+	}
+	// 컨텍스트 크기는 사람이 손으로 적는 값이라 오타가 난다. 음수와 터무니없이 큰
+	// 값을 여기서 막는다 — 틀린 값으로 예산을 계산하면 이력이 통째로 사라지거나
+	// 아무것도 걸러지지 않고, 둘 다 조용히 일어난다.
+	if r.ContextTokens < 0 || r.ContextTokens > 10_000_000 {
+		return errors.New("컨텍스트 크기가 올바르지 않습니다 (0은 '모름', 최대 10,000,000)")
 	}
 	r.BaseURL = strings.TrimSpace(r.BaseURL)
 	if err := ai.ValidateBaseURL(r.BaseURL); err != nil {
@@ -155,7 +173,8 @@ func (s *Server) handleCreateAIProvider(c *fiber.Ctx) error {
 	u := currentUser(c)
 	item, err := s.st.CreateAIProvider(c.Context(), store.SaveAIProviderParams{
 		Name: req.Name, Provider: req.Provider, BaseURL: req.BaseURL,
-		DefaultModel: req.DefaultModel, Models: req.Models, APIKey: req.APIKey,
+		DefaultModel: req.DefaultModel, ContextTokens: req.ContextTokens,
+		Models: req.Models, APIKey: req.APIKey,
 		Enabled: boolOr(req.Enabled, true), IsDefault: boolOr(req.IsDefault, false),
 		CreatedBy: u.ID,
 	})
@@ -195,7 +214,8 @@ func (s *Server) handleUpdateAIProvider(c *fiber.Ctx) error {
 	}
 	item, err := s.st.UpdateAIProvider(c.Context(), store.SaveAIProviderParams{
 		ID: id, Name: req.Name, Provider: req.Provider, BaseURL: req.BaseURL,
-		DefaultModel: req.DefaultModel, Models: req.Models, APIKey: req.APIKey,
+		DefaultModel: req.DefaultModel, ContextTokens: req.ContextTokens,
+		Models: req.Models, APIKey: req.APIKey,
 		Enabled: boolOr(req.Enabled, true), IsDefault: boolOr(req.IsDefault, false),
 	})
 	if errors.Is(err, store.ErrDuplicateName) {
@@ -281,12 +301,15 @@ func (s *Server) handleDiscoverAIModels(c *fiber.Ctx) error {
 	}
 
 	if !ai.Kind(body.Provider).Valid() {
-		return fail(c, fiber.StatusBadRequest, "bad_request", "종류는 anthropic 또는 openai여야 합니다")
+		return fail(c, fiber.StatusBadRequest, "bad_request",
+			"종류는 anthropic, openai, ollama 중 하나여야 합니다")
 	}
 	if err := ai.ValidateBaseURL(body.BaseURL); err != nil {
 		return fail(c, fiber.StatusBadRequest, "bad_request", err.Error())
 	}
-	if body.APIKey == "" {
+	// 로컬 Ollama는 키가 없다. 키를 요구하면 목록을 못 불러오고, 목록이 없으면
+	// 모델 이름을 손으로 적어야 한다 — 이름을 틀리면 그때 나오는 것은 404뿐이다.
+	if body.APIKey == "" && ai.Kind(body.Provider) != ai.Ollama {
 		return fail(c, fiber.StatusBadRequest, "bad_request", "API 키를 입력하세요")
 	}
 
@@ -311,7 +334,18 @@ func (s *Server) handleDiscoverAIModels(c *fiber.Ctx) error {
 			"detail": err.Error(),
 		})
 	}
-	return c.JSON(fiber.Map{"models": models, "supported": true})
+	// Ollama는 모델마다 컨텍스트 크기를 알려준다. 화면이 그것으로 칸을 채운다 —
+	// 사람이 모델 카드를 찾아 손으로 옮겨 적으면 틀리고, 틀린 값은 조용히 이력을
+	// 지우거나 조용히 넘치게 한다. (클라우드는 주지 않으므로 빈 지도가 온다.)
+	res := fiber.Map{"models": models, "supported": true}
+	if ai.Kind(body.Provider) == ai.Ollama {
+		if sizes, cerr := ai.OllamaModelContext(ctx, ai.Config{
+			Kind: ai.Ollama, BaseURL: body.BaseURL, APIKey: body.APIKey,
+		}); cerr == nil && len(sizes) > 0 {
+			res["contextTokens"] = sizes
+		}
+	}
+	return c.JSON(res)
 }
 
 // handleTestAIProvider는 키가 유효한지 확인하고 모델 목록을 가져온다.
@@ -703,7 +737,12 @@ func (s *Server) handleAIChat(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	history := buildHistory(stored)
+	// 이력을 얼마나 남길지는 프로바이더의 컨텍스트 크기가 정한다.
+	//
+	// 하나의 상수로 두면 어느 쪽으로든 틀린다: Claude(20만 토큰)에서는 멀쩡한
+	// 이력을 이유 없이 버리고, 로컬 Ollama(기본 4~8천 토큰)에서는 넘치는 줄도
+	// 모르고 보내 Ollama가 말없이 앞을 잘라낸다.
+	history := buildHistory(stored, historyBudget(cfg.ContextTokens))
 
 	// 대상 DB를 시스템 프롬프트에 담는다. 이름을 읽을 수 없으면(지워졌거나 권한이
 	// 사라졌으면) 그냥 붙이지 않는다 — 여기서 실패시키면 대화 전체가 막힌다.

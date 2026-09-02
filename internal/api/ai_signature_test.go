@@ -45,7 +45,7 @@ func TestToolCallSignatureSurvivesHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list messages: %v", err)
 	}
-	history := buildHistory(stored)
+	history := buildHistory(stored, 0)
 
 	var found *ai.ToolCall
 	for i := range history {

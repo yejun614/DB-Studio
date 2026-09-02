@@ -504,7 +504,7 @@ func truncateForUI(s string, max int) string {
 //
 // 오류로 끝난 assistant 메시지를 건너뛰는 이유: 실패한 턴을 다시 보내면 모델이
 // 그 실패를 사실로 받아들여 같은 실수를 반복한다.
-func buildHistory(messages []*store.AIMessage) []ai.Message {
+func buildHistory(messages []*store.AIMessage, budget int) []ai.Message {
 	out := make([]ai.Message, 0, len(messages))
 	for _, m := range messages {
 		switch m.Role {
@@ -524,7 +524,7 @@ func buildHistory(messages []*store.AIMessage) []ai.Message {
 			out = append(out, ai.Message{Role: ai.RoleTool, ToolResults: m.ToolResults})
 		}
 	}
-	return trimHistory(pairToolCalls(out))
+	return trimHistory(pairToolCalls(out), budget)
 }
 
 // pairToolCalls는 짝이 맞지 않는 툴 호출과 결과를 걷어낸다.
@@ -578,23 +578,58 @@ func pairToolCalls(msgs []ai.Message) []ai.Message {
 	return out
 }
 
-// maxHistoryChars는 이력에 넣을 문자 수 상한이다.
+// defaultHistoryChars는 컨텍스트 크기를 모를 때 쓰는 상한이다.
 //
-// 토큰 수를 정확히 세지 않고 문자 수로 자르는 이유: 정확한 토큰 계산은 모델별
-// 토크나이저가 필요하고, 프로바이더가 여러 개면 그것을 모두 맞출 수 없다.
-// 문자 수는 보수적인 근사치이고, 넘치면 프로바이더가 오류로 알려준다.
-const maxHistoryChars = 120_000
+// 예전에는 이 값 하나가 모든 프로바이더에 쓰였다. 그때의 근거는 "넘치면
+// 프로바이더가 오류로 알려준다"였는데, **Ollama에서는 그 가정이 틀렸다.**
+// Ollama는 컨텍스트를 넘는 프롬프트를 오류 없이 앞에서 잘라낸다 — 시스템
+// 프롬프트가 먼저 사라지고, 모델은 자기가 무엇을 하던 중인지 모르는 채로 답한다.
+// 그래서 크기를 아는 프로바이더에서는 그 값으로 예산을 잡는다(historyBudget).
+const defaultHistoryChars = 120_000
+
+// charsPerToken은 문자 수를 토큰 수로 어림하는 비율이다.
+//
+// 보수적으로 잡는 이유: 넘치면 조용히 잘라내는 프로바이더가 있으니, 적게 잡아
+// 남기는 쪽의 손해가 훨씬 작다. 한국어는 한 글자가 대략 1~2토큰이고 영문·JSON은
+// 한 토큰이 3~4자다. 툴 결과는 영문 키와 한국어 값이 섞이므로 그 사이를 잡는다.
+const charsPerToken = 2
+
+// historyShare는 컨텍스트에서 대화 이력에 내주는 몫이다.
+//
+// 나머지는 시스템 프롬프트, 툴 정의(수십 개라 작지 않다), 그리고 모델이 쓸 답이
+// 가져간다. 생각이 긴 모델은 답 몫을 더 쓴다.
+const historyShare = 0.6
+
+// historyBudget은 이 컨텍스트 크기에서 이력에 허용할 문자 수다.
+//
+// 0(모름)이면 예전 기본값을 그대로 쓴다. 이미 돌고 있는 설치가 이 계산이 생겼다는
+// 이유로 갑자기 이력을 더 버리면 안 된다.
+func historyBudget(contextTokens int) int {
+	if contextTokens <= 0 {
+		return defaultHistoryChars
+	}
+	n := int(float64(contextTokens) * charsPerToken * historyShare)
+	// 너무 작으면 직전 질문 하나도 못 넣는다. 그럴 바에는 넣고 프로바이더의
+	// 판단에 맡긴다 — 적어도 그쪽은 오류로 알려주기라도 한다.
+	if n < 4_000 {
+		return 4_000
+	}
+	return n
+}
 
 // trimHistory는 오래된 메시지를 잘라낸다.
 //
 // 앞에서 자르는 이유: 최근 대화가 현재 질문과 관련이 깊고, 툴 결과는 특히 최근 것이
 // 유효하다(지표·로그는 시간이 지나면 의미가 없다).
-func trimHistory(messages []ai.Message) []ai.Message {
+func trimHistory(messages []ai.Message, budget int) []ai.Message {
+	if budget <= 0 {
+		budget = defaultHistoryChars
+	}
 	total := 0
 	for _, m := range messages {
 		total += messageSize(m)
 	}
-	if total <= maxHistoryChars {
+	if total <= budget {
 		return messages
 	}
 	// 뒤에서부터 담다가 상한에 닿으면 멈춘다.
@@ -602,7 +637,7 @@ func trimHistory(messages []ai.Message) []ai.Message {
 	size := 0
 	for i := len(messages) - 1; i >= 0; i-- {
 		s := messageSize(messages[i])
-		if size+s > maxHistoryChars && len(kept) > 0 {
+		if size+s > budget && len(kept) > 0 {
 			break
 		}
 		kept = append([]ai.Message{messages[i]}, kept...)
@@ -665,7 +700,7 @@ func (s *Server) providerConfig(ctx context.Context, sess *store.AISession) (ai.
 	}
 	return ai.Config{
 		Kind: ai.Kind(p.Provider), BaseURL: p.BaseURL,
-		APIKey: p.APIKey, Model: model,
+		APIKey: p.APIKey, Model: model, ContextTokens: p.ContextTokens,
 	}, p, nil
 }
 

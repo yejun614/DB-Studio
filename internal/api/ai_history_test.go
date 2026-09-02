@@ -24,7 +24,7 @@ func TestBuildHistoryDropsOrphanToolResults(t *testing.T) {
 			{CallID: "고아", Content: "결과"},
 		}},
 		{Role: string(ai.RoleUser), Text: "다시 질문"},
-	})
+	}, 0)
 
 	for _, m := range history {
 		if len(m.ToolResults) > 0 {
@@ -45,7 +45,7 @@ func TestBuildHistoryDropsUnansweredToolCalls(t *testing.T) {
 		}},
 		// c2의 결과가 저장되지 못했다.
 		{Role: string(ai.RoleTool), ToolResults: []ai.ToolResult{{CallID: "c1", Content: "[]"}}},
-	})
+	}, 0)
 
 	var calls []ai.ToolCall
 	for _, m := range history {
@@ -69,7 +69,7 @@ func TestBuildHistoryKeepsPairedCalls(t *testing.T) {
 		}},
 		{Role: string(ai.RoleTool), ToolResults: []ai.ToolResult{{CallID: "c1", Content: "ok"}}},
 		{Role: string(ai.RoleAssistant), Text: "끝났습니다"},
-	})
+	}, 0)
 	if len(history) != 4 {
 		t.Fatalf("메시지 수 = %d, want 4: %+v", len(history), history)
 	}
