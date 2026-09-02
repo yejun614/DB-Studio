@@ -186,6 +186,52 @@ func aiTools() map[string]*aiTool {
 			Run:         toolListERDDocuments,
 		},
 		{
+			Name: "search_glossary",
+			Description: "프로젝트의 용어 사전을 찾는다. 팀이 정해 둔 '이 말은 이 물리명으로 쓴다'는 " +
+				"약속이다. 테이블·컬럼 이름을 지을 때 먼저 부른다 — 이미 정해 둔 이름이 있으면 " +
+				"그것을 써야 하고, 없으면 새로 짓고 사전에도 올려야 한다. " +
+				"쓰이고 있는 분류 목록도 함께 반환한다.",
+			Schema: objectSchema(map[string]any{
+				"project": str("프로젝트 이름 (생략하면 참여 중인 프로젝트가 하나일 때만 그것)"),
+				"q":       str("용어·물리명·설명에서 찾을 말 (생략하면 전체)"),
+				"limit":   num("최대 개수 (기본 50)"),
+			}),
+			Run: toolSearchGlossary,
+		},
+		{
+			Name: "add_glossary_term",
+			Description: "용어 사전에 한 줄을 더한다. 설계하면서 새로 정한 이름을 사전에 남길 때 쓴다. " +
+				"이미 있는 용어면 거절하고 알려준다 — 같은 말이 두 줄이면 사전이 답을 두 개 준다. " +
+				"분류(대/중/소)는 선택이고, 있는 분류를 쓰려면 search_glossary 로 먼저 확인한다.",
+			Schema: objectSchema(map[string]any{
+				"project":  str("프로젝트 이름 (생략하면 참여 중인 프로젝트가 하나일 때만 그것)"),
+				"term":     str("용어 (예: 주문)"),
+				"physical": str("물리명 (예: order)"),
+				"note":     str("설명 (선택)"),
+				"cat1":     str("대분류 (선택)"),
+				"cat2":     str("중분류 (선택)"),
+				"cat3":     str("소분류 (선택)"),
+			}, "term", "physical"),
+			Run: toolAddGlossaryTerm,
+		},
+		{
+			Name: "update_glossary_term",
+			Description: "사전의 한 줄을 고친다. 보낸 것만 바뀐다 — 안 보낸 칸은 그대로 둔다. " +
+				"지우는 툴은 없다: 사전은 여러 사람이 함께 쓰는 것이라 지우는 일은 화면에서 사람이 한다.",
+			Schema: objectSchema(map[string]any{
+				"project":  str("프로젝트 이름 (생략하면 참여 중인 프로젝트가 하나일 때만 그것)"),
+				"term":     str("고칠 용어 (id 를 주면 생략 가능)"),
+				"id":       str("고칠 용어의 id (선택)"),
+				"newTerm":  str("새 용어 (선택)"),
+				"physical": str("새 물리명 (선택)"),
+				"note":     str("새 설명 (선택)"),
+				"cat1":     str("대분류 (선택)"),
+				"cat2":     str("중분류 (선택)"),
+				"cat3":     str("소분류 (선택)"),
+			}),
+			Run: toolUpdateGlossaryTerm,
+		},
+		{
 			Name:        "get_erd_document",
 			Description: "ERD 초안의 스키마(테이블·컬럼·관계)와 대상 DB와의 차이를 반환한다.",
 			Schema: objectSchema(map[string]any{
