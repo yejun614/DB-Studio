@@ -1218,6 +1218,10 @@ function providerList(res, canManage, reload) {
         ),
         h('dl.mig-meta', {},
           h('div.meta-row', {}, h('dt', {}, '기본 모델'), h('dd', {}, p.defaultModel || '—')),
+          h('div.meta-row', {}, h('dt', {}, '컨텍스트'),
+            h('dd', {}, p.contextTokens
+              ? `${p.contextTokens.toLocaleString('ko-KR')} 토큰`
+              : '모름 (기본값 사용)')),
           h('div.meta-row', {}, h('dt', {}, '허용 모델'),
             h('dd', {}, (p.models ?? []).length === 0
               ? h('span.muted', {}, '제한 없음')
@@ -1326,6 +1330,29 @@ function openProviderForm(meta, existing, reload) {
 
   // 조작 칸은 한 번만 만든다. 목록을 다시 그릴 때마다 새로 만들면 사용자가
   // 입력하던 글자와 포커스가 사라진다 — 거르기 상자에서 특히 티가 난다.
+  // 컨텍스트 크기.
+  //
+  // 이 값이 왜 필요한가: 대화 이력을 얼마나 남길지가 여기서 정해진다. 하나의
+  // 상수로 두면 어느 쪽으로든 틀린다 — Claude(20만 토큰)에서는 멀쩡한 이력을
+  // 이유 없이 버리고, 로컬 Ollama(기본 4~8천 토큰)에서는 넘치는 줄도 모르고
+  // 보낸다. Ollama는 넘치면 오류를 내지 않고 **앞을 말없이 잘라낸다.**
+  const ctxInput = input({
+    type: 'number', min: '0', step: '1024',
+    value: existing?.contextTokens ? String(existing.contextTokens) : '',
+    placeholder: '모르면 비워 두세요',
+  });
+  const ctxNote = h('span.field-help');
+  // 모델별 컨텍스트 크기(Ollama가 알려준다). 모델을 고르면 이것으로 칸을 채운다.
+  let ctxByModel = {};
+
+  const fillContext = (model) => {
+    const known = ctxByModel[model];
+    if (!known) return false;
+    ctxInput.value = String(known);
+    mount(ctxNote, `${model} 의 컨텍스트 ${known.toLocaleString('ko-KR')} 토큰을 넣었습니다`);
+    return true;
+  };
+
   const listBox = h('div');
   const countLine = h('p.field-help');
   const filterInput = input({ placeholder: '모델 이름으로 거르기' });
@@ -1344,7 +1371,11 @@ function openProviderForm(meta, existing, reload) {
     }
     if (!allowed.includes(defaultModel)) defaultModel = allowed[0];
     const sel = select(allowed.map((m) => ({ value: m, label: m })), { value: defaultModel });
-    sel.addEventListener('change', () => { defaultModel = sel.value; });
+    sel.addEventListener('change', () => {
+      defaultModel = sel.value;
+      // 사람이 손으로 적은 값은 덮지 않는다. 비어 있을 때만 채운다.
+      if (ctxInput.value.trim() === '') fillContext(defaultModel);
+    });
     mount(defaultModelField, sel,
       h('span.field-help', {}, '새 대화가 기본으로 쓰는 모델입니다 (대화마다 바꿀 수 있습니다)'));
   };
@@ -1425,6 +1456,10 @@ function openProviderForm(meta, existing, reload) {
         apiKey: keyInput.value.trim(),
       });
       fetched = res.models ?? [];
+      ctxByModel = res.contextTokens ?? {};
+      // 아직 아무것도 안 적었으면 기본 모델의 크기로 채워 준다. 사람이 모델
+      // 카드를 찾아 옮겨 적는 것보다 서버가 아는 값이 정확하다.
+      if (ctxInput.value.trim() === '' && defaultModel) fillContext(defaultModel);
       if (!res.supported) {
         toast('이 엔드포인트는 모델 목록을 제공하지 않습니다. 직접 입력하세요', 'error', 6000);
       } else {
@@ -1466,6 +1501,13 @@ function openProviderForm(meta, existing, reload) {
           h('span.field-help', {}, '암호화되어 저장되며 다시 표시되지 않습니다')),
         h('div.field', {}, h('span.field-label', {}, '허용 모델'), modelsBox),
         h('div.field', {}, h('span.field-label', {}, '기본 모델'), defaultModelField),
+        h('label.field', {}, h('span.field-label', {}, '컨텍스트 크기 (토큰)'), ctxInput,
+          ctxNote,
+          h('span.field-help', {},
+            '대화 이력을 얼마나 남길지 정합니다. 비워 두면 보수적인 기본값을 씁니다. '
+            + 'Ollama에서는 이 값이 num_ctx로 그대로 전달됩니다 — '
+            + 'Ollama는 넘치는 프롬프트를 오류 없이 앞에서 잘라내므로, '
+            + '모델의 실제 크기를 적어 두는 편이 안전합니다.')),
         h('label.checkbox', {}, enabledBox, h('span', {}, '활성')),
         h('label.checkbox', {}, defaultBox, h('span', {}, '새 대화의 기본 프로바이더로 사용')),
       ];
@@ -1483,6 +1525,7 @@ function openProviderForm(meta, existing, reload) {
           const payload = {
             name: nameInput.value, provider: kindSelect.value,
             baseUrl: baseInput.value, defaultModel: defaultModel,
+            contextTokens: Number(ctxInput.value.trim()) || 0,
             models: allowed,
             enabled: enabledBox.checked, isDefault: defaultBox.checked,
           };
