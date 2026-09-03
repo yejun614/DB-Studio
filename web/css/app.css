@@ -2334,6 +2334,16 @@ option { background: var(--surface); color: var(--text); }
    VARCHAR 옆의 "이메일"이 그 DB의 타입 이름처럼 읽힌다. */
 .erd-col-type.is-domain { fill: var(--accent); font-family: var(--sans); }
 
+/* 고른 관계선이 쓰는 컬럼. 두 카드에서 각각 칠해, 무엇과 무엇이 이어져 있는지를
+ * 도면에서 바로 읽게 한다.
+ *
+ * 굵기·크기는 건드리지 않는다. 카드의 글자는 남는 폭을 재서 잘라 넣는데(fitText),
+ * 그 계산은 클래스로 정한 글꼴로 한다 — 강조하면서 굵게 만들면 이미 재어 둔 글자가
+ * 자기 자리를 넘어 타입 위로 올라탄다. */
+.erd-col-hot { fill: hsl(var(--h-primary) / 0.16); }
+.erd-col.is-linked { fill: var(--text); }
+.erd-col-type.is-linked { fill: var(--text-dim); }
+
 .erd-card-icon { color: var(--text-dim); }
 /* 컬럼 아이콘. 이름보다 옅게 두어 표식으로 읽히게 한다 — 같은 굵기면 줄마다
  * 아이콘이 먼저 눈에 들어와 이름을 훑기 어려워진다. 키만 색으로 구분한다. */

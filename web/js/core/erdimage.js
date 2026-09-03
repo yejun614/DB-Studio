@@ -46,6 +46,9 @@ const CHROME_ONLY = [
   'erd-link-temp',
   // 다른 참여자가 고르고 있다는 표시와 커서, 빈 화면 안내문.
   'erd-card-holder', 'erd-cursor', 'erd-hint',
+  // 고른 관계선의 컬럼을 칠한 띠. 받은 사람에게는 "이 두 줄은 왜 칠해져 있나"가
+  // 되고, 답은 "보낸 사람이 그때 그 선을 고르고 있었다"뿐이다.
+  'erd-col-hot',
 ];
 
 // 내보낼 범위. 도면 하나를 다 담는 것만이 답이 아니다 — 표 쉰 개짜리 설계에서
@@ -214,7 +217,9 @@ function buildSVG(canvas, box, background, scope = null) {
   // 브라우저는 그리지 않으므로 사람 눈에는 아무 일도 일어나지 않는다.
   // 폭 손잡이에 손이 닿은 카드 표시도 같이 뗀다. 남으면 그 카드만 테두리 색이
   // 다른 그림이 나오고, 받은 사람에게는 "이 표는 왜 다른가"가 된다.
-  const MARKS = ['is-selected', 'is-primary', 'is-grip-hover', 'is-resizing'];
+  // is-linked 는 고른 관계선의 컬럼 글자다(erd-col-hot 과 짝이다). 띠만 떼고
+  // 글자를 두면 그 두 줄만 색이 밝은 그림이 나간다.
+  const MARKS = ['is-selected', 'is-primary', 'is-grip-hover', 'is-resizing', 'is-linked'];
   const marked = [];
   for (const el of source.querySelectorAll(MARKS.map((c) => `.${c}`).join(', '))) {
     const had = MARKS.filter((c) => el.classList.contains(c));

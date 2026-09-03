@@ -313,6 +313,9 @@ export class ErdCanvas {
     const boxes = this.boxes();
     for (const group of this.doc.groups ?? []) layers.groups.appendChild(this.groupEl(group));
     this.links(boxes);
+    // 카드를 그리기 전에 정해 둔다. 카드마다 다시 훑으면 표 쉰 개짜리 도면에서
+    // 같은 계산을 쉰 번 한다.
+    this.hotCols = this.linkedColumns();
     for (const note of this.doc.notes ?? []) layers.notes.appendChild(this.noteEl(note));
     for (const tbl of this.doc.schema?.tables ?? []) {
       const geom = boxes.get(tableKey(tbl));
@@ -326,6 +329,38 @@ export class ErdCanvas {
         class: 'erd-hint', 'text-anchor': 'middle',
       }, this.opts.emptyHint));
     }
+  }
+
+  // linkedColumns는 고른 관계선이 쓰는 컬럼들이다(표 키 → 컬럼 이름 집합).
+  //
+  // 왜 필요한가: 관계선은 카드의 **변**에 닿는다. 어느 컬럼끼리 이어져 있는지는
+  // 선만 보고 알 수 없어서, 컬럼이 스무 개인 카드에서는 인스펙터에 적힌 이름을
+  // 읽고 도면으로 눈을 옮겨 그 줄을 다시 찾아야 했다. 두 카드에서 각각 찾아야
+  // 하므로 그 일이 두 번이다.
+  //
+  // 고를 때만 한다(손을 올릴 때는 하지 않는다). 카드는 관계선보다 그리는 값이
+  // 비싸고, 마우스가 지나가기만 해도 도면 전체를 다시 그리면 손이 뻑뻑해진다.
+  linkedColumns() {
+    const out = new Map();
+    if (this.selection?.kind !== 'link') return out;
+    const add = (key, cols) => {
+      // 자기 참조(부모 아이디)면 두 집합이 한 카드에서 합쳐진다. 그것이 맞다 —
+      // 그 카드에서는 양쪽 컬럼이 모두 이 관계의 것이다.
+      const set = out.get(key) ?? new Set();
+      for (const c of cols ?? []) set.add(String(c).toLowerCase());
+      out.set(key, set);
+    };
+    for (const tbl of this.doc.schema?.tables ?? []) {
+      const fromKey = tableKey(tbl);
+      for (const fk of tbl.foreignKeys ?? []) {
+        if (`${fromKey}.${fk.name}` !== this.selection.id) continue;
+        add(fromKey, fk.columns);
+        add(refKey(tbl, fk), fk.refColumns);
+        // 외래키 이름은 한 표 안에서 유일하다. 더 볼 것이 없다.
+        return out;
+      }
+    }
+    return out;
   }
 
   // boxes는 테이블 키 → 화면 기하 정보를 만든다.
@@ -654,8 +689,18 @@ export class ErdCanvas {
 
     if (!geom.layout.collapsed) {
       const cols = tbl.columns ?? [];
+      const hotHere = this.hotCols?.get(key);
       cols.forEach((col, i) => {
         const y = HEAD_H + i * ROW_H + 14;
+        // 고른 관계선이 쓰는 컬럼이면 줄을 칠한다.
+        const hot = Boolean(hotHere?.has((col.name ?? '').toLowerCase()));
+        if (hot) {
+          // 이 줄의 글자보다 먼저 넣어야 뒤에 깔린다(같은 g 안에서는 나중에 넣은
+          // 것이 위다). 테두리(erd-card-outline)를 덮지 않게 1px 씩 들여 그린다.
+          g.appendChild(svgEl('rect', {
+            class: 'erd-col-hot', x: 1, y: y - ROW_H + 5, width: geom.w - 2, height: ROW_H,
+          }));
+        }
         // 복합 기본키에서는 몇 번째인지가 뜻을 갖는다. 열쇠 표시만으로는 (a,b)와
         // (b,a)가 카드에서 똑같이 보이는데, 그 둘은 다른 키다.
         const pkCols = tbl.primaryKey?.columns ?? [];
@@ -677,7 +722,7 @@ export class ErdCanvas {
         }
         const label = columnLabel(col, geom.layout, this.nameMode);
         const nameText = svgEl('text', {
-          class: `erd-col${isPK ? ' is-pk' : ''}`, x: NAME_X, y,
+          class: `erd-col${isPK ? ' is-pk' : ''}${hot ? ' is-linked' : ''}`, x: NAME_X, y,
         });
 
         // 자리를 나눈다: 타입이 먼저 자기 폭을 가져가고, 남는 것이 이름 몫이다.
@@ -718,7 +763,7 @@ export class ErdCanvas {
         //
         // 실제 타입과 헷갈리지 않게 다른 색으로 그린다(erd-col-domain).
         g.appendChild(svgEl('text', {
-          class: `erd-col-type${domain ? ' is-domain' : ''}`,
+          class: `erd-col-type${domain ? ' is-domain' : ''}${hot ? ' is-linked' : ''}`,
           x: geom.w - PAD_R, y, 'text-anchor': 'end',
         }, typeStr));
 
