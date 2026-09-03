@@ -669,6 +669,9 @@ func (s *Server) handleAIChat(c *fiber.Ctx) error {
 		// ReplaceFrom이 있으면 그 메시지와 그 뒤를 지우고 그 자리에서 다시 시작한다.
 		// 사람이 자기 말을 고쳐 다시 보내는 것이 그 뜻이다.
 		ReplaceFrom int64 `json:"replaceFrom"`
+		// Screen은 지금 보고 있는 화면이다(없어도 된다). 말할 때마다 오며,
+		// 이 차례의 시스템 프롬프트에만 담고 대화 이력에는 남기지 않는다.
+		Screen *screenReport `json:"screen"`
 	}
 	if err := c.BodyParser(&body); err != nil {
 		return fail(c, fiber.StatusBadRequest, "bad_request", "요청 본문을 해석할 수 없습니다")
@@ -791,6 +794,8 @@ func (s *Server) handleAIChat(c *fiber.Ctx) error {
 
 	u := currentUser(c)
 	ip := clientIP(c)
+	// 화면 보고는 여기서 글로 만들어 둔다. 스트림 라이터 안에서는 요청을 만질 수 없다.
+	screen := screenPrompt(body.Screen)
 
 	// ERD 초안에 매인 대화는 툴 상자가 다르다.
 	//
@@ -870,6 +875,9 @@ func (s *Server) handleAIChat(c *fiber.Ctx) error {
 			run.erdTools = erdTools
 			run.system = erdSystemPrompt(erdDocName, erdDialect)
 		}
+		// 보고 있는 화면은 두 종류의 대화에 똑같이 붙인다. ERD 대화에서도 사람은
+		// "이 표"라고 말하고, 그 표는 도면에서 고른 것이다.
+		run.system += screen
 		run.run(ctx, history)
 	}))
 	return nil
