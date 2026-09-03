@@ -464,9 +464,23 @@ export class ErdCanvas {
       const hit = svgEl('path', { class: 'erd-link-hit', d: r.d, 'data-fk': fkID });
       hit.addEventListener('pointerdown', (e) => {
         e.stopPropagation();
+        // 화면 이동이 먼저다(카드·메모·묶음과 같은 규칙).
+        //
+        // 관계선의 판정 폭은 눈에 보이는 선보다 넓어서, 표가 많은 도면에서는 빈
+        // 곳을 눌렀다고 생각한 자리가 선일 때가 흔하다. 그때 화면이 꼼짝하지 않으면
+        // 사람은 "패닝이 고장 났다"로 읽는다 — 실제로는 선을 고른 것이다.
+        if (this.otherButton(e)) return;
+        if (this.spaceHeld) {
+          this.startPan(e);
+          return;
+        }
         this.selection = { kind: 'link', id: fkID };
         this.opts.onSelectLink?.(fkID);
         this.render();
+        // 고르기까지는 한다. 화면 이동 도구에서도 선을 눌러 무엇인지 보는 일은
+        // 그대로여야 하고(읽기 전용 참여자와 같은 이유), 그다음에 손이 움직이면
+        // 그것은 이동이다.
+        if (this.panDrag) this.startPan(e);
       });
       // 마우스를 올린 선은 카드 위로 올린다. 카드 밑으로 들어가 사라지는 선을
       // 따라가는 방법이 "카드를 옮겨 본다"뿐이면 그건 도구가 아니다.
