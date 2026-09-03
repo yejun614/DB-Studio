@@ -5076,6 +5076,50 @@ a.stat:hover { border-color: var(--text-mute); background: hsl(var(--h-muted) / 
 .float-actions { display: flex; align-items: center; gap: 2px; flex: none; }
 .float-btn { width: 26px; height: 26px; }
 
+/* 접어 두면 창은 사라지지 않고 감춰진다(minimize). display: flex 가 [hidden] 보다
+ * 강해서, 이 규칙이 없으면 감춰 두라는 말이 아무 일도 하지 않는다. */
+.float-panel[hidden] { display: none; }
+
+/* 투명도 슬라이더. 창을 반투명하게 두고 뒤 화면과 함께 보기 위한 것이다. */
+.float-opacity-wrap {
+  display: flex; align-items: center; gap: 5px;
+  padding: 0 6px 0 4px;
+  color: var(--text-mute);
+}
+.float-opacity {
+  width: 66px; height: 4px;
+  margin: 0; padding: 0;
+  cursor: pointer;
+  accent-color: var(--primary);
+}
+/* 좁은 창에서는 슬라이더를 접는다. 단추 넷과 함께 두면 제목이 밀려 사라지고,
+ * 그때 제목은 "이 창이 무엇인가"를 말하는 유일한 글자다. */
+.float-panel.is-narrow .float-opacity { width: 44px; }
+@media (max-width: 720px) {
+  .float-opacity-wrap { display: none; }
+}
+
+/* 접어 둔 창을 대신하는 아이콘. 끌어 옮길 수 있고 누르면 창이 돌아온다.
+ *
+ * 창(90)보다 위에 둔다 — 다른 패널이 떠 있어도 이 아이콘은 눌러야 한다.
+ * 토스트(200)와 모달(100)보다는 아래다. */
+.float-dot {
+  position: fixed;
+  z-index: 95;
+  display: inline-grid; place-items: center;
+  width: 40px; height: 40px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--primary);
+  box-shadow: var(--shadow);
+  cursor: grab;
+  /* 끌기 중 글자·이미지가 선택되면 파란 덩어리가 따라다닌다. */
+  user-select: none; touch-action: none;
+}
+.float-dot:hover { border-color: hsl(var(--h-primary) / 0.5); background: var(--surface-2); }
+.float-dot.is-dragging { cursor: grabbing; box-shadow: 0 8px 24px hsl(0 0% 0% / 0.35); }
+
 .float-body { flex: 1; min-height: 0; overflow: auto; padding: 12px; }
 
 /* 크기 조절 손잡이. 모서리에 삼각형으로 그린다 — 테두리 전체를 잡게 하면
@@ -5181,7 +5225,7 @@ a.stat:hover { border-color: var(--text-mute); background: hsl(var(--h-muted) / 
 
 /* 인쇄하면 차례와 앱 껍데기는 필요 없다. */
 @media print {
-  .sidebar, .topbar, .manual-toc, .float-panel { display: none !important; }
+  .sidebar, .topbar, .manual-toc, .float-panel, .float-dot { display: none !important; }
   .manual-shell { display: block; }
   .manual-body { max-width: none; }
 }

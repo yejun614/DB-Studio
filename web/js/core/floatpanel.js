@@ -20,6 +20,17 @@ const EDGE = 8;
 const KEEP_X = 140;
 const KEEP_Y = 34;
 
+// 투명도의 하한. 0 까지 열어 두면 창을 잃어버린다 — 보이지 않는 창은 슬라이더를
+// 되돌릴 방법도 함께 사라진 창이다.
+const MIN_OPACITY = 0.3;
+
+// 최소화한 아이콘의 크기와, 끌기로 볼 판정 거리.
+//
+// 4px 를 두는 이유: 누르는 손은 조금 흔들린다. 그 흔들림을 끌기로 보면 "눌렀는데
+// 안 열린다"가 되고, 반대로 판정을 없애면 옮기려 잡은 것이 창을 열어 버린다.
+const DOT_SIZE = 40;
+const DRAG_SLOP = 4;
+
 // storageKey는 배치를 기억하는 자리다. localStorage를 쓰는 이유: 이것은 서버가
 // 알아야 할 설정이 아니라 이 브라우저에서의 배치이고, 창 크기가 기기마다 다르다.
 function geometryKey(id) {
@@ -32,6 +43,10 @@ function loadGeometry(id, fallback) {
     if (!raw) return fallback;
     const saved = JSON.parse(raw);
     if (typeof saved?.w !== 'number' || typeof saved?.h !== 'number') return fallback;
+    // 옛 기억에는 투명도가 없다. 그리고 하한 밖의 값이 남아 있으면(손으로 고친
+    // 저장소, 옛 하한) 창이 보이지 않는 채로 열린다.
+    if (typeof saved.opacity !== 'number' || !(saved.opacity > 0)) saved.opacity = 1;
+    saved.opacity = Math.min(1, Math.max(MIN_OPACITY, saved.opacity));
     return saved;
   } catch {
     // 저장소를 못 읽는 것(사생활 보호 모드 등)은 오류가 아니라 "기억이 없다"이다.
@@ -79,6 +94,9 @@ export function openFloatPanel({
     style: { left: `${geo.x}px`, top: `${geo.y}px`, width: `${geo.w}px`, height: `${geo.h}px` },
   }, head, body, h('div.float-resize', { 'aria-hidden': 'true' }));
 
+  // 접어 두었을 때의 아이콘. 접혀 있지 않으면 null 이다.
+  let dot = null;
+
   const handle = {
     panel,
     body,
@@ -91,11 +109,37 @@ export function openFloatPanel({
       mount(titleEl, text);
       panel.setAttribute('aria-label', text);
     },
+    // minimize는 창을 접어 아이콘 하나로 만든다.
+    //
+    // 창을 지우지 않고 감추기만 한다(hidden). 지우면 안에서 돌던 것(스트리밍,
+    // 스크롤 자리, 적어 두던 글)이 함께 사라지고, 그것이 최소화와 닫기를 가르는
+    // 유일한 차이다.
+    minimize() {
+      if (dot) return;
+      // 자리를 먼저 잰다. 감춘 뒤에 재면 모두 0 이 나와(감춘 요소의 사각형은
+      // 0,0,0,0 이다) 아이콘이 늘 화면 왼쪽 위 구석에 생긴다.
+      const at = panel.getBoundingClientRect();
+      panel.hidden = true;
+      dot = makeDot(at);
+      document.body.appendChild(dot);
+    },
+    restore() {
+      if (!dot) return;
+      dot.remove();
+      dot = null;
+      panel.hidden = false;
+      handle.focus();
+    },
+    get minimized() {
+      return Boolean(dot);
+    },
     // force 는 묻지 않고 닫는 길이다. 로그아웃처럼 셸을 내리는 경우에 쓴다 —
     // 세션이 이미 끝났으므로 "정말 중단할까요"는 물어볼 것이 없는 질문이다.
     async close({ force = false } = {}) {
       if (!force && beforeClose && (await beforeClose()) === false) return false;
       cleanup();
+      dot?.remove();
+      dot = null;
       panel.remove();
       open.delete(id);
       onClose?.();
@@ -110,17 +154,97 @@ export function openFloatPanel({
       onclick: () => action.onClick(handle),
     }, icon(action.icon, 14)));
   }
+
+  // 투명도 슬라이더.
+  //
+  // 이 창은 다른 화면을 보면서 쓰는 도구다. 그런데 답변이 길어지면 창도 커지고,
+  // 커진 창은 정작 물어보려던 것을 덮는다 — 옮기거나 줄이는 것이 답일 때도 있지만
+  // "지금 이 답을 보면서 뒤의 표를 함께 보고 싶다"는 그 둘로 해결되지 않는다.
+  //
+  // 손을 올려도 되돌리지 않는다. 되돌리면 슬라이더를 움직이는 동안에는 효과가
+  // 보이지 않아 "안 먹는다"로 읽히고, 반투명하게 두고 읽는 것 자체가 목적이다.
+  const opacityInput = h('input.float-opacity', {
+    type: 'range',
+    min: String(Math.round(MIN_OPACITY * 100)), max: '100', step: '5',
+    value: String(Math.round((geo.opacity ?? 1) * 100)),
+    title: '투명도', 'aria-label': '창 투명도',
+  });
+  actionBar.appendChild(h('label.float-opacity-wrap', {}, icon('eye', 13), opacityInput));
+
+  // 최소화. 창을 닫지 않고 아이콘 하나로 접어 둔다.
+  //
+  // 닫기와 다른 물건이다: 닫으면 받고 있던 답변이 끊기고(그래서 물어본다), 다시
+  // 열면 어느 대화였는지 찾아야 한다. 접어 두면 답변은 계속 오고 아이콘을 누르면
+  // 그 자리에서 이어진다 — "답이 오는 동안 뒤 화면을 보고 있겠다"가 그 뜻이다.
+  actionBar.appendChild(h('button.icon-btn.float-btn', {
+    type: 'button', title: '최소화', 'aria-label': '최소화',
+    onclick: () => handle.minimize(),
+  }, icon('minus', 14)));
+
   actionBar.appendChild(h('button.icon-btn.float-btn', {
     type: 'button', title: '닫기', 'aria-label': '닫기',
     onclick: () => handle.close(),
   }, icon('x', 14)));
+
+  // makeDot은 접어 둔 창을 대신하는 아이콘이다.
+  //
+  // 창의 **좌상단**에 만든다. 접기 전에 창이 있던 자리라, 눈이 방금 보던 곳에서
+  // 그것을 찾는다. 화면 한 구석에 고정하면 넓은 모니터에서는 아이콘을 찾는 일이
+  // 접는 일보다 오래 걸린다.
+  function makeDot(box) {
+    const el = h('button.float-dot', {
+      type: 'button',
+      title: `${titleEl.textContent} 열기`,
+      'aria-label': `${titleEl.textContent} 열기`,
+      style: {
+        left: `${Math.max(EDGE, Math.min(box.left, window.innerWidth - DOT_SIZE - EDGE))}px`,
+        top: `${Math.max(EDGE, Math.min(box.top, window.innerHeight - DOT_SIZE - EDGE))}px`,
+      },
+    }, icon(iconName, 18));
+
+    // 누르기와 끌기를 한 요소에서 나눈다. 조금이라도 움직였으면 옮긴 것으로 보고
+    // 열지 않는다 — 옮기려 잡았는데 창이 열리면 그 아이콘은 옮길 수 없는 아이콘이다.
+    el.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      const from = { px: e.clientX, py: e.clientY, x: el.offsetLeft, y: el.offsetTop };
+      let moved = false;
+      // 이미 사라진 포인터는 붙잡을 수 없다(pointercancel, 아주 짧은 터치).
+      // 붙잡지 못해도 아래 pointermove 로 따라갈 수 있으므로 예외로 멈추지 않는다.
+      try {
+        el.setPointerCapture?.(e.pointerId);
+      } catch {
+        /* 붙잡을 포인터가 없다 */
+      }
+      const move = (ev) => {
+        const dx = ev.clientX - from.px;
+        const dy = ev.clientY - from.py;
+        if (!moved && Math.abs(dx) + Math.abs(dy) < DRAG_SLOP) return;
+        moved = true;
+        el.classList.add('is-dragging');
+        el.style.left = `${Math.max(0, Math.min(from.x + dx, window.innerWidth - DOT_SIZE))}px`;
+        el.style.top = `${Math.max(0, Math.min(from.y + dy, window.innerHeight - DOT_SIZE))}px`;
+      };
+      const up = () => {
+        el.removeEventListener('pointermove', move);
+        el.removeEventListener('pointerup', up);
+        el.removeEventListener('pointercancel', up);
+        el.classList.remove('is-dragging');
+        if (!moved) handle.restore();
+      };
+      el.addEventListener('pointermove', move);
+      el.addEventListener('pointerup', up);
+      el.addEventListener('pointercancel', up);
+    });
+    return el;
+  }
 
   document.body.appendChild(panel);
   open.set(id, handle);
   handle.focus();
   panel.addEventListener('pointerdown', () => handle.focus());
 
-  const cleanup = bindGeometry(id, panel, head, geo);
+  const cleanup = bindGeometry(id, panel, head, geo, opacityInput);
   render(body, handle);
   return handle;
 }
@@ -130,11 +254,15 @@ export function openFloatPanel({
 function defaultGeometry(width, height) {
   const w = Math.min(width, window.innerWidth - 40);
   const h2 = Math.min(height, window.innerHeight - 40);
-  return { x: window.innerWidth - w - 24, y: window.innerHeight - h2 - 24, w, h: h2 };
+  return {
+    x: window.innerWidth - w - 24, y: window.innerHeight - h2 - 24, w, h: h2,
+    // 처음에는 불투명하다. 반투명한 창이 먼저 뜨면 고장으로 읽힌다.
+    opacity: 1,
+  };
 }
 
-// bindGeometry는 끌기·크기 조절·화면 크기 변화를 다룬다.
-function bindGeometry(id, panel, head, geo) {
+// bindGeometry는 끌기·크기 조절·투명도·화면 크기 변화를 다룬다.
+function bindGeometry(id, panel, head, geo, opacityInput) {
   const state = { ...geo };
 
   // 그리기와 저장을 나눈다. 끌고 있는 동안에는 화면만 따라오면 되고,
@@ -144,6 +272,7 @@ function bindGeometry(id, panel, head, geo) {
     panel.style.top = `${state.y}px`;
     panel.style.width = `${state.w}px`;
     panel.style.height = `${state.h}px`;
+    panel.style.opacity = String(state.opacity ?? 1);
   };
   const save = () => saveGeometry(id, state);
 
@@ -206,6 +335,22 @@ function bindGeometry(id, panel, head, geo) {
     target.addEventListener('pointercancel', up);
   };
 
+  // 투명도는 움직이는 동안 바로 보이고, 손을 뗄 때 저장한다(끌기와 같은 이유:
+  // 값이 바뀔 때마다 localStorage 에 쓰면 슬라이더가 뻑뻑해진다).
+  const onOpacity = () => {
+    const pct = Number(opacityInput?.value ?? 100);
+    state.opacity = Math.min(1, Math.max(MIN_OPACITY, pct / 100));
+    apply();
+  };
+  const onOpacityDone = () => save();
+  if (opacityInput) {
+    opacityInput.addEventListener('input', onOpacity);
+    opacityInput.addEventListener('change', onOpacityDone);
+    // 슬라이더를 잡는 것이 창을 옮기는 것이 되면 안 된다. 머리글 전체가 손잡이라
+    // 여기서 멈추지 않으면 값을 고르는 동작이 곧 창을 끄는 동작이 된다.
+    opacityInput.addEventListener('pointerdown', (e) => e.stopPropagation());
+  }
+
   const grip = head.querySelector('.float-grip');
   const onHeadDown = (e) => drag(e, 'move');
   const resizer = panel.querySelector('.float-resize');
@@ -227,6 +372,10 @@ function bindGeometry(id, panel, head, geo) {
 
   return () => {
     observer.disconnect();
+    if (opacityInput) {
+      opacityInput.removeEventListener('input', onOpacity);
+      opacityInput.removeEventListener('change', onOpacityDone);
+    }
     grip.removeEventListener('pointerdown', onHeadDown);
     resizer.removeEventListener('pointerdown', onResizeDown);
     window.removeEventListener('resize', onWindowResize);
