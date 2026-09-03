@@ -43,7 +43,10 @@ const systemPrompt = `당신은 DB Studio의 어시스턴트입니다. 이 앱�
   고치기 전에 erd_read_schema 로 지금 상태를 보고, 어느 초안인지 모르면
   list_erd_documents 를 먼저 부르세요(document 인자에 이름이나 ID를 넘깁니다).
   그 초안을 실제 DB에 반영하는 것은 마이그레이션이고, 그것은 여전히 승인이 필요합니다.
-  초안을 지우는 툴은 없습니다 — 삭제가 필요하면 화면에서 하도록 안내하세요.
+  **단 erd_delete_column 은 승인이 필요합니다** — 컬럼을 지우면 그 컬럼을 쓰는 기본키
+  자리·인덱스·외래키가 함께 영향받으므로, 무엇이 사라지는지 사용자가 보고 결정합니다.
+  그 툴을 부른 뒤에는 "지웠습니다"가 아니라 "승인을 요청했습니다"라고 말하세요.
+  테이블이나 초안을 지우는 툴은 없습니다 — 그때는 화면에서 하도록 안내하세요.
 - 운영(prod) 데이터베이스를 다룰 때는 위험을 먼저 설명하세요. 파괴적 변경(테이블·컬럼 삭제,
   타입 축소)은 데이터 손실을 뜻합니다.
 - 추측하지 말고 툴로 확인하세요. 커넥션 이름을 모르면 list_connections를 먼저 부르세요.
@@ -182,7 +185,11 @@ func erdSystemPrompt(docName, dialect string) string {
   참조하면 툴이 거부합니다.
 - 이것은 초안입니다. 실제 데이터베이스는 사용자가 마이그레이션을 만들어 실행할 때
   바뀌며, 그 단계는 이 대화 밖에 있습니다.
-- 지우는 툴은 제공되지 않습니다. 삭제가 필요하면 화면에서 직접 하도록 안내하세요.
+- **지우는 툴은 delete_column 하나뿐이고, 그것만 승인을 거칩니다.** 부르면 제안이
+  만들어지고 사용자가 화면에서 승인해야 실제로 지워집니다 — 그러므로 "지웠습니다"가
+  아니라 "승인을 요청했습니다"라고 말하세요. 무엇이 함께 영향받는지(기본키 자리·
+  인덱스·외래키)는 제안에 담기므로 당신이 다시 세어 적을 필요는 없습니다.
+  테이블을 지우는 툴은 없습니다. 그때는 도면에서 직접 지우도록 안내하세요.
 - 타입은 %s 문법에 맞는 것을 쓰세요.
 - 답변은 한국어로, 간결하게. 무엇을 왜 그렇게 했는지 한두 줄로 덧붙이세요 —
   이 대화는 나중에 다른 사람과 공유될 수 있습니다.`, docName, dialect, dialect)
@@ -522,7 +529,7 @@ func stopNotice(reason string) string {
 // 반환값 paused가 true면 쓰기 제안이 만들어졌다는 뜻이다.
 func (r *agentRun) executeCalls(ctx context.Context, msgID int64, calls []ai.ToolCall) ([]ai.ToolResult, bool) {
 	if r.erd != nil {
-		return r.executeERDCalls(calls), false
+		return r.executeERDCalls(ctx, msgID, calls)
 	}
 
 	results := []ai.ToolResult{}
@@ -584,10 +591,14 @@ func (r *agentRun) executeCalls(ctx context.Context, msgID int64, calls []ai.Too
 
 // executeERDCalls는 ERD 초안 편집 툴을 실행한다.
 //
-// 승인 단계가 없으므로 paused도 없다. 대신 실행 결과가 즉시 문서에 반영되고
-// 열어 둔 사람 모두의 화면에 나타난다(Hub.SubmitOp).
-func (r *agentRun) executeERDCalls(calls []ai.ToolCall) []ai.ToolResult {
+// 대개 승인이 없다: 실행 결과가 즉시 문서에 반영되고 열어 둔 사람 모두의 화면에
+// 나타난다(Hub.SubmitOp). 지우는 툴만 제안을 만들고 멈춘다(paused) — 그 이유는
+// ai_tools_erd_delete.go 에 있다.
+func (r *agentRun) executeERDCalls(ctx context.Context, msgID int64, calls []ai.ToolCall) (
+	[]ai.ToolResult, bool,
+) {
 	results := []ai.ToolResult{}
+	paused := false
 	for _, call := range calls {
 		tool := r.erdTools[call.Name]
 		_ = r.out.send("tool_call", map[string]any{
@@ -607,6 +618,20 @@ func (r *agentRun) executeERDCalls(calls []ai.ToolCall) []ai.ToolResult {
 			continue
 		}
 
+		// 승인이 필요한 툴은 여기서 멈춘다. 제안은 앱 툴 이름(erd_ 접두사)으로
+		// 저장한다 — 승인 실행은 앱 레지스트리에서 툴을 찾으므로, 이 대화의 상자
+		// (문서 하나에 매인 이름)로 저장하면 승인 버튼이 "그런 툴은 없다"로 끝난다.
+		if tool.Mutating {
+			result, perr := r.proposeERDAction(ctx, msgID, tool, call)
+			if perr != nil {
+				results = append(results, r.failCall(call, perr.Error()))
+				continue
+			}
+			paused = true
+			results = append(results, ai.ToolResult{CallID: call.ID, Content: result})
+			continue
+		}
+
 		start := time.Now()
 		content, err := tool.Run(r.erd, call.Input)
 		r.tc.audit("erd.ai.tool", "erd_document", r.erd.docID, errResult(err), map[string]any{
@@ -623,7 +648,85 @@ func (r *agentRun) executeERDCalls(calls []ai.ToolCall) []ai.ToolResult {
 			"preview": truncateForUI(content, 400),
 		})
 	}
-	return results
+	return results, paused
+}
+
+// proposeERDAction은 초안 편집 툴의 제안을 만들어 저장하고 화면에 알린다.
+//
+// 앱 툴의 proposeAction 과 다른 점 하나: 인자에 **문서 아이디를 끼워 넣는다.**
+// 이 대화의 툴은 문서가 이미 정해져 있어 모델이 document 를 보내지 않는데, 승인
+// 실행은 문서를 인자에서 찾는 앱 툴을 지난다. 끼워 넣지 않으면 승인 버튼이
+// "어느 초안을 고칠지 알려주세요"로 끝난다.
+func (r *agentRun) proposeERDAction(ctx context.Context, msgID int64, tool *erdTool,
+	call ai.ToolCall,
+) (string, error) {
+	if tool.Propose == nil {
+		return "", fmt.Errorf("%s 툴은 제안을 만들 수 없습니다", tool.Name)
+	}
+	toolCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	inner := *r.erd
+	tcCopy := *r.tc
+	tcCopy.ctx = toolCtx
+	inner.tc = &tcCopy
+
+	summary, preview, err := tool.Propose(&inner, call.Input)
+	if err != nil {
+		r.tc.audit("erd.ai.propose", "erd_document", r.erd.docID, "error", map[string]any{
+			"tool": tool.Name, "arguments": string(call.Input), "error": err.Error(),
+		})
+		return "", err
+	}
+
+	args, err := withDocumentID(call.Input, r.erd.docID)
+	if err != nil {
+		return "", err
+	}
+	previewJSON, merr := json.Marshal(preview)
+	if merr != nil {
+		previewJSON = []byte("{}")
+	}
+	action := &store.AIPendingAction{
+		SessionID: r.session.ID, MessageID: &msgID,
+		ToolCallID: call.ID, ToolName: erdToolPrefix + tool.Name,
+		Arguments: args,
+		Summary:   summary, Preview: previewJSON,
+	}
+	if err := r.srv.st.CreateAIPendingAction(r.tc.ctx, action); err != nil {
+		return "", err
+	}
+	r.tc.audit("erd.ai.propose", "erd_document", r.erd.docID, "", map[string]any{
+		"tool": tool.Name, "arguments": string(call.Input),
+		"summary": summary, "actionId": action.ID,
+	})
+	_ = r.out.send("pending_action", action)
+
+	return fmt.Sprintf("사용자 승인 대기 중입니다 (제안 ID %s): %s. "+
+		"승인 여부가 결정되면 결과가 전달됩니다. 지금은 지워지지 않았습니다.",
+		action.ID, summary), nil
+}
+
+// withDocumentID는 툴 인자에 document 를 채워 넣는다. 모델이 보낸 값이 있으면
+// 건드리지 않는다 — 이 대화의 문서와 다른 값을 보냈다면 그것은 거절되어야 하고,
+// 조용히 이 문서로 바꿔치기하면 엉뚱한 초안이 지워진다.
+func withDocumentID(args json.RawMessage, docID string) (json.RawMessage, error) {
+	var m map[string]any
+	if len(args) > 0 {
+		if err := json.Unmarshal(args, &m); err != nil {
+			return nil, fmt.Errorf("툴 인자를 해석할 수 없습니다: %w", err)
+		}
+	}
+	if m == nil {
+		m = map[string]any{}
+	}
+	if v, ok := m["document"].(string); !ok || strings.TrimSpace(v) == "" {
+		m["document"] = docID
+	}
+	out, err := json.Marshal(m)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // failCall은 툴 호출 실패를 화면과 모델에 동시에 알린다.

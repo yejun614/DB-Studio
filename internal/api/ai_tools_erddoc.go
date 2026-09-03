@@ -20,7 +20,7 @@ import (
 // 같은 문서를 열어 둔 사람들의 화면 갱신)은 한 곳에만 있어야 한다 — 두 벌이 되면
 // 그중 하나에서 검증이 빠지고, 빠진 쪽으로만 이상한 스키마가 들어온다.
 //
-// **승인 단계를 두지 않는 이유도 그대로다.** 대상이 초안이라 진짜 DB에 닿지 않고,
+// **승인 단계를 두지 않는 이유도 그대로다**(지우는 툴만 예외다). 대상이 초안이라 진짜 DB에 닿지 않고,
 // 모든 변경이 op-log에 남으며, 컬럼 다섯 개를 더하는 데 승인 다섯 번을 요구하면
 // 아무도 쓰지 않는다. 그 초안을 실제 DB에 반영하는 단계(마이그레이션)는 지금까지의
 // 관문을 그대로 지난다 — 검토자 승인, 사전 검사, 운영 DB 확인 문구.
@@ -43,20 +43,42 @@ func erdDocTools() []*aiTool {
 	out := make([]*aiTool, 0, len(names))
 	for _, name := range names {
 		t := inner[name]
-		out = append(out, &aiTool{
+		wrapped := &aiTool{
 			Name:        erdToolPrefix + t.Name,
 			Description: t.Description + " 어느 초안인지 document 로 알려준다(이름 또는 ID).",
 			Schema:      withDocumentArg(t.Schema),
-			// Mutating으로 두지 않는다(위 주석 참고). 초안은 실제 DB가 아니다.
-			Run: func(tc *toolContext, args json.RawMessage) (string, error) {
+		}
+		if t.Mutating {
+			// 승인이 필요한 툴(컬럼 삭제)은 제안과 실행으로 갈라 잇는다. 두 단계
+			// 모두 문서를 다시 찾는다 — 승인은 며칠 뒤에 눌릴 수 있고, 그 사이에
+			// 권한이 회수되거나 문서가 사라질 수 있다.
+			wrapped.Mutating = true
+			wrapped.Propose = func(tc *toolContext, args json.RawMessage) (string, any, error) {
+				ec, err := tc.openERDDoc(args)
+				if err != nil {
+					return "", nil, err
+				}
+				return t.Propose(ec, args)
+			}
+			wrapped.Apply = func(tc *toolContext, args json.RawMessage) (string, error) {
+				ec, err := tc.openERDDoc(args)
+				if err != nil {
+					return "", err
+				}
+				return t.Run(ec, args)
+			}
+		} else {
+			// 나머지는 승인 없이 바로 반영된다(위 주석 참고). 초안은 실제 DB가 아니다.
+			wrapped.Run = func(tc *toolContext, args json.RawMessage) (string, error) {
 				ec, err := tc.openERDDoc(args)
 				if err != nil {
 					return "", err
 				}
 				// 안쪽 툴은 자기 인자만 읽고 모르는 필드(document)는 지나친다.
 				return t.Run(ec, args)
-			},
-		})
+			}
+		}
+		out = append(out, wrapped)
 	}
 	return out
 }

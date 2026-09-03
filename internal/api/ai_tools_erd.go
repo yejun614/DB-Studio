@@ -30,9 +30,11 @@ import (
 //     같은 문서를 연 사람들의 화면에도 그 자리에서 나타난다.
 //  3. 컬럼 다섯 개를 더하는 데 승인 다섯 번을 요구하면 아무도 쓰지 않는다.
 //
-// 대신 **지우는 툴은 주지 않았다.** 되돌리기가 아직 없어서, 잘못 지운 테이블을
-// 복구하려면 사람이 다시 만들어야 한다. 지우는 일은 인스펙터에서 한 번 누르면 되고,
-// 그 한 번은 사람이 하는 편이 낫다.
+// **지우는 툴은 컬럼 하나뿐이고, 그것만 승인을 거친다**(ai_tools_erd_delete.go).
+// 더하기는 잘못돼도 그 자리에 남는 군더더기지만, 지우기는 그 컬럼에 딸린 것들(기본키
+// 자리·인덱스·외래키)을 함께 데려간다. 표를 지우는 툴은 여전히 없다 — 표 하나가
+// 사라지는 것은 그 표를 가리키는 모든 관계가 사라지는 일이고, 그 결정은 도면을 보면서
+// 하는 편이 낫다.
 
 // erdToolContext는 ERD 툴이 실행되는 문맥이다.
 type erdToolContext struct {
@@ -60,12 +62,20 @@ func (s *Server) erdCanEdit(ec *erdToolContext, u *model.User) bool {
 	return d.Allowed
 }
 
-// erdTool은 ERD 툴 하나다. 앱 툴과 달리 승인 경로가 없으므로 Run 하나뿐이다.
+// erdTool은 ERD 툴 하나다.
+//
+// 대개 Run 하나뿐이다(승인 없이 바로 반영된다). Mutating 인 툴만 승인을 거치며,
+// 그때 Propose 가 "무엇이 사라지는지"를 만들고 Run 이 승인 뒤의 실행이 된다 —
+// 실행 함수를 따로 두지 않는 이유는 승인 여부에 따라 하는 일이 달라져서는 안 되기
+// 때문이다. 승인 화면에 적힌 그대로가 실행돼야 한다.
 type erdTool struct {
 	Name        string
 	Description string
 	Schema      map[string]any
-	Run         func(ec *erdToolContext, args json.RawMessage) (string, error)
+	// Mutating이면 사용자 승인 뒤에 실행된다(지금은 컬럼 삭제 하나뿐이다).
+	Mutating bool
+	Propose  func(ec *erdToolContext, args json.RawMessage) (summary string, preview any, err error)
+	Run      func(ec *erdToolContext, args json.RawMessage) (string, error)
 }
 
 func erdTools() map[string]*erdTool {
@@ -260,6 +270,20 @@ func erdTools() map[string]*erdTool {
 				"unique": boolp("고유 인덱스"),
 			}, "table", "name", "columns"),
 			Run: erdAddIndex,
+		},
+		{
+			Name: "delete_column",
+			Description: "테이블에서 컬럼 하나를 지운다. **사용자 승인이 필요하다** — " +
+				"초안 편집 툴 가운데 이것만 그렇다. 지우면 그 컬럼을 쓰는 기본키 자리·인덱스·" +
+				"외래키가 함께 영향받으므로, 제안에 무엇이 함께 사라지는지 담아 사용자가 " +
+				"보고 결정한다. 부르고 나서 \"지웠습니다\"가 아니라 \"승인을 요청했습니다\"라고 말한다.",
+			Schema: objectSchema(map[string]any{
+				"table":  str("테이블 이름"),
+				"column": str("지울 컬럼 이름"),
+			}, "table", "column"),
+			Mutating: true,
+			Propose:  erdProposeDeleteColumn,
+			Run:      erdDeleteColumn,
 		},
 		{
 			Name: "duplicate_table",
