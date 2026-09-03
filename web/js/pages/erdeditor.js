@@ -4334,10 +4334,22 @@ class Editor {
       },
     });
 
-    const domainSelect = select([
-      { value: '', label: '(도메인 없이 타입 직접 지정)' },
-      ...domains.map((d) => ({ value: d.name, label: `${d.name} — ${d.type}` })),
-    ], { value: state0.domain });
+    // 도메인도 적어 걸러 고른다(타입 고르개와 같은 것).
+    //
+    // 도메인은 설계가 자라면서 늘어난다 — 서른 개가 되면 select 에서 "이메일"을
+    // 찾는 일이 스크롤로 훑는 일이 된다. 타입으로도 걸러진다(varchar 를 적으면
+    // 그 타입으로 정의된 도메인만 남는다).
+    const NO_DOMAIN = '';
+    const domainPick = searchPicker({
+      items: [
+        { value: NO_DOMAIN, label: '(도메인 없이 타입 직접 지정)' },
+        ...domains.map((d) => ({ value: d.name, label: d.name, hint: d.type })),
+      ],
+      value: state0.domain,
+      placeholder: '도메인 이름이나 타입으로 검색',
+      emptyLabel: '(도메인 없이 타입 직접 지정)',
+      onPick: () => refresh(),
+    });
 
     // 기본값을 여기서도 정한다. 타입을 고르는 순간이 기본값을 떠올리는 순간이고
     // (created_at 을 만들면서 now() 를 같이 정한다), 창을 닫고 컬럼 줄로 돌아가
@@ -4376,7 +4388,7 @@ class Editor {
     };
 
     const refresh = () => {
-      const usingDomain = Boolean(domainSelect.value);
+      const usingDomain = Boolean(domainPick.value);
       const def = state0.def;
       // 도메인을 골랐으면 타입 칸은 볼 수만 있게 둔다. 두 곳에서 타입을 정하면
       // 어느 쪽이 이겼는지 화면만 보고 알 수 없다.
@@ -4410,14 +4422,13 @@ class Editor {
       defaultWrap.style.display = usingDomain ? 'none' : '';
       defaultPick.setItems(defaultsFor(cat, state0.manual ? null : def));
 
-      const dom = domains.find((d) => d.name === domainSelect.value);
+      const dom = domains.find((d) => d.name === domainPick.value);
       mount(noteLine, usingDomain
         ? `도메인 "${dom?.name}" 의 정의를 씁니다: ${dom?.type}`
         : (def?.note ?? ''));
       preview.textContent = usingDomain ? (dom?.type ?? '') : (compose() || '(타입을 고르세요)');
     };
 
-    domainSelect.addEventListener('change', refresh);
     paramInput.addEventListener('input', () => {
       state0.arg = paramInput.value;
       refresh();
@@ -4439,7 +4450,8 @@ class Editor {
       width: 560,
       body: [
         domains.length
-          ? field('도메인', domainSelect, '도메인을 고르면 그 정의(타입·NULL 여부·기본값)를 따릅니다.')
+          ? field('도메인', domainPick.node,
+            '도메인을 고르면 그 정의(타입·NULL 여부·기본값)를 따릅니다.')
           : h('p.field-help', {}, '도메인을 만들어 두면 여기서 골라 재사용할 수 있습니다 (상단 "도메인").'),
         field('타입', typePick.node),
         paramWrap,
@@ -4461,9 +4473,9 @@ class Editor {
 
     save.addEventListener('click', () => {
       const name = typeof currentName === 'function' ? currentName() : currentName;
-      if (domainSelect.value) {
+      if (domainPick.value) {
         this.send('column.update', {
-          table: ref.serverKey, name, domain: domainSelect.value,
+          table: ref.serverKey, name, domain: domainPick.value,
         });
         close();
         return;
