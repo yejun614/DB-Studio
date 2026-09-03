@@ -3612,6 +3612,8 @@ h5.md-h, h6.md-h { font-size: 13.5px; color: var(--text-dim); }
 .ai-preview dt { font-size: 10.5px; color: var(--text-mute); text-transform: uppercase; }
 .ai-preview dd { margin: 2px 0 0; overflow-wrap: anywhere; }
 .ai-preview-sql pre { max-height: 260px; }
+/* ERD 설계 창의 승인 카드. 좁은 인스펙터에 들어가므로 카드 기본 여백을 줄인다. */
+.erd-ai-pending { margin: 8px 0 0; padding: 12px; }
 
 .ai-suggestions { display: flex; flex-direction: column; gap: 10px; }
 .ai-chips { display: flex; gap: 8px; flex-wrap: wrap; }

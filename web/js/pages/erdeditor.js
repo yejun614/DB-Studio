@@ -181,6 +181,8 @@ class Editor {
     this.aiSessions = [];
     this.aiProviders = [];
     this.aiMessages = [];
+    // 승인을 기다리는 제안(컬럼 삭제). ERD 대화에서 승인이 필요한 것은 이것뿐이다.
+    this.aiPending = [];
     this.aiBusy = false;
 
     // 선택은 종류를 함께 갖는다: {kind: 'table'|'link'|'note'|'group', id}
@@ -2944,10 +2946,12 @@ class Editor {
   async openAISession(id) {
     this.chatMode = id;
     this.aiMessages = [];
+    this.aiPending = [];
     this.renderPanel();
     try {
       const res = await api.get(`/ai/sessions/${encodeURIComponent(id)}`);
       this.aiMessages = res.messages ?? [];
+      this.aiPending = res.pendingActions ?? [];
     } catch (err) {
       toastError(err);
     }
@@ -2985,7 +2989,13 @@ class Editor {
         else if (ev.event === 'tool_call') node.addTool(ev.data);
         else if (ev.event === 'tool_result') node.setToolResult(ev.data);
         else if (ev.event === 'notice') node.addNotice(ev.data.message ?? '');
-        else if (ev.event === 'error') node.setError(ev.data.message ?? '오류가 발생했습니다');
+        else if (ev.event === 'pending_action') {
+          // 승인 카드는 말풍선 안에 그린다. 스트리밍 중에는 패널을 다시 그릴 수
+          // 없어서(위 주석) 목록으로만 넘기면 답변이 끝날 때까지 보이지 않는다 —
+          // 그동안 사람은 승인할 곳을 찾지 못한다.
+          this.aiPending = [...(this.aiPending ?? []), ev.data];
+          node.addPending(ev.data, (p, decision, btn) => this.decideAI(p, decision, btn));
+        } else if (ev.event === 'error') node.setError(ev.data.message ?? '오류가 발생했습니다');
         // 바닥에 닿아 있으면 따라가기를 다시 켠다(assistant.js 의 같은 자리 참고).
         if (this.aiFollow === false && this.aiLog
           && this.aiLog.scrollHeight - this.aiLog.scrollTop - this.aiLog.clientHeight <= 60) {
@@ -3018,11 +3028,34 @@ class Editor {
         try {
           const res = await api.get(`/ai/sessions/${encodeURIComponent(id)}`);
           this.aiMessages = res.messages ?? [];
+          this.aiPending = res.pendingActions ?? [];
           const idx = this.aiSessions.findIndex((s) => s.id === id);
           if (idx >= 0) this.aiSessions[idx] = res.session;
         } catch { /* 다시 읽기 실패는 화면에 남은 스트림으로 충분하다 */ }
         if (this.tab === 'chat') this.renderPanel();
       }
+    }
+  }
+
+  // decideAI는 승인 대기 중인 제안을 승인하거나 거부한다.
+  //
+  // 승인 뒤에 문서를 다시 읽지 않는 이유: 툴이 op 로 고치면 그 변화는 소켓으로
+  // 들어와 캔버스가 스스로 갱신한다(사람이 고칠 때와 같은 경로다).
+  async decideAI(p, decision, btn) {
+    if (btn) btn.disabled = true;
+    try {
+      await api.post(
+        `/ai/sessions/${encodeURIComponent(this.chatMode)}/actions/${encodeURIComponent(p.id)}`,
+        { decision },
+      );
+      toast(decision === 'approve' ? '승인하고 반영했습니다' : '거부했습니다',
+        decision === 'approve' ? 'success' : 'info');
+      // 상태를 다시 읽어 카드를 치운다. 남겨 두면 이미 처리된 제안에 승인 단추가
+      // 그대로 있고, 두 번째 누르기는 "이미 처리된 제안입니다"로 끝난다.
+      await this.openAISession(this.chatMode);
+    } catch (err) {
+      if (btn) btn.disabled = false;
+      toastError(err);
     }
   }
 
@@ -3073,10 +3106,17 @@ class Editor {
 
   aiChatView() {
     const sess = this.aiSessions.find((s) => s.id === this.chatMode);
+    const waiting = (this.aiPending ?? []).filter((p) => p.status === 'pending');
     const log = h('div.erd-chat-list.is-ai', {}, this.aiMessages.length === 0
       ? h('p.muted.erd-chat-empty', {},
         '테이블을 만들거나 컬럼을 고쳐 달라고 말해보세요. 변경은 초안에 바로 반영됩니다.')
-      : this.aiMessages.flatMap((m) => aiMessageNode(m, (t) => this.shareToRoom(t))));
+      : [
+        ...this.aiMessages.flatMap((m) => aiMessageNode(m, (t) => this.shareToRoom(t))),
+        // 승인을 기다리는 제안은 맨 아래에 남긴다. 답변이 끝난 뒤에도 눌러야 하고,
+        // 다른 대화를 보다 돌아왔을 때 여기 없으면 그 작업은 잊힌다.
+        ...waiting.map((p) => aiPendingNode(p,
+          (decision, btn) => this.decideAI(p, decision, btn))),
+      ]);
 
     // 위로 올리면 따라가기를 멈추고, 바닥까지 내리면 다시 켠다.
     // 방향으로 판단하는 이유는 assistant.js 의 같은 자리에 적어 두었다 — 내용이
@@ -4820,6 +4860,9 @@ function erdStreamNode() {
     addNotice(msg) {
       tools.appendChild(h('div.erd-ai-tool.is-notice', {}, msg));
     },
+    addPending(action, onDecide) {
+      el.appendChild(aiPendingNode(action, (decision, btn) => onDecide(action, decision, btn)));
+    },
     setError(msg) {
       if (frame) cancelAnimationFrame(frame);
       frame = 0;
@@ -4827,6 +4870,50 @@ function erdStreamNode() {
       el.appendChild(h('p.erd-ai-error', {}, msg));
     },
   };
+}
+
+// aiPendingNode는 승인을 기다리는 제안 카드다.
+//
+// 어시스턴트 화면의 카드(assistant.js)와 모양을 맞춘다. 같은 일을 하는 화면이 두
+// 곳에 있으면 둘이 달라 보일 이유가 없고, 승인은 되돌리기 한 번이 더 필요한 일이라
+// "여기서는 어느 단추가 승인이었지"를 다시 배우게 해서는 안 된다.
+function aiPendingNode(action, onDecide) {
+  let preview = null;
+  try {
+    preview = typeof action.preview === 'string' ? JSON.parse(action.preview) : action.preview;
+  } catch {
+    preview = null;
+  }
+  const rows = preview && typeof preview === 'object'
+    ? Object.entries(preview).filter(([, v]) => v !== null && v !== undefined && v !== '')
+    : [];
+  return h('div.card.ai-pending.erd-ai-pending', {},
+    h('div.ai-pending-head', {},
+      icon('alert'),
+      h('strong', {}, '승인이 필요한 작업'),
+      badge(action.toolName ?? '', 'accent'),
+    ),
+    h('p.ai-pending-summary', {}, action.summary ?? ''),
+    // 미리보기 표는 어시스턴트 화면과 같은 스타일을 쓴다(.ai-preview).
+    rows.length
+      ? h('dl.ai-preview', {}, rows.flatMap(([k, v]) => [
+        h('dt', {}, k),
+        h('dd', {}, Array.isArray(v) ? v.join(', ') : String(v)),
+      ]))
+      : null,
+    h('div.ai-pending-actions', {},
+      h('button.btn.btn-small.btn-danger', {
+        type: 'button',
+        onclick: (e) => onDecide('approve', e.currentTarget),
+      }, icon('check'), '승인하고 지우기'),
+      h('button.btn.btn-small', {
+        type: 'button',
+        onclick: (e) => onDecide('reject', e.currentTarget),
+      }, icon('x'), '거부'),
+    ),
+    h('p.field-help', {}, '되돌리기(편집 이력)로 되살릴 수 있지만, 무엇이 함께 '
+      + '영향받는지는 위에 적힌 것이 전부입니다.'),
+  );
 }
 
 // pairKeyOf는 두 표의 **순서 없는** 쌍을 하나의 열쇠로 만든다.
