@@ -1,4 +1,5 @@
 // History API 기반 라우터. 경로 → 렌더 함수 매핑만 담당한다.
+import { clearScreenDetail } from './screen.js';
 
 const routes = [];
 let outlet = null;
@@ -84,6 +85,9 @@ export async function render() {
   // 화면이 바뀌면 이탈 확인도 함께 풀린다. 다음 화면까지 남으면
   // 엉뚱한 곳에서 "저장하시겠습니까"가 뜬다.
   leaveGuard = null;
+  // 어시스턴트에게 알려 줄 화면 정보도 비운다. 남으면 떠난 화면의 테이블·쿼리가
+  // 다음 화면의 것으로 보고된다.
+  clearScreenDetail();
   lastPath = currentPath();
   // 이전 화면이 등록한 타이머/리스너를 해제한다.
   if (currentCleanup) {

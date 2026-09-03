@@ -8,6 +8,8 @@
 // 둔다 — 두 벌이면 서버가 이벤트를 하나 추가할 때 한쪽만 고쳐지고, 그 증상은
 // "어떤 화면에서는 툴 실행이 안 보인다"로 나타난다.
 
+import { screenContext } from './screen.js';
+
 // parseSSE는 이벤트 한 덩어리(빈 줄로 끊긴 블록)를 {event, data}로 바꾼다.
 export function parseSSE(chunk) {
   let event = '';
@@ -53,14 +55,23 @@ export async function readSSE(body, onEvent) {
 // 첫 토큰이 도착하는 순간부터 그려야 하므로 응답 본문을 직접 읽어야 한다.
 // replaceFrom이 있으면 그 메시지와 그 뒤를 지우고 그 자리에서 다시 시작한다
 // (사람이 자기 말을 고쳐 다시 보내는 경우).
+//
+// 화면 정보(core/screen.js)는 **말할 때마다** 함께 보낸다. 대화 도중에 다른 화면으로
+// 옮겨 갈 수 있으므로 세션에 한 번 저장해 두면 곧 틀린 값이 된다. 서버는 이것을
+// 그 차례의 시스템 프롬프트에만 담고 대화 이력에는 남기지 않는다.
 export async function streamAIChat(sessionId, message, onEvent, signal, replaceFrom = 0) {
+  const screen = screenContext();
   const res = await fetch(
     `/api/v1/ai/sessions/${encodeURIComponent(sessionId)}/chat`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'dbstudio' },
       credentials: 'same-origin',
-      body: JSON.stringify(replaceFrom ? { message, replaceFrom } : { message }),
+      body: JSON.stringify({
+        message,
+        ...(replaceFrom ? { replaceFrom } : {}),
+        ...(screen ? { screen } : {}),
+      }),
       signal,
     },
   );

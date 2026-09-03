@@ -13,6 +13,7 @@ import {
 } from './core/project.js';
 import { bindPalette, openPalette } from './core/palette.js';
 import { closeAllFloatPanels } from './core/floatpanel.js';
+import { setScreenNames } from './core/screen.js';
 import { renderLogin, renderPasswordChange, renderChangePasswordPage } from './pages/login.js';
 import { renderDashboard } from './pages/dashboard.js';
 import { renderUsers } from './pages/users.js';
@@ -196,6 +197,10 @@ const NAV = [
     ],
   },
 ];
+
+// 화면 이름은 메뉴에서 가져간다(어시스턴트에게 "지금 어느 화면인지"를 알려줄 때 쓴다).
+// 표를 따로 두면 메뉴 이름을 고칠 때 한쪽만 고쳐지고, 모델은 없는 화면 이름을 말한다.
+setScreenNames(NAV);
 
 // paletteButton은 명령 팔레트로 가는 눈에 보이는 입구다.
 //
