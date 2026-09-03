@@ -58,7 +58,8 @@ web/                 프론트엔드 (ES Module, 프레임워크 없음)
                      라틴 전용 고정폭에서는 한글만 대체 글꼴로 빠져 줄이 어긋난다.
                      subset(한글 2,350자 + ASCII) 두 굵기로 약 750KB (통짜는 3MB)
   js/theme-init.js   저장된 테마를 첫 페인트 전에 적용 (CSP 때문에 인라인 불가)
-  js/core/           api, dom, ui, store, router, chart, dblogo, erdsocket, theme, avatars, highlight
+  js/core/           api, dom, ui, store, router, chart, dblogo, erdsocket, theme, avatars, highlight,
+                     screen(보고 있는 화면 → AI 어시스턴트의 시스템 프롬프트)
   js/pages/          login, totp, security, dashboard, users, access, connections, schema, monitor,
                      rules, events, logs, erd, erdeditor, migrations, vcs, nosql,
                      data, sqlconsole, backups, macros, macroeditor, triggers, assistant, audit
