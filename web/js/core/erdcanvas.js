@@ -344,18 +344,38 @@ export class ErdCanvas {
     return out;
   }
 
-  // routes는 관계선의 길을 찾아 캐시한다.
+  // routes는 관계선의 길을 찾는다. **길만** 캐시한다.
   //
-  // 캐시하는 이유: 길찾기는 카드 기하만 보고 정해지는데, 다시 그리기는 고르기가
-  // 바뀔 때마다 일어난다. 카드를 건드리지도 않았는데 매번 다시 찾을 이유가 없다.
+  // 캐시하는 이유: 길찾기는 카드 기하만 보고 정해지는데(어느 변으로 나가고 어디를
+  // 돌아가는지), 다시 그리기는 고르기가 바뀔 때마다 일어난다. 카드를 건드리지도
+  // 않았는데 매번 다시 찾을 이유가 없다.
+  //
+  // 관계 목록(어떤 외래키가 있는지)과 카디널리티는 **매번 새로 만든다**. 예전에는
+  // 이 지도까지 함께 캐시했는데, 기준(sig)이 카드 기하뿐이라 외래키를 더하거나
+  // 지워도 sig 가 그대로였다 — 새 선은 새로고침해야 나타나고 지운 선은 남아 있었다.
+  // 컬럼의 NULL 여부나 UNIQUE 인덱스를 고쳤을 때 까마귀발이 옛 모양으로 남는 것도
+  // 같은 이유였다. 스키마에서 나오는 것은 캐시하지 않는 편이 낫다: 도면이 스키마와
+  // 어긋나면 그 그림은 설명하는 대상이 없는 그림이 된다.
   routes(boxes, quick = false) {
-    let sig = `${quick ? 'q' : 'f'}|${this.nameMode ?? ''}|${this.showDomain ? 'd' : 't'}`;
+    let sig = `${quick ? 'q' : 'f'}`;
     for (const [key, g] of boxes) {
       sig += `|${key}:${round1(g.x)},${round1(g.y)},${round1(g.w)},${round1(g.h)}`;
     }
-    if (this.routeCache?.sig === sig) return this.routeCache.map;
+    let cache = this.routeCache;
+    if (!cache || cache.sig !== sig) {
+      // 길잡이(makeRouter)는 카드 목록을 미리 훑어 두므로 기하가 그대로면 다시
+      // 만들지 않는다. 길은 물어볼 때마다 캐시에 쌓인다.
+      cache = { sig, find: makeRouter(boxes, { quick }), paths: new Map() };
+      this.routeCache = cache;
+    }
+    // 같은 두 표 사이의 외래키가 여럿이면 길은 하나다(선이 서로 겹친다).
+    // 그러니 쌍마다 한 번만 찾는다.
+    const pathOf = (fromKey, toKey) => {
+      const pair = `${fromKey}>${toKey}`;
+      if (!cache.paths.has(pair)) cache.paths.set(pair, cache.find(fromKey, toKey) ?? null);
+      return cache.paths.get(pair);
+    };
 
-    const route = makeRouter(boxes, { quick });
     const map = new Map();
     for (const tbl of this.doc.schema?.tables ?? []) {
       const fromKey = tableKey(tbl);
@@ -363,7 +383,7 @@ export class ErdCanvas {
       for (const fk of tbl.foreignKeys ?? []) {
         const toKey = refKey(tbl, fk);
         if (!boxes.has(toKey)) continue;
-        const r = route(fromKey, toKey);
+        const r = pathOf(fromKey, toKey);
         if (r) {
           map.set(`${fromKey}.${fk.name}`, {
             ...r, fromKey, toKey, card: cardinality(tbl, fk),
@@ -371,7 +391,6 @@ export class ErdCanvas {
         }
       }
     }
-    this.routeCache = { sig, map };
     return map;
   }
 
