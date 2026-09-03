@@ -886,17 +886,13 @@ export class ErdCanvas {
       style: note.color ? `--note-accent:${note.color}` : null,
     });
     // 크기는 사람이 정한 값이 있으면 그것을 쓰고, 없으면 글에 맞춘다.
-    // 글자 폭은 대략 7px이라, 상자 폭에서 여백을 뺀 만큼이 한 줄에 들어간다.
     const width = note.w || NOTE_W;
-    const perLine = Math.max(8, Math.floor((width - 16) / 7));
-    const lines = wrapText(note.text || '(빈 메모)', perLine);
-    const height = note.h || (16 + lines.length * 16);
+    const lines = noteLines(note.text || '(빈 메모)', width, note.h || 0);
+    const height = note.h || (NOTE_PAD * 2 + lines.length * NOTE_LINE);
     g.appendChild(svgEl('rect', {
       class: 'erd-note-bg', width, height, rx: 4,
     }));
-    lines.forEach((line, i) => {
-      g.appendChild(svgEl('text', { class: 'erd-note-text', x: 8, y: 18 + i * 16 }, line));
-    });
+    paintNoteText(g, lines);
     // 메모도 그룹처럼 손으로 크기를 정한다. 자동으로만 늘어나면 긴 메모가
     // 캔버스를 가로지르고, 그것을 줄일 방법이 없다.
     if (this.canEdit) {
@@ -1026,6 +1022,12 @@ export class ErdCanvas {
           grip.setAttribute('x', w - 12);
           grip.setAttribute('y', hh - 12);
         }
+        // 글도 지금 크기로 다시 나눈다. 손을 뗀 뒤에 나누면, 끄는 동안 사람이 보는
+        // 것은 "글이 상자를 넘은 모습"인데 정작 정하려는 것이 그 폭이다.
+        //
+        // 프레임마다 해도 값이 싸다: 상자 하나의 글자를 재는 일이고 measure 는 잰
+        // 값을 기억한다. 관계선처럼 도면 전체를 다시 찾는 일이 아니다.
+        paintNoteText(el, noteLines(this.drag.note?.text || '(빈 메모)', w, hh));
         return;
       }
       if (this.drag.mode === 'card-resize') {
@@ -1836,8 +1838,8 @@ export const NOTE_W = 200;
 
 // noteHeight는 크기를 정하지 않은 메모의 높이다(글 줄 수에 맞춘다).
 export function noteHeight(note) {
-  const perLine = Math.max(8, Math.floor(((note.w || NOTE_W) - 16) / 7));
-  return 16 + wrapText(note.text || '(빈 메모)', perLine).length * 16;
+  const lines = noteLines(note.text || '(빈 메모)', note.w || NOTE_W, 0);
+  return NOTE_PAD * 2 + lines.length * NOTE_LINE;
 }
 
 /**
@@ -1895,24 +1897,122 @@ export function truncate(text, max) {
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 }
 
-function wrapText(text, width) {
+// NOTE_PAD·NOTE_LINE은 메모 글의 여백과 줄 높이다. 상자 폭에서 몇 자가 들어가고
+// 높이에서 몇 줄이 들어가는지를 이 둘로 센다 — 그리는 자리와 재는 자리가 같은 값을
+// 써야 글이 상자 밖으로 나가지 않는다.
+const NOTE_PAD = 8;
+const NOTE_LINE = 16;
+// 사람이 크기를 정하지 않은 메모에서 보일 줄 수의 상한.
+const NOTE_AUTO_LINES = 8;
+
+// wrapNote는 메모 글을 상자 폭에 맞춰 줄로 나눈다.
+//
+// 예전에는 글자 수로 세고 낱말 단위로만 끊었다. 두 가지가 어긋났다.
+//
+//   - **띄어쓰기 없는 긴 낱말**(URL, 해시, snake_case 이름 하나)이 줄을 넘지 않고
+//     상자 밖으로 그대로 나갔다. 끊을 자리가 없으면 낱말 안에서 끊어야 한다.
+//   - 한글은 라틴 문자보다 두 배 가까이 넓어서, 같은 "글자 수"가 영문에서는 남고
+//     한국어에서는 넘쳤다. 카드 글자와 같은 자(measure)로 재면 둘 다 맞는다.
+//
+// maxLines 를 넘치면 마지막 줄에 … 를 붙인다. 조용히 버리면 적어 둔 사람은 글이
+// 사라진 줄 알고, 상자를 늘리면 나온다는 것도 알 수 없다.
+function wrapNote(text, boxWidth, maxLines) {
+  const font = cssFont('erd-note-text');
+  const room = Math.max(24, boxWidth - NOTE_PAD * 2);
+  const limit = Math.max(1, maxLines);
   const out = [];
-  for (const para of String(text).split('\n')) {
+  const fits = (t) => measure(t, font) <= room;
+
+  // breakWord는 한 낱말을 상자 폭에 맞게 조각으로 끊는다(이분 탐색).
+  const breakWord = (word) => {
+    const parts = [];
+    let rest = word;
+    while (rest && !fits(rest)) {
+      let lo = 1;
+      let hi = rest.length;
+      while (lo < hi) {
+        const mid = Math.ceil((lo + hi) / 2);
+        if (fits(rest.slice(0, mid))) lo = mid;
+        else hi = mid - 1;
+      }
+      parts.push(rest.slice(0, lo));
+      rest = rest.slice(lo);
+    }
+    if (rest) parts.push(rest);
+    return parts;
+  };
+
+  let full = false;
+  const put = (line) => {
+    out.push(line);
+    if (out.length >= limit) full = true;
+    return !full;
+  };
+
+  for (const para of String(text ?? '').split('\n')) {
+    if (full) break;
     let line = '';
     for (const word of para.split(/\s+/)) {
-      if (!line) {
-        line = word;
-      } else if ((line + ' ' + word).length <= width) {
-        line += ` ${word}`;
-      } else {
-        out.push(line);
-        line = word;
+      if (!word) continue;
+      const joined = line ? `${line} ${word}` : word;
+      if (fits(joined)) {
+        line = joined;
+        continue;
       }
-      if (out.length >= 8) return out;
+      if (line && !put(line)) {
+        line = '';
+        break;
+      }
+      // 낱말 하나가 한 줄에도 들어가지 않으면 낱말 안에서 끊는다.
+      const parts = fits(word) ? [word] : breakWord(word);
+      let stopped = false;
+      for (let i = 0; i < parts.length - 1; i += 1) {
+        if (!put(parts[i])) {
+          stopped = true;
+          break;
+        }
+      }
+      if (stopped) {
+        line = '';
+        break;
+      }
+      line = parts[parts.length - 1] ?? '';
     }
-    out.push(line);
+    if (line) put(line);
   }
-  return out.slice(0, 8);
+  // 남은 글이 있는데 자리가 없으면 마지막 줄에 그 사실을 남긴다.
+  if (full && out.length) {
+    const last = out.length - 1;
+    out[last] = fitText(`${out[last]}…`, room, font);
+  }
+  return out;
+}
+
+// noteLines는 이 메모를 지금 크기에서 어떻게 나눠 그릴지다.
+//
+// 높이가 정해진 메모에서는 **그 높이에 들어가는 줄 수까지만** 그린다. 상수로 여덟
+// 줄만 그리면 크게 늘려도 그 이상은 나오지 않고, 낮게 줄이면 글이 상자 밖으로 나간다.
+function noteLines(text, width, height) {
+  const max = height
+    ? Math.max(1, Math.floor((height - NOTE_PAD) / NOTE_LINE))
+    : NOTE_AUTO_LINES;
+  return wrapNote(text, width, max);
+}
+
+// paintNoteText는 메모의 글줄을 다시 그린다.
+//
+// 손잡이(grip)보다 앞에 끼워 넣는다. 뒤에 붙이면 글이 손잡이를 덮어 크기를 잡을
+// 곳이 사라진다 — 크기를 바꾸는 동안 매 프레임 다시 그리므로 더 그렇다.
+function paintNoteText(g, lines) {
+  for (const old of [...g.querySelectorAll('.erd-note-text')]) old.remove();
+  const grip = g.querySelector('.erd-note-grip');
+  for (let i = 0; i < lines.length; i += 1) {
+    const el = svgEl('text', {
+      class: 'erd-note-text', x: NOTE_PAD, y: NOTE_PAD + 10 + i * NOTE_LINE,
+    }, lines[i]);
+    if (grip) g.insertBefore(el, grip);
+    else g.appendChild(el);
+  }
 }
 
 function clamp(v, min, max) {
