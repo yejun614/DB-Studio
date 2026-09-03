@@ -1856,6 +1856,59 @@ class Editor {
   // 바꾸는 것은 창에서 한다 — 그것들은 서로 맞물려 있어서(참조 키가 몇 컬럼인지에
   // 따라 짝의 수가 정해진다) 한 칸씩 바꿀 수 있게 두면 중간에 성립하지 않는 상태를
   // 지나간다.
+  // relationsBetween은 이 관계선이 잇는 **두 표 사이의 모든 외래키**다.
+  //
+  // 방향은 섞어서 센다(A→B 와 B→A 를 함께). 두 카드 사이에 그려지는 선이 무엇인지가
+  // 기준이고, 보는 사람에게는 그 둘이 같은 자리의 선이다.
+  relationsBetween(tbl, fk) {
+    const pair = pairKeyOf(tableKey(tbl), refKey(tbl, fk));
+    const out = [];
+    for (const t of this.doc.schema?.tables ?? []) {
+      const from = tableKey(t);
+      for (const f of t.foreignKeys ?? []) {
+        const to = refKey(t, f);
+        if (pairKeyOf(from, to) !== pair) continue;
+        out.push({ table: t, fk: f, id: `${from}.${f.name}` });
+      }
+    }
+    return out;
+  }
+
+  // relSiblings는 겹쳐 있는 관계선들의 목록이다.
+  //
+  // 왜 필요한가: 두 표 사이의 관계선은 같은 길로 지나간다(길찾기는 표의 쌍만 보고
+  // 정한다). 그래서 외래키가 둘이면 선이 정확히 겹치고, 눌러서 고를 수 있는 것은
+  // 위에 있는 하나뿐이다 — 아래 선은 도면에서 닿을 방법이 없다. 여기서 목록으로
+  // 내주면 그 자리에서 골라 볼 수 있다.
+  relSiblings(tbl, fk) {
+    const list = this.relationsBetween(tbl, fk);
+    if (list.length < 2) return null;
+    const nowID = `${tableKey(tbl)}.${fk.name}`;
+    return h('div.field', {},
+      h('span.field-label', {}, `이 두 표 사이의 관계 ${list.length}개`),
+      h('div.erd-rel-list', {}, list.map((it) => {
+        const card = cardinality(it.table, it.fk);
+        const parent = `${it.fk.refNamespace ? `${it.fk.refNamespace}.` : ''}${it.fk.refTable}`;
+        const on = it.id === nowID;
+        return h('button.erd-rel-item', {
+          type: 'button',
+          class: on ? 'erd-rel-item is-current' : 'erd-rel-item',
+          'aria-current': on ? 'true' : null,
+          onclick: () => this.select({ kind: 'link', id: it.id }),
+        },
+        // 이름과 관계 표기가 첫 줄, 컬럼이 둘째 줄이다. 표기를 마지막에 두면
+        // 격자가 셋째 줄을 만들어 배지가 줄 폭만큼 늘어난다.
+        h('span.erd-rel-item-name', {}, truncate(it.fk.name, 30)),
+        badge(card.label, 'neutral'),
+        h('span.erd-rel-item-cols', {},
+          `${it.table.name}(${(it.fk.columns ?? []).join(', ')}) → `
+          + `${parent}(${(it.fk.refColumns ?? []).join(', ')})`));
+      })),
+      h('p.field-help', {},
+        '두 표 사이의 관계선은 같은 길로 지나가 서로 겹칩니다. 도면에서 누르면 그중 '
+        + '하나만 잡히므로, 나머지는 여기서 고릅니다.'));
+  }
+
   linkView(tbl, fk) {
     const key = tableKey(tbl);
     const ro = !this.editable();
@@ -1874,6 +1927,7 @@ class Editor {
     return [
       this.panelHead(`관계 ${fk.name}`),
       h('div.erd-panel-body', {},
+        this.relSiblings(tbl, fk),
         h('dl.mig-meta', {},
           h('div.meta-row', {}, h('dt', {}, '기준'),
             h('dd', {}, `${tableDisplay(tbl)} (${(fk.columns ?? []).join(', ')})`)),
@@ -4710,6 +4764,15 @@ function erdStreamNode() {
       el.appendChild(h('p.erd-ai-error', {}, msg));
     },
   };
+}
+
+// pairKeyOf는 두 표의 **순서 없는** 쌍을 하나의 열쇠로 만든다.
+//
+// JSON 으로 만드는 이유: 표 키는 따옴표로 감싼 식별자면 어떤 글자든 담을 수 있다.
+// 구분자를 하나 골라 이어 붙이면 그 글자가 이름에 든 순간 서로 다른 쌍이 같은
+// 열쇠가 된다.
+function pairKeyOf(a, b) {
+  return JSON.stringify([a, b].sort());
 }
 
 // ---------- 경량 op 적용 ----------

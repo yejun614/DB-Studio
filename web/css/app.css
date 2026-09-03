@@ -1894,6 +1894,35 @@ option { background: var(--surface); color: var(--text); }
 .erd-card-actions .icon-btn { border-color: var(--border-soft); }
 .erd-card-actions .icon-btn:hover { border-color: var(--border); }
 
+/* 두 표 사이에 여럿인 관계. 선이 겹쳐 도면에서는 하나만 잡히므로 목록으로 준다. */
+.erd-rel-list { display: flex; flex-direction: column; gap: 4px; }
+.erd-rel-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 8px;
+  align-items: center;
+  padding: 7px 9px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit; text-align: left; cursor: pointer;
+}
+.erd-rel-item:hover { border-color: var(--border); background: var(--surface-2); }
+/* 지금 보고 있는 것. 목록에서 어느 줄이 이 화면인지 보이지 않으면, 눌러 본 뒤에야
+ * 알게 된다 — 그때는 이미 다른 관계로 옮겨 가 있다. */
+.erd-rel-item.is-current {
+  border-color: hsl(var(--h-primary) / 0.5);
+  background: hsl(var(--h-primary) / 0.08);
+}
+.erd-rel-item-name { font: 500 12.5px var(--mono); word-break: break-all; }
+/* 배지는 자기 글자만큼만 차지한다. 격자 칸에 그냥 두면 칸 폭까지 늘어나 빈 알약이 된다. */
+.erd-rel-item > .badge { justify-self: end; }
+.erd-rel-item-cols {
+  grid-column: 1 / -1;
+  font-size: 11.5px; color: var(--text-mute); word-break: break-all;
+}
+
 /* ---------- ERD: 편집기 ---------- */
 
 .erd-editor {
