@@ -27,6 +27,7 @@ import { errorPanel } from './users.js';
 import { ErdSession } from '../core/erdsocket.js';
 import { columnIcon, chosenIconFor } from '../core/colicon.js';
 import { openImageExportDialog } from '../core/erdimage.js';
+import { setScreenDetail, screenConn } from '../core/screen.js';
 import { roomChatView, scrollChatToBottom } from '../core/roomchat.js';
 // 구조 화면과 ERD 편집기는 같은 op를 주고받는다. 반영 규칙을 두 벌로 두면
 // 언젠가 어긋나고, 그때 조용히 사라지는 것은 남의 편집이다.
@@ -68,6 +69,9 @@ export async function renderStructure(outlet, params, query) {
   const current = targets.find((i) => i.connection.id === connID) ?? targets[0];
   const conn = current.connection;
   const versionParam = query.get('version') ?? '';
+
+  // 어시스턴트에게 이 화면을 알린다(고른 표는 아래 select 에서 함께 보고한다).
+  setScreenDetail([screenConn(conn), '실제 DB 구조를 ERD 도면으로 보는 중']);
 
   const view = new StructureView(outlet, targets, conn, versionParam, servers.items ?? []);
   await view.start();

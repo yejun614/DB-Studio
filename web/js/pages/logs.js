@@ -13,6 +13,7 @@ import {
 import { formatMetricValue } from '../core/chart.js';
 import { navigate } from '../core/router.js';
 import { serverDbPicker } from '../core/connpick.js';
+import { setScreenDetail, screenConn } from '../core/screen.js';
 import { errorPanel } from './users.js';
 
 const RANGES = [
@@ -64,6 +65,11 @@ export async function renderLogs(outlet, params, query) {
   const selectedId = query.get('conn') || usable[0].connection.id;
   const current = usable.find((i) => i.connection.id === selectedId) ?? usable[0];
   const activeTab = query.get('tab') === 'stats' ? 'stats' : 'entries';
+
+  setScreenDetail([
+    screenConn(current.connection),
+    `보고 있는 탭: ${activeTab === 'stats' ? '통계' : '로그 항목'}`,
+  ]);
 
   const picker = serverDbPicker({
     usable,

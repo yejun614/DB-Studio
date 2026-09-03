@@ -15,6 +15,7 @@ import { navigate } from '../core/router.js';
 import { codeEditor, codeBlock } from '../core/highlight.js';
 import { formatSQL, quickCheck } from '../core/sqlfmt.js';
 import { serverDbPicker } from '../core/connpick.js';
+import { setScreenDetail, screenConn } from '../core/screen.js';
 import { errorPanel } from './users.js';
 
 // 최근 실행 이력은 브라우저에만 둔다. 서버에 남기면 다른 사람의 문장을 열람하는
@@ -76,6 +77,25 @@ export async function renderSQLConsole(outlet, params, query) {
     // Ctrl+Enter는 지금까지처럼 전체 실행이다. 손에 익은 동작을 바꾸지 않고,
     // 한 문장은 Shift를 더해 고른다.
     onSubmit: (_value, e) => run(e?.shiftKey && runOneBtn ? 'one' : 'all'),
+  });
+
+  // 어시스턴트에게 이 화면을 알린다.
+  //
+  // 편집기의 글까지 넘기는 이유: SQL 콘솔에서 어시스턴트를 부르는 이유는 거의
+  // 언제나 지금 적어 둔 그 문장이다("이거 왜 느려요", "이 조인 맞나요"). 그것을
+  // 다시 붙여 넣는 것이 대화의 첫 단계였다.
+  //
+  // 함수로 넘기는 이유: 글자마다 보고하지 않고 물을 때 한 번 읽는다. 길면 자른다 —
+  // 스크립트 전체가 시스템 프롬프트에 들어가면 정작 질문이 묻힌다.
+  setScreenDetail(() => {
+    const text = (editor.textarea?.value ?? '').trim();
+    const cut = text.length > 1200 ? `${text.slice(0, 1200)}
+…(생략)` : text;
+    return [
+      screenConn(conn),
+      text ? `편집기에 적어 둔 ${editorLang === 'sql' ? 'SQL' : '명령'}:
+${cut}` : '',
+    ];
   });
 
   const readOnly = h('input', { type: 'checkbox', checked: true });

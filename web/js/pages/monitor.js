@@ -10,6 +10,7 @@ import { lineChart, sparkline, formatMetricValue, formatBytes } from '../core/ch
 import { dbLogo } from '../core/dblogo.js';
 import { navigate } from '../core/router.js';
 import { errorPanel } from './users.js';
+import { setScreenDetail, screenConn } from '../core/screen.js';
 
 const RANGES = [
   { value: '15m', label: '15분' },
@@ -49,6 +50,13 @@ export async function renderMonitor(outlet, params, query) {
   const selectedId = query.get('conn') || '';
   const body = h('div');
   let timer = null;
+
+  // 어시스턴트에게 이 화면을 알린다. 커넥션을 고르지 않았으면 전체 보기다 —
+  // "이 DB"가 아니라 "지금 뜬 목록"을 가리키는 질문이 그때 나온다.
+  const watched = (data.items ?? []).find((i) => i.connection?.id === selectedId);
+  setScreenDetail([
+    watched ? screenConn(watched.connection) : '모니터링 대상 전체를 한 화면에서 보는 중',
+  ]);
 
   const header = pageHeader('모니터링', `${data.config.intervalSec}초 주기로 수집`, [
     h('a.btn', { href: '/events' }, icon('alert'), '이벤트'),

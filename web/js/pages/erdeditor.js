@@ -41,6 +41,7 @@ import {
   cardinality, describeRelation, isJunction, junctionPartners,
 } from '../core/erdrel.js';
 import { streamAIChat } from '../core/aistream.js';
+import { setScreenDetail, screenConn } from '../core/screen.js';
 import { errorPanel } from './users.js';
 import { statusBadge, STATUS_LABELS } from './erd.js';
 
@@ -280,6 +281,12 @@ class Editor {
   }
 
   start() {
+    // 어시스턴트에게 이 화면을 알린다(core/screen.js).
+    //
+    // 함수로 넘기는 이유: 고른 표는 자주 바뀌고, 바뀔 때마다 보고하게 하면 select
+    // 안에서 한 번 더 할 일이 늘어난다 — 그러면 언젠가 새 선택 경로 하나가 그것을
+    // 빠뜨리고, 어시스턴트는 아까 고른 표를 지금 것으로 말한다.
+    setScreenDetail(() => this.screenBits());
     this.canvas.setDoc(this.doc);
     this.canvas.setTool(this.tool);
     this.canvas.fitView();
@@ -296,6 +303,41 @@ class Editor {
     this.bindShortcuts();
     this.bindPageLifecycle();
     this.session.connect();
+  }
+
+  // screenBits는 어시스턴트에게 보고할 이 화면의 사실들이다.
+  //
+  // 고른 것을 넣는 것이 요점이다. 사람은 표를 하나 고른 뒤 팝업을 열어 "여기에
+  // 생성일시 컬럼 추가해줘"라고 적는다 — 어느 표인지는 화면에 있고 말에는 없다.
+  screenBits() {
+    const status = STATUS_LABELS[this.doc.status]?.[0] ?? this.doc.status ?? '';
+    const bits = [
+      `보고 있는 ERD 초안: ${this.doc.name ?? ''}`
+      + ` (문법: ${this.doc.dialect ?? ''}${status ? `, 상태: ${status}` : ''}`
+      + `, 표 ${(this.doc.schema?.tables ?? []).length}개)`,
+      this.connection
+        ? screenConn(this.connection, '이 초안의 대상 DB')
+        : '이 초안에는 대상 DB가 없습니다(SQL 내보내기만 가능)',
+    ];
+    // 고른 것. 여럿이면 개수만 말한다 — 이름을 다 늘어놓으면 화면 설명이 질문보다 길어진다.
+    if (this.marks.length > 1) {
+      bits.push(`화면에서 ${this.marks.length}개를 함께 골라 둔 상태`);
+    } else if (this.sel?.kind === 'table') {
+      const tbl = this.findTable(this.sel.id);
+      if (tbl) {
+        bits.push(`고른 테이블: ${tableDisplay(tbl)}`
+          + ` (컬럼 ${(tbl.columns ?? []).length}개)`);
+      }
+    } else if (this.sel?.kind === 'link') {
+      const found = this.findFK(this.sel.id);
+      if (found) {
+        bits.push(`고른 관계: ${found.fk.name}`
+          + ` — ${found.table.name}(${(found.fk.columns ?? []).join(', ')})`
+          + ` → ${found.fk.refTable}(${(found.fk.refColumns ?? []).join(', ')})`);
+      }
+    }
+    if (this.present) bits.push('발표 모드로 보는 중(편집할 수 없습니다)');
+    return bits;
   }
 
   // editable은 "지금 이 화면에서 문서를 고칠 수 있는가"다.

@@ -8,6 +8,7 @@ import {
 } from '../core/ui.js';
 import { navigate } from '../core/router.js';
 import { serverDbPicker } from '../core/connpick.js';
+import { setScreenDetail, screenConn } from '../core/screen.js';
 import { codeBlock } from '../core/highlight.js';
 import { errorPanel } from './users.js';
 
@@ -44,6 +45,9 @@ export async function renderSchema(outlet, params, query) {
 
   const selectedId = query.get('conn') || usable[0].connection.id;
   const current = usable.find((i) => i.connection.id === selectedId) ?? usable[0];
+
+  // 어시스턴트에게 어느 DB의 스키마를 보고 있는지 알린다.
+  setScreenDetail([screenConn(current.connection)]);
 
   const picker = serverDbPicker({
     usable,

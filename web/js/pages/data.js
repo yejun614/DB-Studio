@@ -14,6 +14,7 @@ import {
 import { navigate } from '../core/router.js';
 import { dbLogo } from '../core/dblogo.js';
 import { serverDbPicker } from '../core/connpick.js';
+import { setScreenDetail, screenConn } from '../core/screen.js';
 import { codeBlock } from '../core/highlight.js';
 import { errorPanel } from './users.js';
 
@@ -166,6 +167,9 @@ export async function renderData(outlet, params, query) {
   const canSQL = (current.caps ?? []).includes('sql.run');
   const support = current.dataCaps ?? {};
 
+  // 표를 고르기 전에도 어느 DB를 보고 있는지는 알려 둔다.
+  setScreenDetail([screenConn(conn)]);
+
   // 서버 → DB 두 단계 선택.
   const picker = serverDbPicker({
     usable,
@@ -271,6 +275,14 @@ export async function renderData(outlet, params, query) {
     if (initial) selectObject(initial);
   }
 
+  // reportScreen은 이 화면의 사실을 어시스턴트에게 알린다(core/screen.js).
+  function reportScreen(o) {
+    setScreenDetail([
+      screenConn(conn),
+      o ? `보고 있는 ${o.kind === 'view' ? '뷰' : '테이블'}: ${o.namespace ? `${o.namespace}.` : ''}${o.name}` : '',
+    ]);
+  }
+
   function objectButton(o) {
     const btn = h('button.object-item', {
       type: 'button',
@@ -302,6 +314,9 @@ export async function renderData(outlet, params, query) {
       staged.length = 0;
     }
     view.object = o;
+    // 어시스턴트에게 "지금 이 표를 보고 있다"를 알려 둔다. 팝업으로 물을 때
+    // "이 테이블"이 무엇인지 사람이 다시 적지 않아도 된다.
+    reportScreen(o);
     lastOk = null; // 다른 대상의 결과로 되돌아가면 머리글과 행이 어긋난다
     view.offset = 0;
     view.orderBy = '';
