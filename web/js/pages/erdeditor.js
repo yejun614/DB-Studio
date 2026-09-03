@@ -3716,8 +3716,25 @@ class Editor {
     // 목록의 첫 항목을 그대로 두면 이 테이블 자신이 골라진다. 자기 참조도 있는
     // 구조지만 드물어서, 그렇게 두면 거의 매번 한 번 더 바꿔야 한다.
     const firstOther = others.find((t) => tableKey(t) !== ref.serverKey) ?? others[0];
-    const refSelect = select(others.map((t) => ({ value: tableKey(t), label: tableDisplay(t) })),
-      { value: existing ? refKeyOf(existing) : (firstOther ? tableKey(firstOther) : '') });
+    // 표가 서른 개인 설계에서 select 로 고르는 것은 스크롤로 훑는 일이다. 이름을
+    // 적어 걸러 고른다(searchPicker). 논리명으로도 걸러진다 — 설계 회의에서
+    // 기억하고 있는 이름이 물리명이 아닐 때가 많다.
+    const refPick = searchPicker({
+      items: others.map((t) => ({
+        value: tableKey(t),
+        label: tableDisplay(t),
+        hint: this.doc.layout?.[tableKey(t)]?.logical || '',
+      })),
+      value: existing ? refKeyOf(existing) : (firstOther ? tableKey(firstOther) : ''),
+      placeholder: '테이블 이름으로 검색',
+      emptyLabel: '(테이블 고르기)',
+      onPick: () => {
+        refCols = [];
+        localCols = [];
+        creating.clear();
+        drawKeys();
+      },
+    });
 
     const keyWrap = h('div');
     const pairWrap = h('div.erd-fk-pairs');
@@ -3738,7 +3755,7 @@ class Editor {
     const creating = new Set();
     const NEW_COL = '\u0000new';
 
-    const target = () => others.find((t) => tableKey(t) === refSelect.value) ?? null;
+    const target = () => others.find((t) => tableKey(t) === refPick.value) ?? null;
 
     // 짝을 처음 채울 때의 짐작. user_id → users(id) 처럼 이름에 단서가 있다.
     const guessLocal = (refCol, used) => {
@@ -3768,24 +3785,33 @@ class Editor {
         const theirs = (t?.columns ?? []).find((c) => c.name.toLowerCase() === refCol.toLowerCase());
         const newType = theirs?.rawType || theirs?.type?.base || '';
 
-        const pick = select([
-          ...myCols.map((c) => ({
-            value: c.name,
-            label: `${c.name} — ${c.rawType || c.type?.base || ''}`,
-          })),
-          { value: NEW_COL, label: '+ 새 컬럼 만들기…' },
-        ], { value: isNew ? NEW_COL : localCols[i] });
-        pick.addEventListener('change', () => {
-          if (pick.value === NEW_COL) {
-            creating.add(i);
-            // 기본 이름은 참조하는 컬럼 이름이다. 대개 그대로 쓰거나 앞에 표
-            // 이름을 붙이는 정도라, 빈 칸보다 고칠 것이 적다.
-            localCols[i] = refCol;
-          } else {
-            creating.delete(i);
-            localCols[i] = pick.value;
-          }
-          drawPairs();
+        // 컬럼도 적어 걸러 고른다. 컬럼 마흔 개짜리 표에서 select 를 열면 화면
+        // 절반을 덮는 목록이 뜨고, 찾는 이름이 그 안 어디에 있는지는 스크롤해야
+        // 안다. 타입으로도 걸러진다(bigint 를 적으면 그 타입 컬럼만 남는다).
+        const pick = searchPicker({
+          items: [
+            ...myCols.map((c) => ({
+              value: c.name,
+              label: c.name,
+              hint: c.rawType || c.type?.base || '',
+            })),
+            { value: NEW_COL, label: '+ 새 컬럼 만들기…', hint: '이 표에 없는 컬럼' },
+          ],
+          value: isNew ? NEW_COL : localCols[i],
+          placeholder: '컬럼 이름이나 타입으로 검색',
+          emptyLabel: '(컬럼 고르기)',
+          onPick: (next) => {
+            if (next === NEW_COL) {
+              creating.add(i);
+              // 기본 이름은 참조하는 컬럼 이름이다. 대개 그대로 쓰거나 앞에 표
+              // 이름을 붙이는 정도라, 빈 칸보다 고칠 것이 적다.
+              localCols[i] = refCol;
+            } else {
+              creating.delete(i);
+              localCols[i] = next;
+            }
+            drawPairs();
+          },
         });
 
         // 새 컬럼이면 이름 칸을 보여준다. 이 칸을 고칠 때 목록을 다시 그리지
@@ -3806,7 +3832,7 @@ class Editor {
         const mismatch = !isNew && mine && theirs
           && (mine.type?.base ?? '') !== (theirs.type?.base ?? '');
         return h('div.erd-fk-pair', {},
-          pick,
+          pick.node,
           nameBox,
           h('span.erd-fk-arrow', {}, '→'),
           h('span.erd-fk-ref', {}, `${t?.name ?? ''}.${refCol}`),
@@ -3860,11 +3886,6 @@ class Editor {
       drawPairs();
     };
 
-    refSelect.addEventListener('change', () => {
-      refCols = [];
-      localCols = [];
-      drawKeys();
-    });
     drawKeys();
 
     openModal({
@@ -3872,7 +3893,7 @@ class Editor {
       width: 560,
       body: () => [
         h('label.field', {}, h('span.field-label', {}, '이름'), nameInput),
-        h('label.field', {}, h('span.field-label', {}, '참조할 테이블'), refSelect),
+        h('div.field', {}, h('span.field-label', {}, '참조할 테이블'), refPick.node),
         h('div.field', {}, h('span.field-label', {}, '참조할 키'), keyWrap,
           h('p.field-help', {},
             '기본키나 고유 인덱스만 참조할 수 있습니다. 고른 키의 컬럼 수만큼 연결이 생깁니다.')),

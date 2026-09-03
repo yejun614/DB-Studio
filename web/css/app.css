@@ -2453,7 +2453,9 @@ option { background: var(--surface); color: var(--text); }
 /* 외래키 컬럼 짝. 왼쪽이 이 테이블의 컬럼, 오른쪽이 참조 컬럼이다. */
 .erd-fk-pairs { display: flex; flex-direction: column; gap: 6px; }
 .erd-fk-pair { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.erd-fk-pair select { flex: 1; min-width: 0; }
+/* 검색 고르개는 줄에서 남는 폭을 다 쓴다(min-width: 0 이 없으면 긴 컬럼 이름이
+ * 칸을 밀어 줄이 넘친다). 목록 자체는 position: fixed 라 이 줄에 갇히지 않는다. */
+.erd-fk-pair select, .erd-fk-pair .pick { flex: 1; min-width: 120px; }
 /* 새 컬럼의 이름 칸. 고르개와 나란히 서고, 좁으면 아래로 접힌다. */
 .erd-fk-newname { flex: 1; min-width: 90px; }
 .erd-fk-arrow { color: var(--text-mute); flex: none; }
