@@ -59,6 +59,12 @@ const (
 	OpDomainUpdate Kind = "domain.update"
 	OpDomainDelete Kind = "domain.delete"
 
+	// 뷰는 표와 함께 도면에 놓인다. view.move 는 좌표만 바꾸는 op 다(구조가 아니다).
+	OpViewAdd    Kind = "view.add"
+	OpViewUpdate Kind = "view.update"
+	OpViewDelete Kind = "view.delete"
+	OpViewMove   Kind = "view.move"
+
 	OpNoteAdd    Kind = "note.add"
 	OpNoteUpdate Kind = "note.update"
 	OpNoteDelete Kind = "note.delete"
@@ -103,7 +109,7 @@ type Op struct {
 // 레이아웃·메모 op는 마이그레이션과 무관하므로 스냅샷 지문에 영향을 주지 않는다.
 func (k Kind) Structural() bool {
 	switch k {
-	case OpTableMove, OpNoteAdd, OpNoteUpdate, OpNoteDelete,
+	case OpTableMove, OpViewMove, OpNoteAdd, OpNoteUpdate, OpNoteDelete,
 		OpGroupAdd, OpGroupUpdate, OpGroupDelete:
 		return false
 	}
@@ -185,6 +191,14 @@ func Apply(doc *Document, op *Op) error {
 		return applyEnumUpsert(doc, op)
 	case OpEnumDelete:
 		return applyEnumDelete(doc, op)
+	case OpViewAdd:
+		return applyViewAdd(doc, op)
+	case OpViewUpdate:
+		return applyViewUpdate(doc, op)
+	case OpViewDelete:
+		return applyViewDelete(doc, op)
+	case OpViewMove:
+		return applyViewMove(doc, op)
 	case OpNoteAdd:
 		return applyNoteAdd(doc, op)
 	case OpNoteUpdate:

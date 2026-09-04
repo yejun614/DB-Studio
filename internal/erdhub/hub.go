@@ -394,6 +394,9 @@ func (r *room) isStructure() bool {
 func allowedInStructure(kind erd.Kind) bool {
 	switch kind {
 	case erd.OpTableMove,
+		// 뷰 카드도 자리를 옮길 수 있어야 한다. 좌표만 바꾸는 op 이므로 구조
+		// 문서에서도 안전하다 — 뷰를 더하거나 고치는 op 는 여전히 거부된다.
+		erd.OpViewMove,
 		erd.OpNoteAdd, erd.OpNoteUpdate, erd.OpNoteDelete,
 		erd.OpGroupAdd, erd.OpGroupUpdate, erd.OpGroupDelete:
 		return true

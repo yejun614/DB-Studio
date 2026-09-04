@@ -269,7 +269,11 @@ func SlotAt(n int) (float64, float64) {
 // 폭은 모든 카드가 같아서 어긋날 일이 없고, 열이 가지런해야 눈이 따라간다.
 func AutoLayout(sc *schema.Schema) map[string]*Box {
 	out := make(map[string]*Box, len(sc.Tables))
-	if sc == nil || len(sc.Tables) == 0 {
+	if sc == nil {
+		return out
+	}
+	if len(sc.Tables) == 0 {
+		placeViews(sc, out, 0)
 		return out
 	}
 
@@ -352,7 +356,24 @@ func AutoLayout(sc *schema.Schema) map[string]*Box {
 			ys[sub] += step
 		}
 	}
+	placeViews(sc, out, cursor)
 	return out
+}
+
+// placeViews는 뷰 카드를 표 오른쪽의 새 열에 세운다.
+//
+// 표와 섞지 않는 이유: 뷰는 표를 읽는 것이라 도면에서 늘 "끝"이다. 표들 사이에
+// 끼워 넣으면 관계선이 그 위를 지나가고, 무엇이 실체이고 무엇이 그것을 읽는
+// 것인지가 그림에서 사라진다. 열 하나에 여섯 개씩 쌓는 것은 표와 같은 규칙이다.
+func placeViews(sc *schema.Schema, out map[string]*Box, col int) {
+	for i, v := range sc.Views {
+		sub := i / layoutRowsMax
+		row := i % layoutRowsMax
+		out[v.Key()] = &Box{
+			X: layoutOriginX + float64(col+sub)*layoutStepX,
+			Y: layoutOriginY + float64(row)*layoutStepY,
+		}
+	}
 }
 
 // refKeyOf는 외래키가 가리키는 표의 키다(스키마가 비어 있으면 이 표의 스키마).

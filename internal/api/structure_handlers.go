@@ -207,11 +207,11 @@ func placeMissing(sc *schema.Schema, layout map[string]*erd.Box) int {
 	// 놓는다. 격자로 나열하면 관계선이 도면을 가로질러, "무엇이 무엇을 가리키는가"를
 	// 선을 눈으로 따라가야 알게 된다. 설계 화면의 첫 배치와 같은 규칙이다
 	// (erd.AutoLayout) — 두 화면을 오갈 때 같은 그림으로 읽혀야 한다.
-	if len(layout) == 0 && len(sc.Tables) > 0 {
+	if len(layout) == 0 && (len(sc.Tables) > 0 || len(sc.Views) > 0) {
 		for key, box := range erd.AutoLayout(sc) {
 			layout[key] = box
 		}
-		return len(sc.Tables)
+		return len(sc.Tables) + len(sc.Views)
 	}
 	// 이미 놓인 카드의 자리와 **높이**를 함께 들고 간다.
 	cols := make(map[string]int, len(sc.Tables))
@@ -251,10 +251,26 @@ func placeMissing(sc *schema.Schema, layout map[string]*erd.Box) int {
 		return false
 	}
 
+	// 표와 뷰를 한 목록으로 훑는다. 뷰만 나중에 따로 놓으면 이미 놓인 카드와
+	// 겹치는지 다시 판정해야 하고, 그 판정이 두 벌이 되는 순간 한쪽이 어긋난다.
+	type pending struct {
+		key  string
+		rows int
+	}
+	todo := make([]pending, 0, len(sc.Tables)+len(sc.Views))
+	for _, t := range sc.Tables {
+		todo = append(todo, pending{t.Key(), len(t.Columns)})
+	}
+	for _, v := range sc.Views {
+		// 뷰 카드는 본문 미리보기를 담아 표 서너 줄쯤 된다(화면의 VIEW_ROWS).
+		todo = append(todo, pending{v.Key(), 4})
+		cols[v.Key()] = 4
+	}
+
 	placed := 0
 	slot := 0
-	for _, t := range sc.Tables {
-		key := t.Key()
+	for _, item := range todo {
+		key := item.key
 		if _, ok := layout[key]; ok {
 			continue
 		}

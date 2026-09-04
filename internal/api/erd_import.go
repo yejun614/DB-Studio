@@ -67,7 +67,8 @@ func (s *Server) handleERDImportSQL(c *fiber.Ctx) error {
 			"SQL에서 테이블 정의를 읽지 못했습니다", perr.Error())
 	}
 
-	summary := erd.SummarizeImport(doc, parsed.Tables, parsed.Drops)
+	summary := erd.SummarizeImportAll(doc, parsed.Tables, parsed.Drops,
+		parsed.Views, parsed.ViewDrops)
 	resp := fiber.Map{
 		"summary":    summary,
 		"notes":      parsed.Notes,
@@ -81,10 +82,12 @@ func (s *Server) handleERDImportSQL(c *fiber.Ctx) error {
 	}
 
 	payload, merr := json.Marshal(map[string]any{
-		"tables": parsed.Tables,
-		"enums":  parsed.Enums,
-		"drops":  parsed.Drops,
-		"label":  strings.TrimSpace(body.Label),
+		"tables":    parsed.Tables,
+		"enums":     parsed.Enums,
+		"views":     parsed.Views,
+		"drops":     parsed.Drops,
+		"viewDrops": parsed.ViewDrops,
+		"label":     strings.TrimSpace(body.Label),
 	})
 	if merr != nil {
 		return merr
@@ -113,6 +116,7 @@ func (s *Server) handleERDImportSQL(c *fiber.Ctx) error {
 			"name": doc.Name, "connection": connName(conn), "label": body.Label,
 			"added": len(summary.Added), "updated": len(summary.Updated),
 			"dropped": len(summary.Dropped), "statements": parsed.Statements,
+			"views": len(summary.ViewsAdded) + len(summary.ViewsUpdated),
 		},
 	})
 
