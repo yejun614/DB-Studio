@@ -75,6 +75,9 @@ const (
 
 	// OpSchemaImport는 SQL 스크립트를 읽어 초안에 얹는다.
 	// 여러 테이블을 한 번에 바꾸므로 op 하나여야 한다 — 자세한 이유는 import.go.
+	// OpDocOptions는 문서 수준 설정이다: 표 기본 저장 설정, 만들 데이터베이스.
+	OpDocOptions Kind = "doc.options"
+
 	OpSchemaImport Kind = "schema.import"
 )
 
@@ -211,6 +214,8 @@ func Apply(doc *Document, op *Op) error {
 		return applyGroupUpdate(doc, op)
 	case OpGroupDelete:
 		return applyGroupDelete(doc, op)
+	case OpDocOptions:
+		return applyDocOptions(doc, op)
 	case OpSchemaImport:
 		return applySchemaImport(doc, op)
 	case OpRestore:
@@ -310,6 +315,7 @@ func applyTableAdd(doc *Document, op *Op) error {
 		tbl.PrimaryKey = &schema.PrimaryKey{Columns: []string{"id"}}
 	}
 
+	applyTableDefaults(doc, tbl)
 	doc.Schema.Tables = append(doc.Schema.Tables, tbl)
 	x, y := doc.nextFreeSlot()
 	if p.X != nil {

@@ -60,6 +60,21 @@ type Document struct {
 	// 들어가므로 마이그레이션은 도메인을 몰라도 된다.
 	Domains []*Domain `json:"domains,omitempty"`
 
+	// TableDefaults는 이 초안에서 **새로 만드는 표**가 물려받을 저장 설정이다
+	// (MySQL 의 엔진·문자셋, PostgreSQL 의 테이블스페이스 등).
+	//
+	// 표마다 따로 적지 않고 여기 두는 이유: 한 초안 안에서 표마다 엔진이 다른 일은
+	// 거의 없다. 그런데 표를 만들 때마다 같은 값을 다시 고르게 하면 반드시 몇 개는
+	// 빠지고, 빠진 표는 서버 기본값으로 만들어져 나중에야 드러난다.
+	//
+	// **물려받기는 만들 때 한 번뿐이다.** 이 값을 고쳐도 이미 있는 표는 그대로다 —
+	// 표에 일부러 다르게 적어 둔 값을 조용히 지우지 않기 위해서다. 모두에 적용하는
+	// 것은 문서 설정에서 따로 고른다.
+	TableDefaults map[string]string `json:"tableDefaults,omitempty"`
+
+	// TargetDB는 아직 만들지 않은 데이터베이스를 대상으로 삼을 때의 계획이다.
+	TargetDB *TargetDB `json:"targetDb,omitempty"`
+
 	// Seq는 이 문서에 적용된 마지막 op의 순번이다. 클라이언트는 이 값을 기준으로
 	// 자기가 어디까지 봤는지 판단하고, 재접속 시 이후 op만 받는다.
 	Seq int64 `json:"seq"`
@@ -503,6 +518,10 @@ func (d *Document) Clone() *Document {
 	}
 	// 도메인도 같은 이유로 깊은 복사다. 얕게 두면 사본에서 정의를 고칠 때 원본까지
 	// 바뀌어, 되돌리기가 "바뀐 것이 없다"고 판단한다(diff는 두 문서를 비교한다).
+	// 문서 수준 설정도 깊은 복사다. 맵과 포인터를 얕게 두면 사본에 적용한 op 가
+	// 실패했을 때 원본의 설정만 바뀐 채로 남는다.
+	out.TableDefaults = cloneKV(d.TableDefaults)
+	out.TargetDB = d.TargetDB.clone()
 	out.Domains = make([]*Domain, 0, len(d.Domains))
 	for _, dom := range d.Domains {
 		c := *dom

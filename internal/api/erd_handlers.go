@@ -699,6 +699,11 @@ func (s *Server) handleERDDDL(c *fiber.Ctx) error {
 	}
 	diff := schema.Diff(from, doc.Schema)
 	plan := schema.BuildPlan(dialect, diff)
+	// 처음부터 만드는 스크립트에만 CREATE DATABASE 를 붙인다. 기준이 실제 DB 나
+	// 특정 버전이면 그 데이터베이스는 이미 있다.
+	if baseSpec == "" {
+		prependTargetDatabase(plan, doc)
+	}
 	if dialect != doc.Schema.Dialect && doc.Schema.Dialect != "" {
 		plan.Warnings = append(plan.Warnings,
 			doc.Schema.Dialect+" → "+dialect+" 로 타입을 변환했습니다. 실행 전 검토가 필요합니다")

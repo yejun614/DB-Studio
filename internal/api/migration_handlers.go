@@ -376,6 +376,11 @@ func (s *Server) handleCreateMigration(c *fiber.Ctx) error {
 			"변경은 있지만 실행할 SQL을 만들 수 없습니다",
 			strings.Join(plan.Warnings, " / "))
 	}
+	// 초안이 새 데이터베이스를 만들 계획이면 그 사실을 계획에 남긴다. 커넥션이
+	// 다른 데이터베이스를 가리키고 있으면 표가 엉뚱한 곳에 만들어진다.
+	if w := targetDatabaseWarning(doc, conn); w != "" {
+		plan.Warnings = append(plan.Warnings, w)
+	}
 
 	// 계획을 만드는 시점에는 버전을 만들지 않는다(롤백 계획과 같은 규칙).
 	//

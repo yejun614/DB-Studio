@@ -91,6 +91,9 @@ func applySchemaImport(doc *Document, op *Op) error {
 		}
 		mergeTable(doc, tbl)
 	}
+	// 가져온 표에도 문서 기본값을 채운다. 스크립트에 엔진이 적혀 있으면 그것이
+	// 이기고, 비어 있는 칸만 문서 기본값으로 메운다.
+	applyTableDefaults(doc, doc.Schema.Tables...)
 
 	for _, e := range p.Enums {
 		if e == nil {
