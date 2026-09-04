@@ -44,6 +44,14 @@ const GAP = 12;
 // 작아진다. 도면 전체를 한눈에 보려고 축소하면 이 글자가 가장 먼저 못 읽게 되는데,
 // 하필 그때가 "이 선이 몇 대 몇인지" 훑어보는 순간이다.
 const CARD_LABEL_PX = 12.5;
+// 고른 선의 개수 표기는 조금 더 크다.
+//
+// 왜 크기까지 바꾸는가: 이 글자는 선 끝에 붙는 8~12px 짜리라, 색만 바꾸면 도면이
+// 복잡할 때 "어느 선을 고른 것인가"가 여전히 한눈에 안 들어온다. 색은 가까이서
+// 보는 단서이고 크기는 멀리서 보는 단서다.
+//
+// 1.25배인 이유: 더 키우면 카드가 가까이 붙은 곳에서 양쪽 끝 글자가 서로 부딪친다.
+const CARD_LABEL_SEL_PX = round1(CARD_LABEL_PX * 1.25);
 // 글자 뒤에 두르는 테두리(선에 묻히지 않게). 글자와 같은 비율로 함께 커져야
 // 두께가 늘 같아 보인다.
 const CARD_LABEL_HALO = 3;
@@ -597,12 +605,16 @@ export class ErdCanvas {
         // 그대로 둔다 — 거기서는 가릴 것도 없고, 통째로 감추면 도면의 다른
         // 구석에서 표기가 이유 없이 사라진다.
         const muted = !selected && focusTables.has(atKey) ? ' is-muted' : '';
+        // 표식도 함께 강조한다. 선만 색이 바뀌고 까마귀발은 회색으로 남으면,
+        // 고른 선의 **끝**이 어느 카드에 닿는지가 여전히 흐릿하다 — 정작 관계를
+        // 읽을 때 보는 것은 그 끝이다.
+        const on = selected ? ' is-selected' : '';
         this.layers.links.appendChild(svgEl('path', {
-          class: `erd-link-mark${muted}`, 'data-fk': fkID, d: mark.d,
+          class: `erd-link-mark${muted}${on}`, 'data-fk': fkID, d: mark.d,
         }));
         if (!mark.ring) continue;
         this.layers.links.appendChild(svgEl('circle', {
-          class: `erd-link-ring${muted}`, 'data-fk': fkID, ...mark.ring,
+          class: `erd-link-ring${muted}${on}`, 'data-fk': fkID, ...mark.ring,
         }));
       }
       this.linkSpots.set(fkID, r);
@@ -643,11 +655,32 @@ export class ErdCanvas {
       layer.appendChild(svgEl('path', {
         class: `erd-link-halo${temp}`, 'data-fk': fkID, d: r.d,
       }));
+      const picked = this.isSelected('link', fkID);
       layer.appendChild(svgEl('path', {
         class: `erd-link is-lifted${r.blocked ? ' is-over' : ''}`
-          + `${this.isSelected('link', fkID) ? ' is-selected' : ''}${temp}`,
+          + `${picked ? ' is-selected' : ''}${temp}`,
         d: r.d, 'data-fk': fkID,
       }));
+      // 고른 선은 표식도 이 층에 다시 그린다.
+      //
+      // 왜 필요한가: 아래 층의 표식은 카드에 가려진다(선을 카드 위로 올리는 이유가
+      // 그것이다). 선만 올라오고 끝 표식이 카드 밑에 남으면, 강조한 선이 아무 데도
+      // 닿지 않는 것처럼 보인다. 아래 것과 겹쳐 그려지지만 같은 자리·같은 모양이라
+      // 두 번 그린 티가 나지 않는다.
+      if (picked) {
+        for (const [at, side, spec] of endSpecs(r)) {
+          const mark = endMarker(at, side, spec);
+          layer.appendChild(svgEl('path', {
+            // 언제나 erd-link-temp 다. 아래 층에 같은 표식이 이미 있어서,
+            // 그림 파일에 남기면 한 표식이 두 번 그려져 굵어진다.
+            class: 'erd-link-mark is-selected erd-link-temp', 'data-fk': fkID, d: mark.d,
+          }));
+          if (!mark.ring) continue;
+          layer.appendChild(svgEl('circle', {
+            class: 'erd-link-ring is-selected erd-link-temp', 'data-fk': fkID, ...mark.ring,
+          }));
+        }
+      }
 
       // 개수 글자(N · 1 · 0..1)는 **가리킨 선에만** 붙인다.
       //
@@ -663,14 +696,15 @@ export class ErdCanvas {
       // 한다 — 표식은 도면 좌표라 축소하면 화면에서 작아지는데, 글자만 커지면
       // 축소할수록 글자가 표식을 덮는다.
       const scale = this.viewScale();
-      const size = round1(CARD_LABEL_PX * scale);
+      const size = round1((picked ? CARD_LABEL_SEL_PX : CARD_LABEL_PX) * scale);
       for (const [at, side, spec, text] of endSpecs(r)) {
         const spot = endLabelSpot(at, side, endMarker(at, side, spec).reach + 9 * scale,
           9 * scale);
         layer.appendChild(svgEl('text', {
           // 언제나 erd-link-temp 다. 그림 파일에는 손을 올린 상태가 남아서는
           // 안 된다 — 내보낸 그림에 왜 이 선만 글자가 있는지 설명할 길이 없다.
-          class: 'erd-link-card erd-link-temp', 'data-fk': fkID,
+          class: `erd-link-card erd-link-temp${picked ? ' is-selected' : ''}`,
+          'data-fk': fkID,
           x: spot.x, y: spot.y, 'text-anchor': spot.anchor,
           style: `font-size:${size}px;stroke-width:${round1(CARD_LABEL_HALO * scale)}px`,
         }, text));

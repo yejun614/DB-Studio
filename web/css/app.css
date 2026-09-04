@@ -2228,7 +2228,16 @@ option { background: var(--surface); color: var(--text); }
 
 /* 관계선 */
 .erd-link { fill: none; stroke: var(--text-mute); stroke-width: 1.4; pointer-events: none; }
-.erd-link.is-selected { stroke: var(--primary); stroke-width: 2.4; }
+/* 고른 관계선. 색은 --info(파랑)다.
+ *
+ * --primary 를 쓰지 않는 이유: 그것은 밝은 테마에서 검정, 어두운 테마에서 흰색인
+ * **무채색**이라 굵기와 밝기로만 달라 보인다. 표가 스무 개인 도면에서는 그것으로
+ * 부족하다 — 색이 있어야 눈이 선 하나를 끝까지 따라간다.
+ *
+ * 하필 --info 인 이유: 이 앱에서 외래키는 이미 이 색이다(데이터 화면의 FK 표시,
+ * 컬럼 표식). 도면에서만 다른 색을 쓰면 같은 것을 두 색으로 배우게 된다.
+ * 캔버스의 다른 색과도 겹치지 않는다(보라는 뷰·도메인·NOT NULL, 노랑은 기본키·메모). */
+.erd-link.is-selected { stroke: var(--info); stroke-width: 2.4; }
 /* 카드 위로 올려 그리는 선. 돌아갈 길이 없어 카드를 지나야 하는 선과, 마우스를
  * 올렸거나 고른 선이 여기로 온다. 카드보다 위에 있으므로 마우스는 받지 않는다 —
  * 받으면 선 아래에 있는 카드를 누를 수 없다. */
@@ -2255,6 +2264,11 @@ option { background: var(--surface); color: var(--text); }
   fill: none; stroke: var(--text-dim); stroke-width: 1.4;
   stroke-linecap: round; pointer-events: none;
 }
+/* 고른 선의 표식. 선과 같은 색·비슷한 굵기로 두어 끝까지 하나로 읽히게 한다 —
+ * 선만 파랗고 까마귀발이 회색이면 강조가 선 중간에서 끊긴다. */
+.erd-link-mark.is-selected,
+.erd-link-ring.is-selected { stroke: var(--info); stroke-width: 2.2; }
+
 /* 고른 관계선이 붙은 표에서는 다른 선의 표식을 감춘다(erdcanvas.links).
  *
  * display:none 인 이유(opacity 0 이 아니라): 그림 내보내기는 계산된 색·굵기만
@@ -2291,6 +2305,9 @@ option { background: var(--surface); color: var(--text); }
   stroke-width: 3px;
   stroke-linejoin: round;
 }
+/* 고른 선의 개수 표기. 크기는 JS 가 함께 키운다(CARD_LABEL_SEL_PX) — 색만 바꾸면
+ * 도면이 복잡할 때 어느 선을 고른 것인지 한눈에 안 들어온다. */
+.erd-link-card.is-selected { fill: var(--info); }
 
 /* 테이블 카드 */
 .erd-card-g { cursor: move; }
@@ -2372,8 +2389,8 @@ option { background: var(--surface); color: var(--text); }
  * 알고, 진한 층이 사이드바에서 고른 것이 어느 쌍인지 말한다. 두 층은 눈에
  * 확실히 갈려야 한다: 옅은 쪽이 진한 쪽에 가까우면 층이 하나로 보이고,
  * 그러면 "고른 것"이라는 뜻이 사라진다. */
-.erd-col-hot { fill: hsl(var(--h-primary) / 0.26); }
-.erd-col-warm { fill: hsl(var(--h-primary) / 0.08); }
+.erd-col-hot { fill: hsl(var(--h-info) / 0.22); }
+.erd-col-warm { fill: hsl(var(--h-info) / 0.09); }
 .erd-col.is-linked { fill: var(--text); }
 .erd-col-type.is-linked { fill: var(--text-dim); }
 
