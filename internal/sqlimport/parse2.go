@@ -399,9 +399,13 @@ func (p *parser) acceptEq() {
 }
 
 func (p *parser) dropStatement(start int) {
+	p.accept("MATERIALIZED")
+	if p.accept("VIEW") {
+		p.dropView()
+		return
+	}
 	if !p.accept("TABLE") {
-		// DROP INDEX / VIEW / SEQUENCE 등. ERD에 담기지 않거나(뷰) 정보가
-		// 부족해(인덱스 소속 테이블) 반영하지 않는다.
+		// DROP INDEX / SEQUENCE 등. 소속 테이블 같은 정보가 문장에 없어 반영하지 않는다.
 		p.note(start, "")
 		p.skipToStatementEnd()
 		return
@@ -461,6 +465,69 @@ func (p *parser) commentOn(start int) {
 		}
 	default:
 		p.note(start, "")
+	}
+	p.skipToStatementEnd()
+}
+
+// createView는 CREATE [OR REPLACE] VIEW 문을 읽는다.
+//
+// 본문(AS 뒤)은 파싱하지 않고 **원문 그대로** 담는다. 뷰의 본문은 SELECT 한 덩어리라
+// 우리 IR 로 옮길 곳이 없고, 옮길 수 있다 해도 다시 적어 내는 순간 사람이 적어 둔
+// 줄바꿈·별칭·주석이 사라진다 — 뷰에서 읽는 사람이 보는 것은 그 SQL 자체다.
+// 마이그레이션도 이 문자열을 그대로 CREATE OR REPLACE VIEW ... AS 뒤에 붙인다.
+func (p *parser) createView(start int) {
+	p.accept("IF", "NOT", "EXISTS")
+	ns, name, ok := p.qualifiedName()
+	if !ok {
+		p.note(start, "뷰 이름을 읽지 못했습니다")
+		p.skipToStatementEnd()
+		return
+	}
+	// 컬럼 이름 목록: CREATE VIEW v (a, b) AS …
+	if p.peek().isPunct("(") {
+		p.balanced()
+	}
+	// PostgreSQL 의 WITH (security_barrier) 같은 옵션.
+	if p.peek().isWord("WITH") {
+		p.next()
+		if p.peek().isPunct("(") {
+			p.balanced()
+		}
+	}
+	if !p.accept("AS") {
+		p.note(start, "뷰 정의(AS)를 찾지 못했습니다")
+		p.skipToStatementEnd()
+		return
+	}
+	if p.done() {
+		p.note(start, "뷰 정의가 비어 있습니다")
+		return
+	}
+	from := p.peek().pos
+	to := p.skipToStatementEndAt()
+	def := strings.TrimSpace(p.src[from:to])
+	if def == "" {
+		p.note(start, "뷰 정의가 비어 있습니다")
+		return
+	}
+	p.upsertView(&schema.View{Namespace: ns, Name: name, Definition: def})
+}
+
+// dropView는 DROP VIEW 문을 읽는다.
+func (p *parser) dropView() {
+	p.accept("IF", "EXISTS")
+	for !p.done() {
+		ns, name, ok := p.qualifiedName()
+		if !ok {
+			break
+		}
+		k := key(ns, name)
+		p.res.ViewDrops = append(p.res.ViewDrops, k)
+		// 같은 스크립트 안에서 만들었다가 지운 뷰는 만들지 않은 것과 같다.
+		p.removeView(k)
+		if !p.acceptPunct(",") {
+			break
+		}
 	}
 	p.skipToStatementEnd()
 }

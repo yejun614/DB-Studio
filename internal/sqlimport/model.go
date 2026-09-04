@@ -42,6 +42,29 @@ func (p *parser) upsert(tbl *schema.Table) {
 	p.res.Drops = removeString(p.res.Drops, k)
 }
 
+// upsertView는 읽어낸 뷰를 결과에 넣는다. 같은 이름이 이미 있으면 교체한다
+// (CREATE OR REPLACE VIEW 를 두 번 적은 스크립트에서 뒤의 것이 이긴다).
+func (p *parser) upsertView(v *schema.View) {
+	k := v.Key()
+	for i, old := range p.res.Views {
+		if old.Key() == k {
+			p.res.Views[i] = v
+			return
+		}
+	}
+	p.res.Views = append(p.res.Views, v)
+	p.res.ViewDrops = removeString(p.res.ViewDrops, k)
+}
+
+func (p *parser) removeView(k string) {
+	for i, v := range p.res.Views {
+		if v.Key() == k {
+			p.res.Views = append(p.res.Views[:i], p.res.Views[i+1:]...)
+			return
+		}
+	}
+}
+
 func (p *parser) removeTable(k string) {
 	for i, t := range p.res.Tables {
 		if t.Key() == k {

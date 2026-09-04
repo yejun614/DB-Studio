@@ -12,8 +12,16 @@ type Result struct {
 	// Tables는 스크립트가 정의한 테이블이다. 같은 이름이 초안에 이미 있으면 덮어쓴다.
 	Tables []*schema.Table `json:"tables"`
 	Enums  []*schema.Enum  `json:"enums,omitempty"`
+	// Views는 스크립트가 정의한 뷰다.
+	//
+	// 정의문(AS 뒤)을 **원문 그대로** 담는다. 뷰의 본문은 SELECT 한 덩어리이고,
+	// 그것을 토큰으로 되살려 적으면 사람이 적어 둔 줄바꿈과 주석이 사라진다 —
+	// 뷰에서 읽는 사람이 보는 것은 그 SQL 자체다.
+	Views []*schema.View `json:"views,omitempty"`
 	// Drops는 DROP TABLE로 지워진 테이블 키다.
 	Drops []string `json:"drops,omitempty"`
+	// ViewDrops는 DROP VIEW로 지워진 뷰 키다.
+	ViewDrops []string `json:"viewDrops,omitempty"`
 	// Notes는 해석하지 못했거나 무시한 것들이다.
 	//
 	// 이 목록이 이 패키지에서 가장 중요한 반환값이다. 파서가 완전하지 않다는 것을
@@ -30,23 +38,30 @@ type Result struct {
 func Parse(dialect, script string) (*Result, error) {
 	p := &parser{
 		toks:    lex(script),
+		src:     script,
 		dialect: dialect,
 		res:     &Result{Tables: []*schema.Table{}},
 		// 같은 스크립트 안에서 ALTER가 앞의 CREATE를 고칠 수 있어야 한다.
 		byKey: map[string]*schema.Table{},
 	}
 	p.run()
-	if len(p.res.Tables) == 0 && len(p.res.Drops) == 0 {
+	// 뷰만 담긴 스크립트도 읽어낸 것이 있는 스크립트다. 여기서 실패시키면
+	// "뷰 정의만 따로 불러오기"가 아예 되지 않는다.
+	empty := len(p.res.Tables) == 0 && len(p.res.Drops) == 0 &&
+		len(p.res.Views) == 0 && len(p.res.ViewDrops) == 0
+	if empty {
 		if len(p.res.Notes) > 0 {
-			return nil, fmt.Errorf("테이블 정의를 찾지 못했습니다: %s", strings.Join(p.res.Notes, " / "))
+			return nil, fmt.Errorf("테이블·뷰 정의를 찾지 못했습니다: %s", strings.Join(p.res.Notes, " / "))
 		}
-		return nil, fmt.Errorf("테이블 정의를 찾지 못했습니다")
+		return nil, fmt.Errorf("테이블·뷰 정의를 찾지 못했습니다")
 	}
 	return p.res, nil
 }
 
 type parser struct {
-	toks    []token
+	toks []token
+	// src는 원문이다. 뷰 정의처럼 **글자 그대로** 담아야 하는 조각을 잘라낼 때 쓴다.
+	src     string
 	i       int
 	dialect string
 	res     *Result
@@ -98,6 +113,12 @@ func (p *parser) acceptPunct(s string) bool {
 
 // skipToStatementEnd는 세미콜론까지 건너뛴다. 괄호 안의 세미콜론은 세지 않는다.
 func (p *parser) skipToStatementEnd() {
+	p.skipToStatementEndAt()
+}
+
+// skipToStatementEndAt은 문장 끝까지 건너뛰고 **끝 자리**를 돌려준다(세미콜론 앞,
+// 없으면 원문의 끝). 원문을 그대로 잘라내야 하는 곳에서 쓴다.
+func (p *parser) skipToStatementEndAt() int {
 	depth := 0
 	for !p.done() {
 		t := p.next()
@@ -106,9 +127,10 @@ func (p *parser) skipToStatementEnd() {
 		} else if t.isPunct(")") {
 			depth--
 		} else if t.isPunct(";") && depth <= 0 {
-			return
+			return t.pos
 		}
 	}
+	return len(p.src)
 }
 
 // ---------- 문장 분기 ----------
@@ -173,11 +195,16 @@ func (p *parser) createStatement(start int) {
 	p.accept("UNLOGGED")
 
 	unique := p.accept("UNIQUE")
+	// MATERIALIZED VIEW 도 뷰로 읽는다. 우리 IR 에는 그 구분이 없으므로 담을 때는
+	// 같은 것이 되지만, 건너뛰는 것보다는 도면에 나타나는 편이 낫다.
+	p.accept("MATERIALIZED")
 	switch {
 	case p.accept("TABLE"):
 		p.createTable(start)
 	case p.accept("INDEX"), p.accept("CLUSTERED", "INDEX"), p.accept("NONCLUSTERED", "INDEX"):
 		p.createIndex(start, unique)
+	case p.accept("VIEW"):
+		p.createView(start)
 	default:
 		p.note(start, "")
 		p.skipToStatementEnd()

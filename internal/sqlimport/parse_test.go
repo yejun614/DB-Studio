@@ -192,10 +192,17 @@ INSERT INTO a VALUES (1);
 		t.Fatalf("테이블 수: %d", len(res.Tables))
 	}
 	joined := strings.Join(res.Notes, " | ")
-	for _, want := range []string{"VIEW", "FUNCTION", "INSERT"} {
+	for _, want := range []string{"FUNCTION", "INSERT"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("%s 문장이 알림에 없습니다: %s", want, joined)
 		}
+	}
+	// 뷰는 이제 읽어 담는다. 알림에 남으면 "빠졌다"는 뜻이 되어 반대로 읽힌다.
+	if len(res.Views) != 1 || res.Views[0].Name != "v" {
+		t.Errorf("뷰를 읽지 못했습니다: %+v", res.Views)
+	}
+	if strings.Contains(joined, "VIEW") {
+		t.Errorf("읽어 담은 뷰가 알림에도 남았습니다: %s", joined)
 	}
 }
 
