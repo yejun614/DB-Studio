@@ -98,6 +98,21 @@ const (
 	KindMongoDB  DBKind = "mongodb"
 	KindRedis    DBKind = "redis"
 
+	// ClickHouse. 다른 관계형 DB와 같은 자리에 둔다 — SQL 을 말하고 스키마가 있고
+	// database/sql 드라이버가 있으므로, 스키마·데이터·SQL 콘솔·마이그레이션이
+	// 그대로 붙는다. 열 지향이라는 것은 성질이지 다른 종류가 아니다.
+	KindClickHouse DBKind = "clickhouse"
+
+	// 벡터 DB. 임베딩을 담고 "가까운 것"을 찾는 것이 본업이라, 표와 행으로 읽으면
+	// 정작 필요한 것(차원 수, 거리 함수, 색인 상태, 이웃)이 보이지 않는다.
+	// 그래서 전용 화면을 따로 둔다(IsVector).
+	//
+	// pgvector 가 여기 없는 것은 그것이 **PostgreSQL 의 확장**이기 때문이다.
+	// 종류를 따로 만들면 같은 데이터베이스를 두 번 등록해야 하고, 한쪽에서는
+	// 스키마가, 다른 쪽에서는 벡터가 보이는 반쪽짜리 커넥션이 둘 생긴다.
+	KindQdrant   DBKind = "qdrant"
+	KindPinecone DBKind = "pinecone"
+
 	// 분산 스토리지. DB는 아니지만 커넥션으로 등록해 관리·감시한다.
 	//
 	// 같은 표에 두는 이유: 접근 권한·자격증명 보관·지표 수집·이벤트·알림이 모두 커넥션
@@ -105,6 +120,10 @@ const (
 	// 사용자는 "권한을 어디서 주는가"를 대상마다 다시 배워야 한다.
 	KindHadoop DBKind = "hadoop"
 	KindCeph   DBKind = "ceph"
+	// S3 는 특정 회사의 서비스 이름이 아니라 **규약**이다. MinIO·Ceph RGW·
+	// Wasabi·R2 처럼 그 규약을 말하는 저장소는 모두 이 종류로 붙인다 —
+	// 종류를 서비스마다 만들면 같은 코드가 이름만 달리해 늘어난다.
+	KindS3 DBKind = "s3"
 
 	// 메시지 브로커. DB도 스토리지도 아니지만 커넥션으로 등록해 관리·감시한다.
 	// 스토리지와 같은 이유로 커넥션 표에 둔다 — 권한·자격증명·지표·이벤트·알림이
@@ -115,8 +134,9 @@ const (
 
 // SupportedKinds는 실제로 접속 가능한 DB 종류 목록이다.
 func SupportedKinds() []DBKind {
-	return []DBKind{KindMySQL, KindPostgres, KindMSSQL, KindOracle, KindSQLite, KindMongoDB, KindRedis,
-		KindHadoop, KindCeph, KindRabbitMQ, KindKafka}
+	return []DBKind{KindMySQL, KindPostgres, KindMSSQL, KindOracle, KindSQLite, KindClickHouse,
+		KindMongoDB, KindRedis, KindQdrant, KindPinecone,
+		KindHadoop, KindCeph, KindS3, KindRabbitMQ, KindKafka}
 }
 
 // IsStorage는 이 종류가 분산 스토리지 클러스터인지 여부다.
@@ -124,8 +144,22 @@ func SupportedKinds() []DBKind {
 // 화면과 핸들러가 "DB가 아닌 것"을 판별하는 한 곳이다. 종류 이름을 여기저기서 비교하면
 // 종류가 하나 늘 때마다 그 비교를 전부 찾아 고쳐야 한다.
 func (k DBKind) IsStorage() bool {
-	return k == KindHadoop || k == KindCeph
+	return k == KindHadoop || k == KindCeph || k == KindS3
 }
+
+// IsObjectStore는 이 종류가 S3 규약을 말하는 오브젝트 스토리지인지 여부다.
+//
+// IsStorage 와 나눠 두는 이유: 스토리지 화면은 셋을 함께 다루지만, 버킷·객체라는
+// 개념은 S3 에만 있다(하둡은 경로, Ceph 는 풀과 OSD 다). 화면이 무엇을 그릴지는
+// 이 값으로 가른다.
+func (k DBKind) IsObjectStore() bool { return k == KindS3 }
+
+// IsVector는 이 종류가 벡터 전용 DB인지 여부다.
+//
+// **pgvector 는 여기서 참이 아니다.** 그것은 PostgreSQL 커넥션의 성질이지 종류가
+// 아니다. "이 커넥션에서 벡터 화면을 열 수 있는가"는 종류가 아니라 능력
+// (Capabilities.Vector)이 답한다 — 확장이 깔렸는지는 붙어 봐야 알 수 있다.
+func (k DBKind) IsVector() bool { return k == KindQdrant || k == KindPinecone }
 
 // IsBroker는 이 종류가 메시지 브로커인지 여부다.
 //

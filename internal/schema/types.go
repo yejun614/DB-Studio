@@ -128,6 +128,12 @@ func ParseType(dialect, raw string) LogicalType {
 	}
 	lower := strings.ToLower(raw)
 
+	// ClickHouse 는 타입 문법 자체가 다르다(Nullable·LowCardinality·Array 로 감싼다).
+	// 아래의 공통 파서에 넣으면 Nullable(String) 이 통째로 알 수 없는 타입이 된다.
+	if dialect == "clickhouse" {
+		return parseClickHouseType(raw)
+	}
+
 	// PostgreSQL 배열 표기: integer[] 또는 _int4
 	if dialect == "postgres" {
 		if strings.HasSuffix(lower, "[]") {
@@ -282,6 +288,8 @@ func RenderType(dialect string, t LogicalType, preferRaw string) string {
 		return renderOracle(t)
 	case "sqlite":
 		return renderSQLite(t)
+	case "clickhouse":
+		return renderClickHouse(t)
 	}
 	if preferRaw != "" {
 		return preferRaw

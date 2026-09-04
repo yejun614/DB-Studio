@@ -26,6 +26,7 @@ import (
 func init() {
 	register(&hadoopAdapter{})
 	register(&cephAdapter{})
+	register(&s3Adapter{})
 }
 
 // ---------- 하둡 ----------
@@ -214,5 +215,101 @@ func (a *cephAdapter) Metrics(ctx context.Context, t Target) (*metric.Set, error
 	set.Gauge(metric.NameCephOSDsIn, m.OSDsIn, metric.UnitCount)
 	set.Gauge(metric.NameCephPGsUnclean, m.PGsBad, metric.UnitCount)
 	set.Gauge(metric.NameCephPools, m.Pools, metric.UnitCount)
+	return set, nil
+}
+
+// ---------- S3 규약 오브젝트 스토리지 ----------
+//
+// 종류를 서비스마다 만들지 않는 이유: S3 는 규약이다. AWS·MinIO·Ceph RGW·Wasabi·R2
+// 가 모두 같은 REST 를 말하므로, 나누면 같은 코드가 이름만 달리해 늘어난다.
+
+type s3Adapter struct{}
+
+func (a *s3Adapter) Kind() model.DBKind { return model.KindS3 }
+
+func (a *s3Adapter) Capabilities() Capabilities {
+	return Capabilities{Monitor: true, Storage: true}
+}
+
+func (a *s3Adapter) DefaultPort() int { return storage.S3DefaultPort }
+
+func (a *s3Adapter) Validate(t Target) error {
+	if t.Conn == nil {
+		return fmt.Errorf("커넥션 정보가 없습니다")
+	}
+	cfg := storage.ConfigFrom(t.Conn, t.Secret, a.DefaultPort())
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	// 여기서 막는 이유: S3 는 익명 읽기가 되는 버킷이 있지만 **목록**은 언제나
+	// 서명이 필요하다. 키 없이 저장하면 등록은 되고 모든 화면이 403 으로 끝나는데,
+	// 그 원인이 설정에 있다는 것이 오류 메시지에는 드러나지 않는다.
+	if strings.TrimSpace(cfg.User) == "" || strings.TrimSpace(cfg.Password) == "" {
+		return fmt.Errorf("액세스 키와 시크릿 키를 입력하세요")
+	}
+	if addr := strings.TrimSpace(t.Opt("addressing", "")); addr != "" &&
+		addr != "path" && addr != "virtual" {
+		return fmt.Errorf("주소 방식은 path 또는 virtual 이어야 합니다")
+	}
+	return nil
+}
+
+func (a *s3Adapter) client(t Target) *storage.S3 {
+	return storage.NewS3(storage.ConfigFrom(t.Conn, t.Secret, a.DefaultPort()))
+}
+
+func (a *s3Adapter) Ping(ctx context.Context, t Target) (*ServerInfo, error) {
+	start := time.Now()
+	version, err := a.client(t).Ping(ctx)
+	if err != nil {
+		return nil, err
+	}
+	info := &ServerInfo{Version: version, Latency: time.Since(start)}
+	info.LatencyM = float64(info.Latency.Microseconds()) / 1000
+	info.Extra = map[string]string{
+		"endpoint": storage.ConfigFrom(t.Conn, t.Secret, a.DefaultPort()).BaseURL(),
+	}
+	return info, nil
+}
+
+func (a *s3Adapter) Introspect(context.Context, Target) (*schema.Schema, error) {
+	return nil, fmt.Errorf("%w: 오브젝트 스토리지에는 스키마가 없습니다", ErrNotImplemented)
+}
+
+func (a *s3Adapter) Logs(context.Context, Target, *dblog.Filter) (*dblog.Result, error) {
+	// 서버 접근 로그는 대상 버킷에 객체로 쌓이는 것이라 "로그 조회 API"가 아니다.
+	// 그 객체는 스토리지 화면에서 그냥 보인다.
+	return nil, fmt.Errorf("%w: S3 접근 로그는 버킷에 객체로 쌓입니다", ErrNotImplemented)
+}
+
+func (a *s3Adapter) ExecDDL(context.Context, Target, []string, ExecOptions) (*ExecReport, error) {
+	return nil, fmt.Errorf("%w: 오브젝트 스토리지에는 DDL이 없습니다", ErrNotImplemented)
+}
+
+func (a *s3Adapter) Redacted(t Target) string {
+	return storage.ConfigFrom(t.Conn, t.Secret, a.DefaultPort()).BaseURL()
+}
+
+// Metrics는 붙는지와 버킷 수를 본다.
+//
+// 객체 수·크기를 여기서 세지 않는 이유: 수집은 30초마다 도는데 그 값을 알려면
+// 버킷마다 전부 나열해야 한다. 그 부하를 주기마다 치를 값이 아니다 — 크기는
+// 사람이 화면에서 물을 때 센다.
+func (a *s3Adapter) Metrics(ctx context.Context, t Target) (*metric.Set, error) {
+	set := metric.NewSet()
+	start := time.Now()
+	m, err := a.client(t).Collect(ctx)
+	set.LatencyMs = float64(time.Since(start).Microseconds()) / 1000
+	if err != nil {
+		set.Gauge(metric.NameUp, 0, metric.UnitCount)
+		set.Notes = append(set.Notes, err.Error())
+		return set, nil
+	}
+	set.Gauge(metric.NameUp, 1, metric.UnitCount)
+	set.Gauge(metric.NameLatency, set.LatencyMs, metric.UnitMillis)
+	set.Gauge(metric.NameS3Buckets, float64(m.Buckets), metric.UnitCount)
+	// 상태는 "붙었다"까지만 말한다. 오브젝트 스토리지에는 클러스터 상태를 묻는
+	// 규약이 없다(MinIO 의 admin API 는 규약 밖이다).
+	set.Gauge(metric.NameStorageHealth, 0, metric.UnitCount)
 	return set, nil
 }

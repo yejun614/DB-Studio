@@ -171,6 +171,25 @@ const (
 	NameCephPGsUnclean = "ceph.pg.unclean" // active+clean이 아닌 PG
 	NameCephPools      = "ceph.pools"
 
+	// 오브젝트 스토리지(S3 규약). 용량 지표가 없는 것이 특징이다 —
+	// 오브젝트 스토리지에는 "총 용량"이 없고 쓰는 만큼 늘어난다. 있는 척 0을
+	// 채우면 사용률 막대가 늘 0%로 보이고, 그것은 아무 말도 하지 않는다.
+	NameS3Buckets = "s3.buckets" // 버킷 수
+
+	// ClickHouse. 열 지향 DB 에서 먼저 무너지는 곳은 다른 DB 와 다르다 —
+	// 접속 수도 락도 아니고 **병합이 쓰기를 따라오는가**다.
+	NameClickHouseMaxParts    = "clickhouse.parts.max" // 파티션 하나의 파트 수
+	NameClickHouseCompression = "clickhouse.compression_ratio"
+
+	// 벡터 DB. 첫 질문은 "몇 개가 들어 있고 색인이 준비됐나"다.
+	// 색인이 준비되지 않은 컬렉션은 검색이 되기는 하지만 전수 조사로 떨어져서,
+	// 느려진 이유가 데이터가 늘어서인지 색인이 아직 안 끝나서인지 알 수 없다.
+	NameVectorCollections = "vector.collections" // 컬렉션(인덱스) 수
+	NameVectorPoints      = "vector.points"      // 담긴 벡터 수
+	NameVectorIndexed     = "vector.indexed"     // 색인이 끝난 벡터 수
+	NameVectorNotReady    = "vector.not_ready"   // 준비되지 않은 컬렉션 수
+	NameVectorFullness    = "vector.fullness"    // 인덱스 사용률(Pinecone)
+
 	// 메시지 브로커(RabbitMQ·Kafka). 브로커의 첫 질문은 "쌓이고 있나"다.
 	// 큐 깊이·랙은 그 자체로 좋지도 나쁘지도 않다 — 소비자가 따라오고 있으면
 	// 정상이고, 따라오지 못하면 장애의 전조다. 그래서 항상 "쌓인 양"과
@@ -256,6 +275,25 @@ var catalog = map[string]Meta{
 	NameYARNAppsPending: {Label: "대기 중 앱", Unit: UnitCount, Help: "자원을 기다리는 애플리케이션 수"},
 	NameYARNMemUsedPct: {Label: "YARN 메모리 사용률", Unit: UnitPercent,
 		Help: "클러스터 메모리 중 할당된 비율. 100%에 붙어 있으면 대기 앱이 쌓입니다"},
+
+	NameClickHouseMaxParts: {Label: "최대 파트 수", Unit: UnitCount, Primary: true,
+		Help: "한 파티션이 가진 파트 수 중 가장 큰 값입니다. 300 근처로 오르면 병합이 쓰기를 따라오지 못하는 것이고, 그대로 두면 INSERT가 거절되기 시작합니다"},
+	NameClickHouseCompression: {Label: "압축비", Unit: UnitCount, HigherIsBetter: true,
+		Help: "원본 크기 ÷ 디스크 크기입니다. 갑자기 낮아지면 압축이 잘 되지 않는 데이터가 들어온 것입니다"},
+
+	NameS3Buckets: {Label: "버킷", Unit: UnitCount, Primary: true,
+		Help: "이 자격증명으로 보이는 버킷 수입니다. 객체 수와 크기는 버킷을 나열해야 알 수 있어 수집 주기마다 세지 않습니다"},
+
+	NameVectorCollections: {Label: "컬렉션", Unit: UnitCount, Primary: true,
+		Help: "이 서버의 컬렉션(Pinecone은 인덱스) 수입니다"},
+	NameVectorPoints: {Label: "벡터", Unit: UnitCount, Primary: true,
+		Help: "모든 컬렉션에 담긴 벡터 수의 합입니다"},
+	NameVectorIndexed: {Label: "색인된 벡터", Unit: UnitCount,
+		Help: "색인에 올라간 벡터 수. 담긴 수보다 한참 적으면 색인이 아직 따라오지 못한 것입니다"},
+	NameVectorNotReady: {Label: "준비 안 된 컬렉션", Unit: UnitCount, Primary: true,
+		Help: "green(준비됨)이 아닌 컬렉션 수입니다. 0이 아니면 그 컬렉션의 검색이 전수 조사로 떨어져 느려집니다"},
+	NameVectorFullness: {Label: "인덱스 사용률", Unit: UnitPercent,
+		Help: "Pinecone이 알려주는 인덱스 사용률입니다. 100%에 가까우면 더 넣을 수 없습니다"},
 
 	NameCephOSDsIn:     {Label: "in 상태 OSD", Unit: UnitCount, Help: "데이터 배치에 참여 중인 OSD"},
 	NameCephPGsUnclean: {Label: "비정상 PG", Unit: UnitCount, Help: "active+clean이 아닌 배치 그룹 수"},

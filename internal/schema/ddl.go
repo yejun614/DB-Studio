@@ -162,6 +162,29 @@ var quirks = map[string]*dialectQuirks{
 			return fmt.Sprintf("ALTER TABLE %s MODIFY (%s DEFAULT NULL)", table, col)
 		},
 	},
+	"clickhouse": {
+		quoteOpen: "`", quoteClose: "`",
+		supportsAlterColumnType: true, supportsDropColumn: true,
+		supportsInlineComment: true, ifExists: true, ifNotExists: true,
+		// 자동 증가가 없다. 분산 저장에서 하나의 증가하는 수를 유지하려면 노드
+		// 사이의 합의가 필요한데, 그것이 이 DB 가 빠른 이유와 정면으로 부딪힌다.
+		// 대신 UUID 나 스노플레이크 같은 식별자를 쓴다.
+		identityClause: "",
+		alterColumnType: func(q *dialectQuirks, table, col, typ string, nullable bool) string {
+			// 널 허용은 타입에 들어 있다(Nullable(...)). 뒤에 NOT NULL 을 붙이면
+			// 문법 오류다.
+			return fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN %s %s", table, col, typ)
+		},
+		setNullability: func(q *dialectQuirks, table, col, typ string, nullable bool) string {
+			return fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN %s %s", table, col, typ)
+		},
+		setDefault: func(q *dialectQuirks, table, col, def string) string {
+			return fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN %s DEFAULT %s", table, col, def)
+		},
+		dropDefault: func(q *dialectQuirks, table, col string) string {
+			return fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN %s REMOVE DEFAULT", table, col)
+		},
+	},
 	"sqlite": {
 		quoteOpen: `"`, quoteClose: `"`,
 		// SQLite의 ALTER TABLE은 컬럼 추가/이름변경/삭제만 지원한다.
@@ -291,6 +314,35 @@ func (r *renderer) warn(format string, args ...any) {
 }
 
 func (r *renderer) render(c Change) {
+	// ClickHouse 에 없는 것들. 문장을 만들어 내면 실행하는 순간 문법 오류가 나고,
+	// 그때는 계획의 절반이 이미 적용된 뒤다. 계획을 만들 때 걸러 내고 이유를 적는다.
+	if r.dialect == "clickhouse" {
+		switch c.Kind {
+		case AddForeign, DropForeign:
+			r.warn("ClickHouse에는 외래키가 없어 %s의 관계는 만들지 않았습니다 (참조 무결성은 넣는 쪽에서 지켜야 합니다)",
+				c.Table)
+			return
+		case AddCheck, DropCheck:
+			r.warn("ClickHouse의 제약(CONSTRAINT)은 표를 만들 때만 정할 수 있어 %s의 체크 제약은 만들지 않았습니다",
+				c.Table)
+			return
+		case AddPrimary, DropPrimary:
+			// 기본키는 정렬 키이고, 정렬 키는 이미 만들어진 표에서 바꿀 수 없다
+			// (저장된 순서 자체가 그것이기 때문이다). 표를 다시 만들어야 한다.
+			r.warn("ClickHouse의 기본키는 정렬 키라서 만든 뒤에는 바꿀 수 없습니다 — %s를 다시 만들어야 합니다",
+				c.Table)
+			return
+		case AddIndex, DropIndex:
+			// 데이터 스킵 인덱스는 문법이 아예 다르고(TYPE·GRANULARITY 를 요구한다),
+			// 그 값들은 다른 방언의 인덱스 정의에 들어 있지 않다.
+			r.warn("ClickHouse의 인덱스는 데이터 스킵 인덱스라 문법이 달라 %s의 인덱스는 만들지 않았습니다",
+				c.Table)
+			return
+		case CreateEnum, DropEnum, AlterEnum:
+			// Enum 은 독립된 타입이 아니라 컬럼 타입 안에 산다.
+			return
+		}
+	}
 	switch c.Kind {
 	case CreateTable:
 		r.createTable(c)
@@ -384,7 +436,11 @@ func (r *renderer) createTable(c Change) {
 	}
 	// SQLite에서 rowid 별칭(INTEGER PRIMARY KEY AUTOINCREMENT)은 컬럼 정의에
 	// 인라인되므로 테이블 레벨 PRIMARY KEY 절을 중복해서 넣으면 문법 오류가 된다.
-	if t.PrimaryKey != nil && len(t.PrimaryKey.Columns) > 0 && sqliteInlinePKColumn(r.dialect, t) == nil {
+	// ClickHouse 의 기본키는 제약이 아니라 **정렬 키**다(유일성을 강제하지 않는다).
+	// 표 안에 PRIMARY KEY 절로 쓸 수는 있지만, 엔진 절의 ORDER BY 와 함께 쓰면
+	// 둘이 어긋날 때 서버가 거절한다. 그래서 엔진 절 한 곳에서만 낸다.
+	if t.PrimaryKey != nil && len(t.PrimaryKey.Columns) > 0 &&
+		r.dialect != "clickhouse" && sqliteInlinePKColumn(r.dialect, t) == nil {
 		parts = append(parts, "  "+r.primaryKeyClause(t.PrimaryKey))
 	}
 	for _, ck := range t.Checks {
@@ -421,6 +477,15 @@ func (r *renderer) createTable(c Change) {
 	}
 	if ts := t.Options["tablespace"]; ts != "" && (r.dialect == "postgres" || r.dialect == "oracle") {
 		fmt.Fprintf(&b, " TABLESPACE %s", ts)
+	}
+	if r.dialect == "clickhouse" {
+		b.WriteString(ClickHouseEngineClause(t, r.id))
+		if t.PrimaryKey == nil || len(t.PrimaryKey.Columns) == 0 {
+			if strings.TrimSpace(t.Options["order_by"]) == "" {
+				r.warn("%s에 기본키도 정렬 키도 없어 ORDER BY tuple()로 만들었습니다 — 조회가 언제나 전수 조사가 됩니다",
+					t.Display())
+			}
+		}
 	}
 	r.up(c, b.String(), "")
 
@@ -486,6 +551,27 @@ func (r *renderer) ifExistsClause() string {
 // t는 SQLite의 rowid 별칭 판정에 필요하며, ALTER 문맥에서도 소속 테이블을 넘긴다.
 func (r *renderer) columnDef(t *Table, col *Column) string {
 	var b strings.Builder
+	// ClickHouse 는 널 허용을 타입으로 감싼다. 여기서 갈라 두지 않으면 아래에서
+	// NOT NULL 을 뒤에 붙이게 되고, 그 문장은 서버가 거절한다.
+	if r.dialect == "clickhouse" {
+		fmt.Fprintf(&b, "%s %s", r.id(col.Name),
+			ClickHouseColumnType(col.Type, col.RawType, col.Nullable))
+		if col.Generated != "" {
+			fmt.Fprintf(&b, " MATERIALIZED %s", col.Generated)
+			return b.String()
+		}
+		if col.HasDefault && col.Default != "" {
+			fmt.Fprintf(&b, " DEFAULT %s", col.Default)
+		}
+		if col.Comment != "" {
+			fmt.Fprintf(&b, " COMMENT %s", quoteLiteral(col.Comment))
+		}
+		if col.Identity {
+			r.warn("ClickHouse에는 자동 증가가 없어 %s 컬럼의 설정을 생략했습니다 — UUID나 스노플레이크 식별자를 쓰세요",
+				col.Name)
+		}
+		return b.String()
+	}
 	fmt.Fprintf(&b, "%s %s", r.id(col.Name), RenderType(r.dialect, col.Type, col.RawType))
 
 	if col.Generated != "" {

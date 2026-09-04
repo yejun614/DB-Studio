@@ -195,30 +195,40 @@ func Kinds() []KindInfo {
 }
 
 var kindLabels = map[model.DBKind]string{
-	model.KindMySQL:    "MySQL / MariaDB",
-	model.KindPostgres: "PostgreSQL",
-	model.KindMSSQL:    "Microsoft SQL Server",
-	model.KindOracle:   "Oracle",
-	model.KindSQLite:   "SQLite",
-	model.KindMongoDB:  "MongoDB",
-	model.KindRedis:    "Redis",
-	model.KindHadoop:   "Apache Hadoop (HDFS)",
-	model.KindCeph:     "Ceph",
-	model.KindRabbitMQ: "RabbitMQ",
-	model.KindKafka:    "Apache Kafka",
+	model.KindMySQL:      "MySQL / MariaDB",
+	model.KindClickHouse: "ClickHouse",
+	model.KindQdrant:     "Qdrant (벡터)",
+	model.KindPinecone:   "Pinecone (벡터)",
+	model.KindS3:         "S3 호환 오브젝트 스토리지",
+	model.KindPostgres:   "PostgreSQL",
+	model.KindMSSQL:      "Microsoft SQL Server",
+	model.KindOracle:     "Oracle",
+	model.KindSQLite:     "SQLite",
+	model.KindMongoDB:    "MongoDB",
+	model.KindRedis:      "Redis",
+	model.KindHadoop:     "Apache Hadoop (HDFS)",
+	model.KindCeph:       "Ceph",
+	model.KindRabbitMQ:   "RabbitMQ",
+	model.KindKafka:      "Apache Kafka",
 }
 
 var dbLabels = map[model.DBKind]string{
-	model.KindMySQL:    "데이터베이스",
-	model.KindPostgres: "데이터베이스",
-	model.KindMSSQL:    "데이터베이스",
-	model.KindOracle:   "서비스명 / SID",
-	model.KindSQLite:   "파일 경로",
+	model.KindMySQL:      "데이터베이스",
+	model.KindPostgres:   "데이터베이스",
+	model.KindMSSQL:      "데이터베이스",
+	model.KindOracle:     "서비스명 / SID",
+	model.KindSQLite:     "파일 경로",
+	model.KindClickHouse: "데이터베이스",
+	// Qdrant 는 서버 하나가 대상 전부다(컬렉션이 그 아래에 있고, 화면이 고른다).
+	model.KindQdrant: "",
+	// Pinecone 은 인덱스가 곧 대상이다 — 주소도 인덱스마다 다르다.
+	model.KindPinecone: "인덱스",
 	model.KindMongoDB:  "데이터베이스",
 	model.KindRedis:    "DB 인덱스 (0-15)",
 	// 스토리지에는 "데이터베이스"에 해당하는 것이 없다. 클러스터 하나가 대상 전부다.
 	model.KindHadoop: "",
 	model.KindCeph:   "",
+	model.KindS3:     "",
 	// 브로커도 마찬가지다. 클러스터 하나가 대상 전부다.
 	model.KindRabbitMQ: "",
 	model.KindKafka:    "",
@@ -247,6 +257,45 @@ var optionHints = map[model.DBKind][]OptionHint{
 		{
 			Key: "client_encoding", Label: "클라이언트 인코딩", Placeholder: "UTF8",
 			Help: "값을 주고받을 때 쓰는 인코딩입니다. 데이터베이스의 인코딩과는 다른 것입니다",
+		},
+	},
+	model.KindClickHouse: {
+		{Key: "secure", Label: "TLS", Choices: []string{"false", "true"},
+			Help: "ClickHouse Cloud 는 켜야 합니다(기본 포트 9440)"},
+		{Key: "cluster", Label: "클러스터 이름", Placeholder: "default",
+			Help: "적어 두면 DDL 에 ON CLUSTER 가 붙습니다. 단일 노드면 비워 두세요"},
+		{Key: "timezone", Label: "세션 시간대", Placeholder: "Asia/Seoul"},
+	},
+	model.KindQdrant: {
+		{Key: "scheme", Label: "프로토콜", Choices: []string{"http", "https"}},
+		{
+			Key: "api_key", Label: "API 키", Help: "Qdrant Cloud 는 필수입니다. 자체 호스팅에서 인증을 켜지 않았다면 비워 두세요",
+		},
+		{
+			Key: "insecure", Label: "인증서 검증 생략", Choices: []string{"false", "true"},
+			Help: "자체 서명 인증서를 쓰는 사내 서버에서만 켜세요",
+		},
+	},
+	model.KindPinecone: {
+		{
+			Key: "index_host", Label: "인덱스 호스트",
+			Placeholder: "my-index-abc123.svc.us-east-1-aws.pinecone.io",
+			Help:        "인덱스마다 주소가 다릅니다. 콘솔의 Index 화면에 적힌 host 를 그대로 넣으세요",
+		},
+		{Key: "namespace", Label: "네임스페이스", Help: "비우면 기본 네임스페이스를 봅니다"},
+	},
+	model.KindS3: {
+		{Key: "region", Label: "리전", Placeholder: "ap-northeast-2",
+			Help: "AWS 는 필수입니다. MinIO 처럼 리전이 없는 서버는 비워 두세요"},
+		{
+			Key: "addressing", Label: "주소 방식", Choices: []string{"path", "virtual"},
+			Help: "path 는 host/버킷/키, virtual 은 버킷.host/키 입니다. MinIO·자체 호스팅은 path 를 쓰세요",
+		},
+		{Key: "scheme", Label: "프로토콜", Choices: []string{"https", "http"}},
+		{Key: "session_token", Label: "세션 토큰", Help: "STS 임시 자격증명을 쓸 때만 넣습니다"},
+		{
+			Key: "insecure", Label: "인증서 검증 생략", Choices: []string{"false", "true"},
+			Help: "자체 서명 인증서를 쓰는 사내 서버에서만 켜세요",
 		},
 	},
 	model.KindMSSQL: {

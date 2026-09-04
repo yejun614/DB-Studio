@@ -278,6 +278,16 @@ func (a *sqlAdapter) QueryRows(ctx context.Context, t Target, q RowQuery) (*RowP
 	if len(pk) == 0 {
 		result.Reason = "기본키가 없어 개별 행을 지정할 수 없습니다. 조회만 가능합니다"
 	}
+	// ClickHouse 의 기본키는 **정렬 키**다. 유일성을 강제하지 않으므로 그 값으로
+	// WHERE 를 만들어도 한 행을 집었다는 보장이 없다 — 같은 값의 행이 여럿 있을 수
+	// 있고, 그때 한 줄을 고치려던 UPDATE 가 여러 줄을 바꾼다. 게다가 ClickHouse 의
+	// 수정은 ALTER TABLE ... UPDATE 라는 비동기 작업이라 "고쳤다"고 말하는 순간에
+	// 아직 반영되지 않았을 수도 있다. 두 가지 모두 조용히 어긋나므로 막는다.
+	if a.kind == model.KindClickHouse {
+		result.Editable = false
+		result.Reason = "ClickHouse의 기본키는 정렬 키라 한 행을 집어낼 수 없고, " +
+			"수정은 비동기 작업(ALTER TABLE ... UPDATE)이라 이 화면에서는 조회만 합니다"
+	}
 	// 정렬할 것이 없었다면(뷰, 기본키 없는 테이블) 페이지 경계가 흔들릴 수 있다.
 	// 첫 페이지만 보는 경우에는 아무 문제가 없으므로, 막지 않고 알리기만 한다.
 	if orderClause == "" && (hasMore || q.Offset > 0) {

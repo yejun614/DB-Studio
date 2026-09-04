@@ -23,7 +23,7 @@ import (
 // DB에서 읽어 온 것이지만, 그 목록도 결국 문자열이므로 같은 규칙으로 다룬다.
 func quoteIdent(kind model.DBKind, name string) string {
 	switch kind {
-	case model.KindMySQL:
+	case model.KindMySQL, model.KindClickHouse:
 		return "`" + strings.ReplaceAll(name, "`", "``") + "`"
 	case model.KindMSSQL:
 		return "[" + strings.ReplaceAll(name, "]", "]]") + "]"
@@ -132,6 +132,10 @@ func likeExpr(kind model.DBKind, col string, p *paramBuilder, pattern string) st
 		return fmt.Sprintf("CAST(%s AS NVARCHAR(MAX)) LIKE %s %s", col, p.Add(pattern), esc)
 	case model.KindMySQL:
 		return fmt.Sprintf("CAST(%s AS CHAR) LIKE %s %s", col, p.Add(pattern), esc)
+	case model.KindClickHouse:
+		// ClickHouse 에는 ESCAPE 절이 없고, ilike 가 대소문자를 무시한다.
+		// toString 은 널을 만나면 널을 돌려주므로 널 컬럼도 그냥 걸러진다.
+		return fmt.Sprintf("toString(%s) ILIKE %s", col, p.Add(pattern))
 	default: // SQLite
 		return fmt.Sprintf("CAST(%s AS TEXT) LIKE %s %s", col, p.Add(pattern), esc)
 	}
@@ -224,6 +228,17 @@ func listObjectsSQL(kind model.DBKind, database, owner string) (string, []any) {
 			WHERE owner = COALESCE(NULLIF(UPPER(:2), ' '), SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA'))
 			ORDER BY 1, 2`, []any{oracleOwner(owner), oracleOwner(owner)}
 
+	case model.KindClickHouse:
+		// system.tables 하나로 표와 뷰가 함께 나온다. 엔진 이름이 뷰인지를 말한다
+		// (View·MaterializedView·LiveView). total_rows 는 엔진에 따라 NULL 이다.
+		return `SELECT database, name,
+			CASE WHEN engine LIKE '%View' THEN 'view' ELSE 'table' END,
+			COALESCE(toInt64(total_rows), -1), comment
+			FROM system.tables
+			WHERE database = coalesce(nullIf(?, ''), currentDatabase())
+			  AND NOT is_temporary
+			ORDER BY name`, []any{database}
+
 	default: // SQLite
 		return `SELECT '', name, CASE type WHEN 'view' THEN 'view' ELSE 'table' END, -1, ''
 			FROM sqlite_master
@@ -272,6 +287,16 @@ func primaryKeySQL(kind model.DBKind, ref TableRef) (string, []any) {
 			WHERE c.constraint_type = 'P' AND c.table_name = :1
 			  AND c.owner = COALESCE(NULLIF(:2, ' '), SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA'))
 			ORDER BY cc.position`, []any{ref.Name, oracleOwner(ref.Namespace)}
+
+	case model.KindClickHouse:
+		// ClickHouse 의 "기본키"는 정렬 키다. 유일성을 강제하지 않으므로 이것으로
+		// 행 하나를 확실히 집을 수는 없다 — 그래서 데이터 화면이 이 표를 편집
+		// 불가로 두는 것이 맞다. 그래도 목록을 돌려주는 이유는 화면이 그 컬럼을
+		// 열쇠 표시로 그려 "무엇으로 찾는 표인가"를 보여주기 때문이다.
+		return `SELECT name FROM system.columns
+			WHERE database = coalesce(nullIf(?, ''), currentDatabase())
+			  AND table = ? AND is_in_primary_key
+			ORDER BY position`, []any{ref.Namespace, ref.Name}
 
 	default: // SQLite
 		// PRAGMA는 파라미터를 받지 않으므로 이름을 직접 넣는다. 인용은 필수다.

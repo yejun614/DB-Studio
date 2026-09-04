@@ -7,11 +7,12 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"  // "mysql"
-	_ "github.com/jackc/pgx/v5/stdlib"  // "pgx"
-	_ "github.com/microsoft/go-mssqldb" // "sqlserver"
-	_ "github.com/sijms/go-ora/v2"      // "oracle"
-	_ "modernc.org/sqlite"              // "sqlite"
+	_ "github.com/ClickHouse/clickhouse-go/v2" // "clickhouse"
+	_ "github.com/go-sql-driver/mysql"         // "mysql"
+	_ "github.com/jackc/pgx/v5/stdlib"         // "pgx"
+	_ "github.com/microsoft/go-mssqldb"        // "sqlserver"
+	_ "github.com/sijms/go-ora/v2"             // "oracle"
+	_ "modernc.org/sqlite"                     // "sqlite"
 
 	"dbstudio/internal/model"
 )
@@ -19,6 +20,11 @@ import (
 // 전 단계 기능이 아직 구현되지 않았어도 어댑터가 무엇을 지원할 수 있는지는 여기서 선언한다.
 // UI는 이 값으로 기능 버튼을 켜고 끈다.
 var relationalCaps = Capabilities{Introspect: true, Monitor: true, Logs: true, Migrate: true, ERD: true}
+
+// ClickHouse 는 관계형 다섯과 같은 것을 지원한다. 다만 만들어지는 DDL 이 꽤 다르고
+// (외래키·체크·인덱스가 없거나 다르다), 그 차이는 계획을 만들 때 경고로 나온다 —
+// 화면이 미리 알려 주므로 마이그레이션을 끄지 않는다.
+var clickhouseCaps = relationalCaps
 
 // SQLite는 서버가 없어 로그/쿼리 통계 소스가 존재하지 않는다.
 // Logs를 true로 두면 UI가 빈 화면을 보여주므로 명시적으로 끈다.
@@ -50,6 +56,13 @@ func init() {
 		introspect:    introspectOracle,
 		metrics:       metricsOracle,
 		logs:          logsOracle,
+	})
+	register(&sqlAdapter{
+		kind: model.KindClickHouse, driver: "clickhouse", defaultPort: 9000,
+		caps:         clickhouseCaps,
+		versionQuery: "SELECT version()", needsHost: true, needsDatabase: true,
+		dsn: clickhouseDSN, introspect: introspectClickHouse,
+		metrics: metricsClickHouse, logs: logsClickHouse,
 	})
 	register(&sqlAdapter{
 		kind: model.KindSQLite, driver: "sqlite", defaultPort: 0, caps: sqliteCaps,

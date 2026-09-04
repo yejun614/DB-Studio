@@ -47,6 +47,35 @@ func TableOptionSpecs(dialect string) []OptionSpec {
 				Help:        "문자셋에 속한 규칙이어야 합니다. 비교와 정렬 순서를 정합니다.",
 			},
 		}
+	case "clickhouse":
+		// ClickHouse 의 표 설정은 다른 DB 의 그것과 무게가 다르다. 엔진과 정렬 키는
+		// "성능 조정"이 아니라 **표가 무엇인가**를 정한다 — 정렬 키 없는 MergeTree
+		// 표는 아예 만들어지지 않고, 엔진을 바꾸면 중복 처리 규칙이 달라진다.
+		return []OptionSpec{
+			{
+				Key: "engine", Label: "엔진", Kind: "select",
+				Choices: []string{
+					"MergeTree", "ReplacingMergeTree", "SummingMergeTree",
+					"AggregatingMergeTree", "CollapsingMergeTree", "Log", "Memory",
+				},
+				Help: "MergeTree 계열만 정렬 키·파티션·TTL 을 씁니다.",
+			},
+			{
+				Key: "order_by", Label: "정렬 키 (ORDER BY)", Kind: "text",
+				Placeholder: "기본키를 따릅니다",
+				Help:        "이 순서로 정렬해 저장합니다. 조회 조건에 자주 쓰는 컬럼을 앞에 두세요.",
+			},
+			{
+				Key: "partition_by", Label: "파티션 키", Kind: "text",
+				Placeholder: "toYYYYMM(created_at)",
+				Help:        "너무 잘게 나누면 파티션 수가 폭발해 오히려 느려집니다. 월 단위가 무난합니다.",
+			},
+			{
+				Key: "ttl", Label: "보관 기간 (TTL)", Kind: "text",
+				Placeholder: "created_at + INTERVAL 90 DAY",
+				Help:        "이 조건을 넘긴 행은 병합 때 지워집니다.",
+			},
+		}
 	case "postgres":
 		return []OptionSpec{
 			{
