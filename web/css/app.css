@@ -3651,6 +3651,25 @@ h5.md-h, h6.md-h { font-size: 13.5px; color: var(--text-dim); }
 /* ERD 설계 창의 승인 카드. 좁은 인스펙터에 들어가므로 카드 기본 여백을 줄인다. */
 .erd-ai-pending { margin: 8px 0 0; padding: 12px; }
 
+/* 스킬 — 미리 적어 둔 지시문.
+ *
+ * 입력칸 왼쪽에 단추를 둔다. "무엇을 물을지"를 정하는 일이라 적기 전에 지나는
+ * 자리이고, 보내기 옆에 두면 다 적은 뒤에야 눈에 띈다. */
+.ai-skill-btn { flex: none; align-self: stretch; height: auto; }
+.ai-skill-list { display: flex; flex-direction: column; gap: 8px; }
+.ai-skill-item {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 11px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit; text-align: left; cursor: pointer;
+}
+.ai-skill-item:hover { border-color: var(--primary); background: var(--surface-2); }
+.ai-skill-icon { color: var(--accent); flex: none; display: inline-flex; padding-top: 1px; }
+.ai-skill-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+
 .ai-suggestions { display: flex; flex-direction: column; gap: 10px; }
 .ai-chips { display: flex; gap: 8px; flex-wrap: wrap; }
 

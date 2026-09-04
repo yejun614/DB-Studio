@@ -7,7 +7,7 @@ import { withProject } from '../core/project.js';
 import { streamAIChat } from '../core/aistream.js';
 import { state } from '../core/store.js';
 import {
-  h, mount, icon, select, input, textarea, spinner, emptyState,
+  h, mount, icon, select, input, textarea, spinner, emptyState, field,
   badge, envBadge, toast, toastError, relativeTime, openModal, confirmDialog,
   copyToClipboard,
 } from '../core/ui.js';
@@ -186,6 +186,8 @@ export async function mountAssistant(outlet, {
 
   const chat = new ChatView(sessionId, data, conns, ui, nav);
   chat.compact = compact;
+  // 팝업 안에서는 화면 전체를 덮는 모달 대신 패널 안 모달을 쓴다(스킬 고르개).
+  chat.panel = panel;
   await chat.load();
   // 답변을 받는 중에 나가려 하면 물어본다.
   //
@@ -679,7 +681,143 @@ class ChatView {
       : h('button.btn.btn-primary', {
         type: 'button', onclick: () => this.send(),
       }, icon('play'), '보내기');
-    mount(this.composer, this.inputBox, this.sendBtn);
+    // 스킬 단추는 입력칸 왼쪽에 둔다. 스킬은 "무엇을 물을지"를 정하는 일이라
+    // 적기 전에 지나가는 자리이고, 보내기 옆에 두면 다 적은 뒤에야 눈에 띈다.
+    const skillBtn = h('button.btn.btn-small.ai-skill-btn', {
+      type: 'button',
+      title: '미리 적어 둔 지시문으로 시작합니다',
+      disabled: this.streamingNow(),
+      onclick: () => this.openSkills(),
+    }, icon('sparkles', 14), '스킬');
+    mount(this.composer, skillBtn, this.inputBox, this.sendBtn);
+  }
+
+  // openSkills는 스킬 목록을 열고, 고른 스킬의 값을 물어 **입력칸에 채운다.**
+  //
+  // 바로 보내지 않는 이유가 요점이다. 스킬은 사용자의 말로 대화에 들어가므로,
+  // 보내기 전에 그 말이 무엇인지 볼 수 있어야 한다 — 고치고 싶은 한 줄이 늘 있고,
+  // 무엇을 보냈는지 모른 채 받은 답은 검토할 수도 없다.
+  async openSkills() {
+    let skills = this.skills;
+    if (!skills) {
+      try {
+        const res = await api.get('/ai/skills');
+        skills = res.items ?? [];
+        this.skills = skills;
+      } catch (err) {
+        toastError(err);
+        return;
+      }
+    }
+    if (!skills.length) {
+      toast('쓸 수 있는 스킬이 없습니다', 'info');
+      return;
+    }
+
+    // 팝업에서는 패널 안 모달을 쓴다. 화면 전체를 덮으면 "뒤 화면을 보면서 쓰는
+    // 도구"라는 전제가 무너진다(floatpanel 의 panelModal 과 같은 이유).
+    const open = (opts) => (this.panel ? panelModal(this.panel, opts) : openModal(opts));
+
+    const pickSkill = () => {
+      const close = open({
+        title: 'AI 스킬',
+        width: 520,
+        body: () => h('div.ai-skill-list', {}, skills.map((sk) => h('button.ai-skill-item', {
+          type: 'button',
+          onclick: () => {
+            close();
+            this.fillSkill(sk);
+          },
+        },
+        h('span.ai-skill-icon', {}, icon(sk.icon || 'sparkles', 16)),
+        h('span.ai-skill-main', {},
+          h('strong', {}, sk.name),
+          h('span.muted.small', {}, sk.description)),
+        ))),
+        footer: (dismiss) => [h('button.btn', { type: 'button', onclick: dismiss }, '닫기')],
+      });
+    };
+    pickSkill();
+  }
+
+  // fillSkill은 스킬이 물어보는 값을 받아 지시문을 입력칸에 채운다.
+  fillSkill(skill) {
+    const fields = [];
+    const values = new Map();
+
+    for (const arg of skill.args ?? []) {
+      if (arg.type === 'connection') {
+        const items = (this.conns.items ?? []);
+        const sel = select(items.map((i) => ({
+          value: i.connection.name,
+          label: `${i.connection.name}${i.connection.databaseName ? ` / ${i.connection.databaseName}` : ''}`,
+        })), { value: items[0]?.connection?.name ?? '' });
+        values.set(arg.key, () => sel.value);
+        fields.push(field(arg.label, sel,
+          '툴에는 이 이름이 그대로 넘어갑니다.'));
+        continue;
+      }
+      if (arg.type === 'erd') {
+        // 초안 목록은 이 창을 열 때 받는다. 대화 화면이 늘 들고 있을 이유가 없다.
+        const box = select([{ value: '', label: '불러오는 중…' }], {});
+        values.set(arg.key, () => box.value);
+        fields.push(field(arg.label, box, '이름이 지시문에 그대로 들어갑니다.'));
+        api.get('/erd/documents/?limit=200').then((res) => {
+          const items = (res.items ?? []).map((it) => it.document);
+          mount(box, ...items.map((d) => h('option', { value: d.name }, d.name)));
+          if (!items.length) mount(box, h('option', { value: '' }, '(초안이 없습니다)'));
+        }).catch(() => {
+          mount(box, h('option', { value: '' }, '(목록을 불러오지 못했습니다)'));
+        });
+        continue;
+      }
+      const el = arg.multiline
+        ? h('textarea.input.textarea', {
+          rows: 6, spellcheck: false, placeholder: arg.placeholder ?? '',
+          value: arg.default ?? '',
+        })
+        : input({
+          value: arg.default ?? '', placeholder: arg.placeholder ?? '',
+          type: arg.type === 'number' ? 'number' : 'text',
+        });
+      values.set(arg.key, () => el.value);
+      fields.push(field(arg.label + (arg.optional ? ' (선택)' : ''), el));
+    }
+
+    const opts = {
+      title: skill.name,
+      width: 600,
+      body: () => [
+        h('p.field-help', {}, skill.description),
+        ...fields,
+        h('p.field-help', {},
+          '고른 값으로 지시문을 만들어 **입력칸에 넣습니다.** 보내기 전에 고칠 수 있습니다.'),
+      ],
+      footer: (close) => [
+        h('button.btn', { type: 'button', onclick: close }, '취소'),
+        h('button.btn.btn-primary', {
+          type: 'button',
+          onclick: () => {
+            const filled = {};
+            for (const arg of skill.args ?? []) {
+              const value = (values.get(arg.key)?.() ?? '').trim();
+              if (!value && !arg.optional) {
+                toast(`${arg.label} 을(를) 채우세요`, 'error');
+                return;
+              }
+              filled[arg.key] = value;
+            }
+            this.inputBox.value = renderSkillPrompt(skill.prompt, filled);
+            close();
+            this.inputBox.focus();
+            // 커서를 끝에 둔다. 대개 마지막에 한 줄을 덧붙이게 된다.
+            this.inputBox.setSelectionRange(this.inputBox.value.length, this.inputBox.value.length);
+          },
+        }, icon('check'), '입력칸에 넣기'),
+      ],
+    };
+    if (this.panel) panelModal(this.panel, opts);
+    else openModal(opts);
   }
 
   // abort는 받고 있는 답변을 끊는다.
@@ -1439,6 +1577,26 @@ function toolCallNode(call, running = false) {
     call.mutating ? badge('승인 필요', 'warn') : null,
     h('span.ai-tool-status', {}, running ? h('span.muted', {}, '실행 중…') : null),
   );
+}
+
+// renderSkillPrompt는 스킬 지시문의 {{자리}}를 사람이 고른 값으로 채운다.
+//
+// 서버에서 완성해 보내지 않는 이유: 스킬은 **사용자의 말**로 대화에 들어간다.
+// 서버가 문장을 만들어 주면 사람은 자기가 무엇을 보내는지 모른 채 보내게 된다.
+//
+// 값이 없는 자리는 그 줄째로 지운다. 선택 항목을 비웠는데 "{{focus}}" 가 그대로
+// 남으면, 모델은 그 글자를 지시로 읽는다.
+function renderSkillPrompt(prompt, values) {
+  const filled = String(prompt ?? '').replace(/\{\{(\w+)\}\}/g, (_, key) => values[key] ?? '');
+  return filled
+    .split('\n')
+    .filter((line, i, all) => {
+      if (line.trim() !== '') return true;
+      // 빈 줄이 이어지면 하나만 남긴다(값을 비운 자리가 남긴 자국이다).
+      return i === 0 || all[i - 1].trim() !== '';
+    })
+    .join('\n')
+    .trim();
 }
 
 function pendingPreview(preview) {
