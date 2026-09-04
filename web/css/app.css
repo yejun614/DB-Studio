@@ -5708,3 +5708,69 @@ tr.is-clickable:focus-visible { outline: 2px solid var(--primary); outline-offse
 .erd-doc-options { display: flex; flex-direction: column; gap: 8px; }
 .erd-doc-options .field { margin: 0; }
 .erd-panel-section { margin-top: 12px; }
+
+/* ---------- 벡터 DB ---------- */
+.vec-facts { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.vec-fact {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 6px 10px; min-width: 96px;
+  border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+  background: var(--bg-alt);
+}
+.vec-fact-label { font-size: 11px; color: var(--text-mute); }
+.vec-fact-value { font-size: 13px; font-family: var(--mono); }
+.vec-collections tr.is-selected { background: var(--surface-2); }
+/* 색인이 담긴 수보다 적다는 것은 "느려진다"는 뜻이다. 눈에 띄어야 한다. */
+.vec-behind { display: inline-flex; align-items: center; gap: 4px; color: var(--warn); }
+.vec-tabs { display: flex; gap: 6px; margin: 10px 0; }
+.vec-panel { margin-top: 10px; }
+.vec-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+.vec-form .field { flex: 1 1 220px; margin: 0; }
+.vec-form .field-narrow { flex: 0 0 90px; }
+
+.vec-points { display: flex; flex-direction: column; gap: 8px; margin: 10px 0; }
+.vec-point {
+  padding: 8px 10px;
+  border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+  background: var(--bg-alt);
+}
+.vec-point-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.vec-id { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vec-point-actions { margin-left: auto; display: flex; gap: 2px; }
+.vec-score { display: inline-flex; gap: 6px; align-items: baseline; }
+
+/* 벡터 앞머리를 막대로. 0.0231 같은 수 열여섯 개는 읽히지 않지만
+   막대의 모양은 한눈에 견줄 수 있다. */
+.vec-spark {
+  display: flex; align-items: flex-end; gap: 2px;
+  height: 28px; margin: 6px 0;
+}
+.vec-bar { width: 6px; background: var(--primary); border-radius: 1px; opacity: 0.85; }
+.vec-bar.is-neg { background: var(--warn); }
+.vec-spark-more { align-self: center; color: var(--text-mute); font-size: 11px; }
+
+.vec-payload { display: flex; flex-wrap: wrap; gap: 6px; }
+.vec-kv {
+  display: inline-flex; gap: 5px; align-items: baseline;
+  padding: 2px 7px; font-size: 11.5px;
+  border: 1px solid var(--border-soft); border-radius: 999px;
+}
+
+.vec-compare { display: flex; flex-wrap: wrap; gap: 10px; margin: 10px 0; }
+.vec-tile {
+  flex: 1 1 150px; display: flex; flex-direction: column; gap: 3px;
+  padding: 10px; border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+  background: var(--bg-alt);
+}
+.vec-tile-label { font-size: 11px; color: var(--text-mute); }
+.vec-tile-value { font-size: 18px; font-family: var(--mono); }
+.vec-tile-help { font-size: 10.5px; color: var(--text-mute); line-height: 1.4; }
+.vec-sub { margin: 14px 0 6px; font-size: 13px; }
+.vec-neg { color: var(--warn); }
+.vec-delta-bar { width: 120px; height: 8px; background: var(--surface-2); border-radius: 4px; }
+.vec-delta-bar > span { display: block; height: 100%; background: var(--primary); border-radius: 4px; }
+.vec-delta-bar > span.is-neg { background: var(--warn); }
+
+/* ---------- 오브젝트 스토리지 ---------- */
+.s3-objects { margin-top: 14px; }
+.s3-prefix td:first-child { font-weight: 600; }

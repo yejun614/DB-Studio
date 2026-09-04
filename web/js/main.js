@@ -50,6 +50,7 @@ import { renderNotify } from './pages/notify.js';
 import { renderCluster } from './pages/cluster.js';
 import { renderStorage } from './pages/storage.js';
 import { renderBroker } from './pages/broker.js';
+import { renderVector } from './pages/vector.js';
 import { renderTOTPSetupPage } from './pages/totp.js';
 
 const appRoot = document.getElementById('app');
@@ -93,6 +94,7 @@ router.define('/notify', renderNotify);
 router.define('/cluster', renderCluster);
 router.define('/storage', renderStorage);
 router.define('/broker', renderBroker);
+router.define('/vector', renderVector);
 router.define('/about', renderAbout);
 router.setNotFound((outlet) => {
   mount(outlet, h('div.card.empty', {},
@@ -145,6 +147,9 @@ const NAV = [
       { path: '/storage', label: '스토리지', icon: 'save' },
       // 메시지 브로커도 마찬가지다. "데이터가 어디로 흐르는가"의 다른 층이다.
       { path: '/broker', label: '메시지 브로커', icon: 'activity' },
+      // 벡터 DB 도 "데이터가 어디에 있는가"의 한 층이다. 다만 표와 행이 아니라
+      // 임베딩과 이웃이라, 스키마·데이터 화면과 나란히 두되 자기 자리를 갖는다.
+      { path: '/vector', label: '벡터 DB', icon: 'workflow' },
     ],
   },
   {

@@ -91,7 +91,7 @@ function clusterView(conn, res) {
   if (feats.apps) out.push(appsCard(conn));
   if (feats.pools) out.push(listCard(conn, 'pools'));
   if (feats.osds) out.push(listCard(conn, 'osds'));
-  if (feats.buckets) out.push(listCard(conn, 'buckets'));
+  if (feats.buckets) out.push(bucketsCard(conn, feats.objects));
   return out;
 }
 
@@ -115,7 +115,11 @@ function overviewCard(ov) {
     ),
     // 용량이 먼저다. 스토리지에서 가장 자주 확인하는 것이고, 90%를 넘는 순간부터는
     // 다른 모든 지표보다 급한 문제가 된다.
-    h('div.storage-capacity', {},
+    //
+    // 다만 **총 용량이라는 것이 없는 종류**에는 그리지 않는다(오브젝트 스토리지가
+    // 그렇다 — 쓰는 만큼 늘어난다). 0B / 0B 라고 적어 두면 "용량을 못 읽었다"로
+    // 읽히고, 바로 아래의 "총 용량 개념이 없습니다"라는 설명과 정면으로 어긋난다.
+    cap.total > 0 || cap.used > 0 ? h('div.storage-capacity', {},
       // 색이 바뀌는 지점을 기본 임계값 룰과 맞춘다(85% 주의 / 95% 위험).
       // 화면과 알림이 다른 기준을 쓰면 "노란데 알림은 안 온다"가 된다.
       h('div.storage-gauge', { class: pct === null ? '' : pct >= 95 ? 'is-critical' : pct >= 85 ? 'is-warn' : '' },
@@ -125,7 +129,7 @@ function overviewCard(ov) {
         h('span.muted', {}, `${formatBytes(cap.used ?? 0)} / ${formatBytes(cap.total ?? 0)}`
           + (cap.available ? ` · 남은 공간 ${formatBytes(cap.available)}` : '')),
       ),
-    ),
+    ) : null,
     (ov.health?.checks ?? []).length
       ? h('ul.storage-checks', {}, ov.health.checks.map((c) => h('li', {}, c)))
       : null,
@@ -410,13 +414,162 @@ const listSpec = {
     ],
     empty: 'OSD가 없습니다.',
   },
-  buckets: {
-    title: '오브젝트 버킷 (RGW)',
-    columns: ['이름', '소유자'],
-    row: (b) => [b.name, b.owner || '-'],
-    empty: '버킷이 없습니다.',
-  },
 };
+
+// ---------- 오브젝트 스토리지 ----------
+
+// bucketsCard는 버킷 목록이고, S3 규약 저장소에서는 그 안을 훑을 수도 있다.
+//
+// 크기를 목록에 미리 넣지 않는 이유: S3 에는 "이 버킷이 몇 바이트인가"를 묻는
+// API 가 없어 객체를 전부 나열해 세는 수밖에 없다. 버킷이 열 개면 목록 한 장에
+// 열 번의 전수 조사가 붙는다. 그래서 고른 버킷만 사람이 눌러서 잰다.
+function bucketsCard(conn, canBrowse) {
+  const card = h('div.card');
+  const objects = h('div.s3-objects');
+
+  (async () => {
+    mount(card, h('h2.card-title', {}, '버킷'), spinner('목록을 읽는 중…'));
+    try {
+      const res = await api.get(`/connections/${conn.id}/storage/buckets`);
+      const items = res.buckets ?? [];
+      const rows = items.map((b) => bucketRow(conn, b, canBrowse, objects));
+      mount(card,
+        h('div.card-title', {}, h('span', {}, '버킷'),
+          h('span.muted.small', {}, `${items.length}개`)),
+        res.note ? h('p.field-help', {}, `소유자: ${res.note}`) : null,
+        items.length === 0
+          ? emptyState('버킷이 없습니다.')
+          : h('table.table', {},
+            h('thead', {}, h('tr', {},
+              h('th', {}, '이름'), h('th', {}, '소유자'), h('th', {}, '크기'),
+              canBrowse ? h('th', {}, '') : null)),
+            h('tbody', {}, rows)),
+        canBrowse ? objects : null,
+      );
+    } catch (err) {
+      mount(card, h('h2.card-title', {}, '버킷'), errorPanel(err));
+    }
+  })();
+  return card;
+}
+
+function bucketRow(conn, bucket, canBrowse, objects) {
+  const sizeCell = h('td', {}, canBrowse
+    ? h('button.btn.btn-small.btn-ghost', {
+      type: 'button',
+      title: '객체를 훑어서 크기를 어림잡습니다',
+      onclick: async (e) => {
+        const btn = e.currentTarget;
+        btn.disabled = true;
+        mount(btn, '재는 중…');
+        try {
+          const res = await api.get(`/connections/${conn.id}/storage/bucket-stat`
+            + `?bucket=${encodeURIComponent(bucket.name)}`);
+          const st = res.stat ?? {};
+          mount(sizeCell,
+            h('span', {}, `${formatBytes(st.size ?? 0)} · ${(st.objects ?? 0).toLocaleString('ko-KR')}개`),
+            // 상한까지만 세었으면 그 사실을 말한다. 정확한 값처럼 보이는 틀린
+            // 합계보다 "여기까지 세었다"가 낫다.
+            st.partial ? badge('이 이상', 'warn') : null);
+        } catch (err) {
+          btn.disabled = false;
+          mount(btn, '재기');
+          toastError(err);
+        }
+      },
+    }, '재기')
+    : h('span.muted', {}, '-'));
+
+  return h('tr', {},
+    h('td', {}, h('strong', {}, bucket.name)),
+    h('td', {}, bucket.owner || '-'),
+    sizeCell,
+    canBrowse
+      ? h('td', {}, h('button.btn.btn-small', {
+        type: 'button',
+        onclick: () => browseBucket(conn, bucket.name, '', objects),
+      }, icon('list', 13), '열기'))
+      : null,
+  );
+}
+
+// browseBucket은 버킷 안을 접두사 단위로 훑는다.
+//
+// 접두사로 접어 보여주는 이유: 수백만 개의 키를 평평하게 늘어놓으면 사람이 읽을
+// 수 없다. 접으면 파일 탐색기처럼 읽히고, 그것이 사람이 키 이름을 지을 때 실제로
+// 의도한 구조다.
+async function browseBucket(conn, bucket, prefix, box, cursor = '', acc = []) {
+  mount(box, spinner(`${bucket}/${prefix} 를 읽는 중…`));
+  let res;
+  try {
+    const q = new URLSearchParams({ bucket, prefix });
+    if (cursor) q.set('cursor', cursor);
+    res = await api.get(`/connections/${conn.id}/storage/objects?${q}`);
+  } catch (err) {
+    mount(box, errorPanel(err));
+    return;
+  }
+  const page = res.page ?? {};
+  const items = acc.concat(page.objects ?? []);
+
+  // 위로 가는 길. 접두사를 하나씩 벗긴다.
+  const crumbs = [h('button.btn.btn-small.btn-ghost', {
+    type: 'button', onclick: () => browseBucket(conn, bucket, '', box),
+  }, bucket)];
+  let walked = '';
+  for (const part of prefix.split('/').filter(Boolean)) {
+    walked += `${part}/`;
+    const to = walked;
+    crumbs.push(h('span.muted', {}, '/'));
+    crumbs.push(h('button.btn.btn-small.btn-ghost', {
+      type: 'button', onclick: () => browseBucket(conn, bucket, to, box),
+    }, part));
+  }
+
+  mount(box,
+    h('div.card-title', {}, h('span', {}, '객체'), ...crumbs,
+      h('span.muted.small', {}, `${items.length}개${page.truncated ? '+' : ''}`)),
+    items.length === 0
+      ? emptyState('이 접두사 아래에 객체가 없습니다.')
+      : h('table.table', {},
+        h('thead', {}, h('tr', {},
+          h('th', {}, '키'), h('th', {}, '크기'), h('th', {}, '수정'), h('th', {}, '스토리지 클래스'))),
+        h('tbody', {}, items.map((o) => objectRow(conn, bucket, o, box)))),
+    page.next
+      ? h('button.btn.btn-small', {
+        type: 'button',
+        onclick: () => browseBucket(conn, bucket, prefix, box, page.next, items),
+      }, '더 보기')
+      : null,
+  );
+}
+
+function objectRow(conn, bucket, o, box) {
+  if (o.prefix) {
+    return h('tr.s3-prefix', {},
+      h('td', {}, h('button.btn.btn-small.btn-ghost', {
+        type: 'button',
+        onclick: () => browseBucket(conn, bucket, o.key, box),
+      }, icon('box', 13), shortKey(o.key))),
+      h('td', {}, h('span.muted', {}, '-')),
+      h('td', {}, h('span.muted', {}, '-')),
+      h('td', {}, h('span.muted', {}, '-')),
+    );
+  }
+  return h('tr', {},
+    h('td', {}, h('span.mono', {}, shortKey(o.key))),
+    h('td', {}, formatBytes(o.size ?? 0)),
+    h('td', { title: formatDate(o.modifiedAt) }, relativeTime(o.modifiedAt)),
+    h('td', {}, o.storageClass || '-'),
+  );
+}
+
+// shortKey는 접두사를 뗀 마지막 조각이다. 전체 키를 그대로 늘어놓으면
+// 같은 접두사가 줄마다 반복되어 정작 다른 부분이 눈에 안 들어온다.
+function shortKey(key) {
+  const parts = key.replace(/\/$/, '').split('/');
+  return parts[parts.length - 1] || key;
+}
 
 function listCard(conn, kind) {
   const spec = listSpec[kind];

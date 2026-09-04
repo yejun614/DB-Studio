@@ -98,5 +98,5 @@ export function optionLine(dialect, options, scope = 'table') {
 
 // inheritNotice는 "여기서 정하지 않으면 어디를 따르는가"를 적는 안내다.
 export function inheritNotice(text) {
-  return h('p.notice.notice-info.db-option-notice', {}, icon('info'), text);
+  return h('p.notice.notice-info.db-option-notice', {}, icon('alert'), text);
 }
