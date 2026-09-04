@@ -321,6 +321,13 @@ export class ErdCanvas {
       const geom = boxes.get(tableKey(tbl));
       if (geom) layers.cards.appendChild(this.cardEl(tbl, geom));
     }
+    // 뷰 카드는 표와 같은 층에 그린다. 뒤로 보내면 표에 가려 잡을 수 없고,
+    // 앞으로 올리면 표를 덮는다 — 둘 다 도면에 놓인 같은 종류의 것이다.
+    const views = this.viewBoxes();
+    this.viewLinks(boxes, views);
+    for (const [key, geom] of views) {
+      layers.cards.appendChild(this.viewEl(geom.view, key, geom));
+    }
     this.renderCursors();
 
     if ((this.doc.schema?.tables ?? []).length === 0 && this.opts.emptyHint) {
@@ -379,6 +386,27 @@ export class ErdCanvas {
     return out;
   }
 
+  // viewBoxes는 뷰 카드의 자리와 크기다(뷰 키 → 기하).
+  //
+  // 표와 같은 Layout 지도를 쓴다. 한 스키마에서 표와 뷰는 이름을 나눠 쓰므로
+  // 열쇠가 겹치지 않고(서버가 겹치는 이름을 거부한다), 그래서 옮기기·범위 고르기가
+  // 표와 같은 코드를 지난다.
+  viewBoxes() {
+    const out = new Map();
+    for (const v of this.doc.schema?.views ?? []) {
+      const key = viewKey(v);
+      const layout = this.doc.layout?.[key] ?? { x: 80, y: 80 };
+      const lines = viewLines(v.definition, cardWidth(layout));
+      out.set(key, {
+        x: layout.x ?? 0, y: layout.y ?? 0,
+        w: cardWidth(layout),
+        h: HEAD_H + VIEW_PAD + lines.length * VIEW_LINE + VIEW_PAD,
+        lines, view: v, layout,
+      });
+    }
+    return out;
+  }
+
   // routes는 관계선의 길을 찾는다. **길만** 캐시한다.
   //
   // 캐시하는 이유: 길찾기는 카드 기하만 보고 정해지는데(어느 변으로 나가고 어디를
@@ -427,6 +455,39 @@ export class ErdCanvas {
       }
     }
     return map;
+  }
+
+  // viewLinks는 뷰에서 그 뷰가 읽는 표로 점선을 긋는다.
+  //
+  // 왜 필요한가: 뷰 카드만 놓으면 도면에는 "이런 것이 있다"만 남는다. 뷰에서 알고
+  // 싶은 것은 대개 "무엇을 읽는가"이고, 그 답은 정의 안에 글자로만 있다 —
+  // 선으로 그으면 도면을 보는 것만으로 답이 된다.
+  //
+  // 이름을 찾는 방식은 **어림짐작**이다(정의에 그 표 이름이 낱말로 나오는가).
+  // SQL 을 온전히 해석하지 않는 이유: 그러려면 이 앱 안에 SQL 파서를 하나 더 두고
+  // 방언마다 맞춰야 한다. 틀리는 쪽은 "없는 선이 생기는 것"이 아니라 "있는 선을
+  // 놓치는 것"에 가깝고(별칭·CTE), 선은 점선으로 옅게 그어 외래키와 섞이지 않는다.
+  viewLinks(boxes, views) {
+    const layer = this.layers?.links;
+    if (!layer || views.size === 0) return;
+    // 길찾기에는 뷰 카드까지 넣는다. 그래야 선이 뷰 카드의 변에서 시작하고,
+    // 지나는 길에서 다른 카드를 피한다.
+    const all = new Map(boxes);
+    for (const [key, geom] of views) {
+      all.set(key, { x: geom.x, y: geom.y, w: geom.w, h: geom.h });
+    }
+    // quick 은 "돌아가는 길은 찾지 않는다"다. 이 선은 참고용이라 그 값을 치를
+    // 이유가 없다 — 표가 쉰 개인 도면에서 뷰마다 통로를 훑으면 손이 뻑뻑해진다.
+    const find = makeRouter(all, { quick: true });
+    for (const [viewK, geom] of views) {
+      for (const tableK of viewRefs(geom.view, boxes)) {
+        const r = find(viewK, tableK);
+        if (!r) continue;
+        layer.appendChild(svgEl('path', {
+          class: 'erd-view-link', d: r.d, 'data-view': viewK, 'data-table': tableK,
+        }));
+      }
+    }
   }
 
   // links는 외래키 관계선을 두 레이어에 그린다.
@@ -922,6 +983,92 @@ export class ErdCanvas {
     return g;
   }
 
+  // viewEl은 뷰 카드 하나다.
+  //
+  // 표 카드와 다르게 그리는 것이 요점이다: 점선 테두리와 VIEW 표시. 뷰는 데이터가
+  // 있는 곳이 아니라 **표를 읽는 방법**이고, 같은 모양으로 그리면 도면을 보는 사람이
+  // 그 둘을 구분할 수 없다 — 그 구분은 "이 값을 어디서 고치나"의 답을 바꾼다.
+  //
+  // 본문에는 정의(SELECT)의 앞부분을 담는다. 이름만 있는 카드는 도면에서 "무엇인가
+  // 있다"는 사실만 말하고, 뷰에서 알고 싶은 것은 그 SELECT 다.
+  viewEl(view, key, geom) {
+    const selected = this.isSelected('view', key);
+    const g = svgEl('g', {
+      class: `erd-view-g${selected ? ' is-selected' : ''}`
+        + `${this.isPrimary('view', key) ? ' is-primary' : ''}`,
+      transform: `translate(${geom.x},${geom.y})`,
+      'data-view': key,
+      style: geom.layout.color ? `--card-accent:${geom.layout.color}` : null,
+    });
+    g.appendChild(svgEl('rect', {
+      class: 'erd-view-bg', width: geom.w, height: geom.h, rx: 6,
+    }));
+    g.appendChild(svgEl('rect', { class: 'erd-view-head', width: geom.w, height: HEAD_H, rx: 6 }));
+
+    const mark = icon('eye', 13);
+    mark.setAttribute('x', 9);
+    mark.setAttribute('y', MARK_Y);
+    mark.classList.add('erd-card-icon');
+    g.appendChild(mark);
+
+    const nameMax = geom.w - 28 - PAD_R - 34;
+    g.appendChild(svgEl('text', {
+      class: 'erd-view-name', x: 28, y: TITLE_Y,
+    }, fitText(viewDisplay(view), nameMax, cssFont('erd-view-name'))));
+    // VIEW 표시는 글자로 둔다. 점선만으로는 처음 보는 사람이 "이건 왜 점선인가"를
+    // 물을 곳이 없다.
+    g.appendChild(svgEl('text', {
+      class: 'erd-view-tag', x: geom.w - PAD_R, y: MARK_Y + 10, 'text-anchor': 'end',
+    }, 'VIEW'));
+
+    geom.lines.forEach((line, i) => {
+      g.appendChild(svgEl('text', {
+        class: 'erd-view-line', x: 10, y: HEAD_H + VIEW_PAD + 10 + i * VIEW_LINE,
+      }, line));
+    });
+
+    const hit = svgEl('rect', { class: 'erd-hit', x: 0, y: 0, width: geom.w, height: geom.h });
+    this.bindTip(hit, () => tipForView(view));
+    g.appendChild(hit);
+
+    g.appendChild(svgEl('rect', {
+      class: 'erd-view-outline', width: geom.w, height: geom.h, rx: 6,
+    }));
+
+    g.addEventListener('pointerdown', (e) => this.onViewPointerDown(e, key, geom));
+    g.addEventListener('dblclick', () => this.opts.onEditView?.(key));
+    return g;
+  }
+
+  // onViewPointerDown은 뷰 카드를 고르고 끌기 시작한다(표 카드와 같은 규칙).
+  onViewPointerDown(e, key, geom) {
+    e.stopPropagation();
+    if (this.otherButton(e)) return;
+    if (this.spaceHeld) {
+      this.startPan(e);
+      return;
+    }
+    if (this.pickToggle(e, 'view', key)) return;
+    if (!this.isSelected('view', key)) {
+      this.selection = { kind: 'view', id: key };
+      this.opts.onSelectView?.(key);
+    }
+    this.render();
+    // 화면 이동 도구가 먼저다(onCardPointerDown 의 주석과 같은 이유).
+    if (this.panDrag) {
+      this.startPan(e);
+      return;
+    }
+    if (!this.canEdit) return;
+    if (this.startMultiDrag(e)) return;
+    const p = this.toCanvas(e.clientX, e.clientY);
+    const selector = `.erd-view-g[data-view="${cssEscape(key)}"]`;
+    this.drag = {
+      mode: 'view', key, el: this.svg.querySelector(selector), selector,
+      grab: { x: p.x - geom.x, y: p.y - geom.y },
+    };
+  }
+
   renderCursors() {
     if (!this.layers) return;
     const layer = this.layers.cursors;
@@ -1074,7 +1221,8 @@ export class ErdCanvas {
         }
         return;
       }
-      if (this.drag.mode === 'card' || this.drag.mode === 'note' || this.drag.mode === 'group') {
+      if (this.drag.mode === 'card' || this.drag.mode === 'note'
+        || this.drag.mode === 'group' || this.drag.mode === 'view') {
         const nx = round1(point.x - this.drag.grab.x);
         const ny = round1(point.y - this.drag.grab.y);
         this.drag.last = { x: nx, y: ny };
@@ -1154,6 +1302,12 @@ export class ErdCanvas {
           ...(this.doc.layout[drag.key] ?? {}), x: drag.last.x, y: drag.last.y,
         };
         this.opts.onTableMove?.(drag.key, drag.last.x, drag.last.y);
+        this.render();
+      } else if (drag.mode === 'view') {
+        this.doc.layout[drag.key] = {
+          ...(this.doc.layout[drag.key] ?? {}), x: drag.last.x, y: drag.last.y,
+        };
+        this.opts.onViewMove?.(drag.key, drag.last.x, drag.last.y);
         this.render();
       } else if (drag.mode === 'group') {
         const group = (this.doc.groups ?? []).find((x) => x.id === drag.id);
@@ -1258,7 +1412,7 @@ export class ErdCanvas {
 
   // markPos는 고른 것의 현재 좌표다.
   markPos(mark) {
-    if (mark.kind === 'table') {
+    if (mark.kind === 'table' || mark.kind === 'view') {
       const box = this.doc.layout?.[mark.id];
       return box ? { x: box.x ?? 80, y: box.y ?? 80 } : null;
     }
@@ -1270,7 +1424,7 @@ export class ErdCanvas {
   // placeMark는 로컬 상태를 먼저 옮겨 둔다. 저장 결과가 오기 전에 다시 그려도
   // 카드가 원래 자리로 튀지 않게 하기 위해서다.
   placeMark(mark, x, y) {
-    if (mark.kind === 'table') {
+    if (mark.kind === 'table' || mark.kind === 'view') {
       this.doc.layout[mark.id] = { ...(this.doc.layout[mark.id] ?? {}), x, y };
       return;
     }
@@ -1332,6 +1486,9 @@ export class ErdCanvas {
     const out = [];
     for (const [key, geom] of this.boxes()) {
       if (hit(geom.x, geom.y, geom.w, geom.h)) out.push({ kind: 'table', id: key });
+    }
+    for (const [key, geom] of this.viewBoxes()) {
+      if (hit(geom.x, geom.y, geom.w, geom.h)) out.push({ kind: 'view', id: key });
     }
     for (const note of this.doc.notes ?? []) {
       if (hit(note.x, note.y, note.w || NOTE_W, note.h || noteHeight(note))) {
@@ -1876,6 +2033,68 @@ export function tableDisplay(tbl) {
   return tbl.namespace ? `${tbl.namespace}.${tbl.name}` : tbl.name;
 }
 
+// viewKey는 뷰의 열쇠다(스키마.이름, 소문자). 서버의 View.Key() 와 같은 규칙이어야
+// 좌표 지도의 열쇠가 두 곳에서 같아진다.
+export function viewKey(view) {
+  const ns = (view?.namespace ?? '').trim();
+  const name = view?.name ?? '';
+  return (ns ? `${ns}.${name}` : name).toLowerCase();
+}
+
+export function viewDisplay(view) {
+  const ns = (view?.namespace ?? '').trim();
+  return ns ? `${ns}.${view.name}` : (view?.name ?? '');
+}
+
+// viewLines는 정의(SELECT)의 앞부분을 카드 폭에 맞춰 자른다.
+//
+// 줄바꿈은 사람이 적어 둔 것을 그대로 따른다(SQL 은 줄로 읽는 글이다). 한 줄이 카드
+// 폭을 넘으면 그 줄만 잘라 … 를 붙인다 — 상자 밖으로 나가면 옆 카드의 글자와 겹쳐
+// 둘 다 읽을 수 없다.
+export function viewLines(definition, width) {
+  const font = cssFont('erd-view-line');
+  const room = Math.max(40, width - 20);
+  const src = String(definition ?? '').split('\n');
+  const out = [];
+  for (const raw of src) {
+    const line = raw.replace(/\t/g, '  ').trimEnd();
+    if (!line.trim() && out.length === 0) continue; // 앞의 빈 줄은 자리만 차지한다
+    out.push(fitText(line, room, font));
+    if (out.length >= VIEW_ROWS) break;
+  }
+  if (out.length === 0) out.push('(정의 없음)');
+  // 더 있으면 그 사실을 남긴다. 잘라 두고 말하지 않으면 카드에 보이는 것이 전부라고
+  // 읽히고, 뷰의 나머지 절반이 도면에서 사라진다.
+  if (src.length > out.length) out.push('…');
+  return out;
+}
+
+// viewRefs는 이 뷰의 정의에 이름이 나오는 표들이다.
+//
+// 낱말 경계로만 찾는다. 부분 문자열로 찾으면 orders 를 찾을 때 order_items 도
+// 걸리고, 도면에 있지도 않은 관계가 그어진다.
+export function viewRefs(view, boxes) {
+  const def = String(view?.definition ?? '').toLowerCase();
+  if (!def) return [];
+  const out = [];
+  for (const key of boxes.keys()) {
+    // 스키마를 붙인 열쇠(public.orders)는 마지막 조각으로도 찾는다 — 정의에서는
+    // 대개 스키마 없이 적는다.
+    const name = key.includes('.') ? key.slice(key.lastIndexOf('.') + 1) : key;
+    const safe = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (new RegExp(`(^|[^a-z0-9_"'\`.])${safe}([^a-z0-9_"'\`]|$)`).test(def)) out.push(key);
+  }
+  return out;
+}
+
+// tipForView는 뷰 카드에 손을 올렸을 때의 설명이다(없으면 null).
+function tipForView(view) {
+  const rows = [['', viewDisplay(view)], ['종류', '뷰 — 표를 읽는 정의입니다']];
+  const comment = (view?.comment ?? '').trim();
+  if (comment) rows.push(['설명', comment]);
+  return rows;
+}
+
 export function refKey(tbl, fk) {
   const ns = fk.refNamespace || tbl.namespace || '';
   return (ns ? `${ns}.${fk.refTable}` : fk.refTable).toLowerCase();
@@ -1916,6 +2135,15 @@ export function truncate(text, max) {
 // 써야 글이 상자 밖으로 나가지 않는다.
 const NOTE_PAD = 8;
 const NOTE_LINE = 16;
+
+// 뷰 카드의 본문(정의 미리보기) 여백·줄 높이와 보일 줄 수.
+//
+// 여섯 줄인 이유: 도면에서 뷰를 볼 때 알고 싶은 것은 "무엇을 어디서 읽는가"이고,
+// 그것은 SELECT 의 처음 몇 줄에 있다(대상 표와 주요 컬럼). 전문을 담으면 카드가
+// 화면을 덮고, 그 SQL 을 읽으려는 사람은 어차피 인스펙터를 연다.
+const VIEW_PAD = 8;
+const VIEW_LINE = 14;
+const VIEW_ROWS = 6;
 // 사람이 크기를 정하지 않은 메모에서 보일 줄 수의 상한.
 const NOTE_AUTO_LINES = 8;
 
