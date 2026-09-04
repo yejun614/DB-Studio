@@ -31,6 +31,14 @@ const MIN_OPACITY = 0.3;
 const DOT_SIZE = 40;
 const DRAG_SLOP = 4;
 
+// 아이콘이 스스로 눈에 띄는 시간.
+//
+// 접는 순간 창이 사라지고 40px 짜리 동그라미 하나가 남는다. 넓은 모니터에서 그것은
+// "화면에서 무언가 없어졌다"로만 보이고, 남은 아이콘은 눈이 좇지 못한다. 그래서 잠깐
+// 물결을 그린다 — 잠깐이어야 한다. 계속 움직이는 아이콘은 그 자체가 소음이고,
+// 사람은 그것을 보지 않는 법을 금방 배운다.
+const DOT_ATTENTION_MS = 3600;
+
 // storageKey는 배치를 기억하는 자리다. localStorage를 쓰는 이유: 이것은 서버가
 // 알아야 할 설정이 아니라 이 브라우저에서의 배치이고, 창 크기가 기기마다 다르다.
 function geometryKey(id) {
@@ -96,6 +104,8 @@ export function openFloatPanel({
 
   // 접어 두었을 때의 아이콘. 접혀 있지 않으면 null 이다.
   let dot = null;
+  // 안에서 무언가 돌고 있는가(답변 스트리밍). 접을 때 아이콘에 그대로 옮긴다.
+  let busy = false;
 
   const handle = {
     panel,
@@ -121,6 +131,7 @@ export function openFloatPanel({
       const at = panel.getBoundingClientRect();
       panel.hidden = true;
       dot = makeDot(at);
+      dot.classList.toggle('is-busy', busy);
       document.body.appendChild(dot);
     },
     restore() {
@@ -129,6 +140,24 @@ export function openFloatPanel({
       dot = null;
       panel.hidden = false;
       handle.focus();
+    },
+    // pulse는 접어 둔 아이콘을 다시 한번 눈에 띄게 한다.
+    //
+    // 안에서 무언가 끝났을 때(받고 있던 답변이 도착했을 때) 부른다. 접어 둔 사람은
+    // 다른 화면을 보고 있으므로, 그 순간 아이콘이 조용하면 답은 아무도 읽지 않는
+    // 채로 남는다.
+    pulse() {
+      if (!dot) return;
+      // 클래스를 뗐다가 다시 붙여야 애니메이션이 처음부터 다시 돈다.
+      dot.classList.remove('is-new');
+      void dot.offsetWidth;
+      dot.classList.add('is-new');
+      setTimeout(() => dot?.classList.remove('is-new'), DOT_ATTENTION_MS);
+    },
+    // setBusy는 "안에서 무언가 돌고 있다"를 아이콘에 표시한다(느린 맥박).
+    setBusy(on) {
+      busy = Boolean(on);
+      dot?.classList.toggle('is-busy', busy);
     },
     get minimized() {
       return Boolean(dot);
@@ -192,7 +221,7 @@ export function openFloatPanel({
   // 그것을 찾는다. 화면 한 구석에 고정하면 넓은 모니터에서는 아이콘을 찾는 일이
   // 접는 일보다 오래 걸린다.
   function makeDot(box) {
-    const el = h('button.float-dot', {
+    const el = h('button.float-dot.is-new', {
       type: 'button',
       title: `${titleEl.textContent} 열기`,
       'aria-label': `${titleEl.textContent} 열기`,
@@ -200,7 +229,13 @@ export function openFloatPanel({
         left: `${Math.max(EDGE, Math.min(box.left, window.innerWidth - DOT_SIZE - EDGE))}px`,
         top: `${Math.max(EDGE, Math.min(box.top, window.innerHeight - DOT_SIZE - EDGE))}px`,
       },
-    }, icon(iconName, 18));
+    },
+    // 물결은 아이콘 **뒤에** 그린다. 아이콘 자체를 흔들면 무엇인지 읽기 어렵고,
+    // 뒤에서 퍼지는 원은 눈에는 띄면서 그림은 그대로 둔다.
+    h('span.float-dot-ping', { 'aria-hidden': 'true' }),
+    icon(iconName, 18));
+    // 잠깐 뒤에 물결을 멈춘다(위 상수의 이유).
+    setTimeout(() => el.classList.remove('is-new'), DOT_ATTENTION_MS);
 
     // 누르기와 끌기를 한 요소에서 나눈다. 조금이라도 움직였으면 옮긴 것으로 보고
     // 열지 않는다 — 옮기려 잡았는데 창이 열리면 그 아이콘은 옮길 수 없는 아이콘이다.
@@ -403,6 +438,17 @@ export function isPanelOpen(id) {
 
 export function closeFloatPanel(id) {
   open.get(id)?.close();
+}
+
+// pulsePanelDot은 접어 둔 창의 아이콘을 한 번 더 눈에 띄게 한다.
+// 열려 있으면 아무 일도 하지 않는다 — 보고 있는 창을 흔들 이유가 없다.
+export function pulsePanelDot(id) {
+  open.get(id)?.pulse();
+}
+
+// setPanelBusy는 창 안에서 무언가 돌고 있음을 알린다(접어 두면 아이콘이 맥박한다).
+export function setPanelBusy(id, busy) {
+  open.get(id)?.setBusy(busy);
 }
 
 // closeAllFloatPanels는 떠 있는 창을 모두 닫는다.
