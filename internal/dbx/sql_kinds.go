@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql"  // "mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"  // "pgx"
@@ -79,6 +80,19 @@ func mysqlDSN(t Target) (string, error) {
 	if tls := t.Opt("tls", ""); tls != "" {
 		params.Set("tls", tls)
 	}
+	// 세션 시간대. MySQL 은 서버 쪽 time_zone 과, 드라이버가 DATETIME 을 어느
+	// 지역 시간으로 읽을지(loc) 를 따로 본다. 둘 중 하나만 맞추면 같은 값이
+	// 화면과 DB 에서 다르게 보인다 — 시간대는 그렇게 어긋나도 오류가 나지 않는
+	// 종류의 설정이라, 어긋난 채로 오래 간다.
+	if tz := t.Opt("timezone", ""); tz != "" {
+		params.Set("time_zone", "'"+tz+"'")
+		if _, err := time.LoadLocation(tz); err == nil {
+			params.Set("loc", tz)
+		}
+	}
+	if cs := t.Opt("charset", ""); cs != "" {
+		params.Set("charset", cs)
+	}
 	if extra := t.Opt("params", ""); extra != "" {
 		parsed, err := url.ParseQuery(strings.TrimPrefix(extra, "?"))
 		if err != nil {
@@ -118,6 +132,14 @@ func postgresDSN(t Target) (string, error) {
 	}
 	if app := t.Opt("application_name", "dbstudio"); app != "" {
 		q.Set("application_name", app)
+	}
+	// PostgreSQL 은 모르는 키를 세션 실행 매개변수로 넘긴다. timezone 과
+	// client_encoding 이 그것이다.
+	if tz := t.Opt("timezone", ""); tz != "" {
+		q.Set("timezone", tz)
+	}
+	if enc := t.Opt("client_encoding", ""); enc != "" {
+		q.Set("client_encoding", enc)
 	}
 	u.RawQuery = q.Encode()
 	return u.String(), nil

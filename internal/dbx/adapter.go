@@ -142,6 +142,15 @@ type KindInfo struct {
 	NeedsDB      bool         `json:"needsDb"`
 	DBLabel      string       `json:"dbLabel"`
 	OptionHints  []OptionHint `json:"optionHints"`
+
+	// TableOptions·DatabaseOptions는 이 DB에서 정할 수 있는 저장 설정이다
+	// (표의 엔진·문자셋, 데이터베이스의 인코딩 등).
+	//
+	// 커넥션 폼의 OptionHints와 다른 것이다: 저쪽은 "이 서버에 어떻게 접속하는가"고
+	// 이쪽은 "이 서버에 무엇을 만드는가"다. 한 목록으로 합치면 커넥션 폼에 엔진
+	// 칸이 생긴다.
+	TableOptions    []schema.OptionSpec `json:"tableOptions,omitempty"`
+	DatabaseOptions []schema.OptionSpec `json:"databaseOptions,omitempty"`
 }
 
 // OptionHint는 DB별 부가 옵션 입력 필드를 설명한다.
@@ -176,6 +185,9 @@ func Kinds() []KindInfo {
 			NeedsDB:     !k.IsStorage() && !k.IsBroker(),
 			DBLabel:     dbLabels[k],
 			OptionHints: optionHints[k],
+			// 방언 이름은 DB 종류와 같은 문자열이다(mysql, postgres, ...).
+			TableOptions:    schema.TableOptionSpecs(string(k)),
+			DatabaseOptions: schema.DatabaseOptionSpecs(string(k)),
 		}
 		out = append(out, info)
 	}
@@ -215,11 +227,27 @@ var dbLabels = map[model.DBKind]string{
 var optionHints = map[model.DBKind][]OptionHint{
 	model.KindMySQL: {
 		{Key: "tls", Label: "TLS", Placeholder: "false | true | skip-verify | preferred"},
+		{
+			Key: "timezone", Label: "세션 시간대", Placeholder: "Asia/Seoul 또는 +09:00",
+			Help: "이 커넥션으로 여는 세션의 time_zone입니다. 비우면 서버 기본값을 씁니다",
+		},
+		{
+			Key: "charset", Label: "세션 문자셋", Placeholder: "utf8mb4",
+			Help: "값을 주고받을 때 쓰는 문자셋입니다. 표를 만들 때의 문자셋과는 다른 것입니다",
+		},
 		{Key: "params", Label: "추가 파라미터", Placeholder: "charset=utf8mb4&parseTime=true"},
 	},
 	model.KindPostgres: {
 		{Key: "sslmode", Label: "SSL 모드", Placeholder: "disable | require | verify-full"},
 		{Key: "search_path", Label: "search_path", Placeholder: "public"},
+		{
+			Key: "timezone", Label: "세션 시간대", Placeholder: "Asia/Seoul",
+			Help: "이 커넥션으로 여는 세션의 TimeZone입니다. 비우면 서버 기본값을 씁니다",
+		},
+		{
+			Key: "client_encoding", Label: "클라이언트 인코딩", Placeholder: "UTF8",
+			Help: "값을 주고받을 때 쓰는 인코딩입니다. 데이터베이스의 인코딩과는 다른 것입니다",
+		},
 	},
 	model.KindMSSQL: {
 		{Key: "encrypt", Label: "암호화", Placeholder: "disable | true | false"},
