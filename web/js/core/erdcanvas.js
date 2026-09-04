@@ -315,7 +315,9 @@ export class ErdCanvas {
     this.links(boxes);
     // 카드를 그리기 전에 정해 둔다. 카드마다 다시 훑으면 표 쉰 개짜리 도면에서
     // 같은 계산을 쉰 번 한다.
-    this.hotCols = this.linkedColumns();
+    const linked = this.linkedColumns();
+    this.hotCols = linked.hot;
+    this.warmCols = linked.warm;
     for (const note of this.doc.notes ?? []) layers.notes.appendChild(this.noteEl(note));
     for (const tbl of this.doc.schema?.tables ?? []) {
       const geom = boxes.get(tableKey(tbl));
@@ -345,29 +347,57 @@ export class ErdCanvas {
   // 읽고 도면으로 눈을 옮겨 그 줄을 다시 찾아야 했다. 두 카드에서 각각 찾아야
   // 하므로 그 일이 두 번이다.
   //
+  // **두 겹으로 돌려준다.**
+  //   hot  — 지금 고른 외래키의 컬럼. 진하게 칠한다.
+  //   warm — 같은 두 표를 잇는 **다른** 외래키의 컬럼. 옅게 칠한다.
+  //
+  // warm 이 필요한 이유: 두 표 사이의 관계선은 같은 길로 지나가 정확히 겹친다.
+  // 도면에서는 선 하나로 보이므로, 그 하나를 눌렀을 때 컬럼 한 쌍만 칠하면 "이
+  // 선은 이 둘을 잇는다"로 읽힌다 — 실제로는 셋을 잇고 있을 수 있다. 옅은 층이
+  // 그 사실을 보여주고, 진한 층이 사이드바에서 고른 것이 어느 쌍인지 말한다.
+  //
   // 고를 때만 한다(손을 올릴 때는 하지 않는다). 카드는 관계선보다 그리는 값이
   // 비싸고, 마우스가 지나가기만 해도 도면 전체를 다시 그리면 손이 뻑뻑해진다.
   linkedColumns() {
-    const out = new Map();
-    if (this.selection?.kind !== 'link') return out;
-    const add = (key, cols) => {
+    const hot = new Map();
+    const warm = new Map();
+    if (this.selection?.kind !== 'link') return { hot, warm };
+
+    const add = (into, key, cols) => {
       // 자기 참조(부모 아이디)면 두 집합이 한 카드에서 합쳐진다. 그것이 맞다 —
       // 그 카드에서는 양쪽 컬럼이 모두 이 관계의 것이다.
-      const set = out.get(key) ?? new Set();
+      const set = into.get(key) ?? new Set();
       for (const c of cols ?? []) set.add(String(c).toLowerCase());
-      out.set(key, set);
+      into.set(key, set);
     };
+
+    // 먼저 고른 것을 찾는다. 그 쌍을 알아야 어느 관계들이 이 선에 겹쳐 있는지
+    // 판단할 수 있다.
+    let pair = null;
     for (const tbl of this.doc.schema?.tables ?? []) {
       const fromKey = tableKey(tbl);
       for (const fk of tbl.foreignKeys ?? []) {
         if (`${fromKey}.${fk.name}` !== this.selection.id) continue;
-        add(fromKey, fk.columns);
-        add(refKey(tbl, fk), fk.refColumns);
-        // 외래키 이름은 한 표 안에서 유일하다. 더 볼 것이 없다.
-        return out;
+        add(hot, fromKey, fk.columns);
+        add(hot, refKey(tbl, fk), fk.refColumns);
+        pair = pairKeyOf(fromKey, refKey(tbl, fk));
+      }
+      if (pair) break;
+    }
+    if (!pair) return { hot, warm };
+
+    // 같은 쌍의 나머지. 방향은 섞어서 본다(A→B 와 B→A 는 같은 자리의 선이다).
+    for (const tbl of this.doc.schema?.tables ?? []) {
+      const fromKey = tableKey(tbl);
+      for (const fk of tbl.foreignKeys ?? []) {
+        const toKey = refKey(tbl, fk);
+        if (pairKeyOf(fromKey, toKey) !== pair) continue;
+        if (`${fromKey}.${fk.name}` === this.selection.id) continue;
+        add(warm, fromKey, fk.columns);
+        add(warm, toKey, fk.refColumns);
       }
     }
-    return out;
+    return { hot, warm };
   }
 
   // boxes는 테이블 키 → 화면 기하 정보를 만든다.
@@ -765,15 +795,23 @@ export class ErdCanvas {
     if (!geom.layout.collapsed) {
       const cols = tbl.columns ?? [];
       const hotHere = this.hotCols?.get(key);
+      const warmHere = this.warmCols?.get(key);
       cols.forEach((col, i) => {
         const y = HEAD_H + i * ROW_H + 14;
-        // 고른 관계선이 쓰는 컬럼이면 줄을 칠한다.
-        const hot = Boolean(hotHere?.has((col.name ?? '').toLowerCase()));
-        if (hot) {
+        // 고른 관계선이 쓰는 컬럼이면 줄을 칠한다. 겹쳐 있는 다른 관계의 컬럼은
+        // 옅게 칠한다 — 한 선처럼 보이는 자리가 실제로는 여럿을 잇고 있다는 것을
+        // 그것으로 안다.
+        const lower = (col.name ?? '').toLowerCase();
+        const hot = Boolean(hotHere?.has(lower));
+        // 고른 관계에 이미 든 컬럼은 진한 쪽만 그린다. 두 겹을 겹쳐 칠하면
+        // 그 줄만 더 진해져서 "이건 또 뭔가"가 된다.
+        const warm = !hot && Boolean(warmHere?.has(lower));
+        if (hot || warm) {
           // 이 줄의 글자보다 먼저 넣어야 뒤에 깔린다(같은 g 안에서는 나중에 넣은
           // 것이 위다). 테두리(erd-card-outline)를 덮지 않게 1px 씩 들여 그린다.
           g.appendChild(svgEl('rect', {
-            class: 'erd-col-hot', x: 1, y: y - ROW_H + 5, width: geom.w - 2, height: ROW_H,
+            class: hot ? 'erd-col-hot' : 'erd-col-warm',
+            x: 1, y: y - ROW_H + 5, width: geom.w - 2, height: ROW_H,
           }));
         }
         // 복합 기본키에서는 몇 번째인지가 뜻을 갖는다. 열쇠 표시만으로는 (a,b)와
@@ -797,7 +835,8 @@ export class ErdCanvas {
         }
         const label = columnLabel(col, geom.layout, this.nameMode);
         const nameText = svgEl('text', {
-          class: `erd-col${isPK ? ' is-pk' : ''}${hot ? ' is-linked' : ''}`, x: NAME_X, y,
+          class: `erd-col${isPK ? ' is-pk' : ''}${hot || warm ? ' is-linked' : ''}`,
+          x: NAME_X, y,
         });
 
         // 자리를 나눈다: 타입이 먼저 자기 폭을 가져가고, 남는 것이 이름 몫이다.
@@ -838,7 +877,7 @@ export class ErdCanvas {
         //
         // 실제 타입과 헷갈리지 않게 다른 색으로 그린다(erd-col-domain).
         g.appendChild(svgEl('text', {
-          class: `erd-col-type${domain ? ' is-domain' : ''}${hot ? ' is-linked' : ''}`,
+          class: `erd-col-type${domain ? ' is-domain' : ''}${hot || warm ? ' is-linked' : ''}`,
           x: geom.w - PAD_R, y, 'text-anchor': 'end',
         }, typeStr));
 
@@ -2098,6 +2137,19 @@ function tipForView(view) {
   const comment = (view?.comment ?? '').trim();
   if (comment) rows.push(['설명', comment]);
   return rows;
+}
+
+// pairKeyOf는 두 표의 **순서 없는** 쌍을 하나의 열쇠로 만든다.
+//
+// JSON 으로 만드는 이유: 표 키는 따옴표로 감싼 식별자면 어떤 글자든 담을 수 있다.
+// 구분자를 하나 골라 이어 붙이면 그 글자가 이름에 든 순간 서로 다른 쌍이 같은
+// 열쇠가 된다.
+//
+// 캔버스에 두는 이유: 겹친 선을 판단하는 규칙이 도면과 인스펙터 두 곳에 있으면
+// 언젠가 갈라진다 — 한쪽은 겹쳤다고 보고 다른 쪽은 아니라고 보는 순간, 칠해진
+// 컬럼과 사이드바 목록이 서로 다른 말을 한다.
+export function pairKeyOf(a, b) {
+  return JSON.stringify([a, b].sort());
 }
 
 export function refKey(tbl, fk) {

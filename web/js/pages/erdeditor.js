@@ -25,7 +25,7 @@ import { NAME_MODES, logicalOf, tableLabel, columnLabel } from '../core/logical.
 import { tintPicker } from '../core/tints.js';
 import {
   ErdCanvas, CARD_W, tableKey, tableDisplay, refKey, newLocalID, truncate, NOTE_W, noteHeight,
-  viewKey, viewDisplay, viewRefs,
+  viewKey, viewDisplay, viewRefs, pairKeyOf,
 } from '../core/erdcanvas.js';
 import {
   loadTypeCatalog, buildType, parseType, categories, paramLabel, paramPlaceholder,
@@ -2059,7 +2059,8 @@ class Editor {
       })),
       h('p.field-help', {},
         '두 표 사이의 관계선은 같은 길로 지나가 서로 겹칩니다. 도면에서 누르면 그중 '
-        + '하나만 잡히므로, 나머지는 여기서 고릅니다.'));
+        + '하나만 잡히므로, 나머지는 여기서 고릅니다. 이어진 컬럼은 카드에서 모두 '
+        + '칠해지고, 여기서 고른 관계의 컬럼만 진하게 칠해집니다.'));
   }
 
   linkView(tbl, fk) {
@@ -5208,15 +5209,6 @@ function aiPendingNode(action, onDecide) {
     h('p.field-help', {}, '되돌리기(편집 이력)로 되살릴 수 있지만, 무엇이 함께 '
       + '영향받는지는 위에 적힌 것이 전부입니다.'),
   );
-}
-
-// pairKeyOf는 두 표의 **순서 없는** 쌍을 하나의 열쇠로 만든다.
-//
-// JSON 으로 만드는 이유: 표 키는 따옴표로 감싼 식별자면 어떤 글자든 담을 수 있다.
-// 구분자를 하나 골라 이어 붙이면 그 글자가 이름에 든 순간 서로 다른 쌍이 같은
-// 열쇠가 된다.
-function pairKeyOf(a, b) {
-  return JSON.stringify([a, b].sort());
 }
 
 // ---------- 경량 op 적용 ----------

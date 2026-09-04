@@ -2367,7 +2367,13 @@ option { background: var(--surface); color: var(--text); }
  * 굵기·크기는 건드리지 않는다. 카드의 글자는 남는 폭을 재서 잘라 넣는데(fitText),
  * 그 계산은 클래스로 정한 글꼴로 한다 — 강조하면서 굵게 만들면 이미 재어 둔 글자가
  * 자기 자리를 넘어 타입 위로 올라탄다. */
-.erd-col-hot { fill: hsl(var(--h-primary) / 0.16); }
+/* 고른 관계선이 쓰는 컬럼. 겹쳐 있는 다른 관계의 컬럼은 옅게 칠한다 —
+ * 도면에서 선 하나로 보이는 자리가 실제로는 여럿을 잇고 있다는 사실을 그것으로
+ * 알고, 진한 층이 사이드바에서 고른 것이 어느 쌍인지 말한다. 두 층은 눈에
+ * 확실히 갈려야 한다: 옅은 쪽이 진한 쪽에 가까우면 층이 하나로 보이고,
+ * 그러면 "고른 것"이라는 뜻이 사라진다. */
+.erd-col-hot { fill: hsl(var(--h-primary) / 0.26); }
+.erd-col-warm { fill: hsl(var(--h-primary) / 0.08); }
 .erd-col.is-linked { fill: var(--text); }
 .erd-col-type.is-linked { fill: var(--text-dim); }
 
