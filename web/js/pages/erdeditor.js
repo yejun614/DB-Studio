@@ -25,6 +25,7 @@ import { NAME_MODES, logicalOf, tableLabel, columnLabel } from '../core/logical.
 import { tintPicker } from '../core/tints.js';
 import {
   ErdCanvas, CARD_W, tableKey, tableDisplay, refKey, newLocalID, truncate, NOTE_W, noteHeight,
+  viewKey, viewDisplay, viewRefs,
 } from '../core/erdcanvas.js';
 import {
   loadTypeCatalog, buildType, parseType, categories, paramLabel, paramPlaceholder,
@@ -227,6 +228,12 @@ class Editor {
       // 캔버스가 선택 표시를 스스로 다시 그린다. 여기서는 프레즌스와 패널만 맞춘다.
       onSelect: (key) => this.select(key ? { kind: 'table', id: key } : null),
       onSelectLink: (id) => this.select({ kind: 'link', id }),
+      onSelectView: (key) => this.select({ kind: 'view', id: key }),
+      onViewMove: (key, x, y) => this.send('view.move', { key, x, y }),
+      // 뷰 카드를 두 번 누르면 정의를 고치는 창이 열린다. 표 카드의 두 번 누르기가
+      // 접기인 것과 다른 이유: 뷰 카드에는 접을 컬럼 목록이 없고, 그 자리에서
+      // 하고 싶은 일은 언제나 "이 SELECT 를 고치는 것"이다.
+      onEditView: (key) => this.openViewDialog(key),
       onSelectNote: (id) => this.select({ kind: 'note', id }),
       onSelectGroup: (id) => this.select({ kind: 'group', id }),
       onMarks: (list) => this.selectMany(list),
@@ -330,6 +337,9 @@ class Editor {
         bits.push(`고른 테이블: ${tableDisplay(tbl)}`
           + ` (컬럼 ${(tbl.columns ?? []).length}개)`);
       }
+    } else if (this.sel?.kind === 'view') {
+      const view = this.findView(this.sel.id);
+      if (view) bits.push(`고른 뷰: ${viewDisplay(view)}`);
     } else if (this.sel?.kind === 'link') {
       const found = this.findFK(this.sel.id);
       if (found) {
@@ -720,6 +730,7 @@ class Editor {
       h('div.erd-tool-group', {},
         // 확대(＋)와 같은 아이콘이면 도구 막대에서 둘을 구분할 수 없다.
         this.toolBtn('table-plus', '테이블 추가', () => this.addTable(), { needsEdit: true }),
+        this.toolBtn('eye', '뷰 추가', () => this.openViewDialog(null), { needsEdit: true }),
         this.toolBtn('edit', '메모 추가', () => this.addNote(), { needsEdit: true }),
         this.toolBtn('list', '그룹 추가', () => this.addGroup(), { needsEdit: true }),
       ),
@@ -1408,6 +1419,7 @@ class Editor {
     const batch = newLocalID();
     for (const m of moves) {
       if (m.kind === 'table') this.send('table.move', { key: m.id, x: m.x, y: m.y }, batch);
+      else if (m.kind === 'view') this.send('view.move', { key: m.id, x: m.x, y: m.y }, batch);
       else if (m.kind === 'note') this.send('note.update', { id: m.id, x: m.x, y: m.y }, batch);
       else if (m.kind === 'group') this.send('group.update', { id: m.id, x: m.x, y: m.y }, batch);
     }
@@ -1551,6 +1563,7 @@ class Editor {
     if (!this.sel) return;
     const gone = {
       table: () => !this.findTable(this.sel.id),
+      view: () => !this.findView(this.sel.id),
       link: () => !this.findFK(this.sel.id),
       note: () => !(this.doc.notes ?? []).some((n) => n.id === this.sel.id),
       group: () => !(this.doc.groups ?? []).some((g) => g.id === this.sel.id),
@@ -1561,6 +1574,7 @@ class Editor {
   // markAlive는 고른 대상이 아직 문서에 있는지다.
   markAlive(mark) {
     if (mark.kind === 'table') return Boolean(this.findTable(mark.id));
+    if (mark.kind === 'view') return Boolean(this.findView(mark.id));
     if (mark.kind === 'note') return (this.doc.notes ?? []).some((n) => n.id === mark.id);
     if (mark.kind === 'group') return (this.doc.groups ?? []).some((g) => g.id === mark.id);
     return Boolean(this.findFK(mark.id));
@@ -1609,6 +1623,13 @@ class Editor {
       const found = this.findFK(this.sel.id);
       if (found) {
         mount(this.ui.panel, this.linkView(found.table, found.fk));
+        return;
+      }
+    }
+    if (this.sel?.kind === 'view') {
+      const view = this.findView(this.sel.id);
+      if (view) {
+        mount(this.ui.panel, this.viewPanel(view));
         return;
       }
     }
@@ -2007,6 +2028,142 @@ class Editor {
               this.select(null);
             },
           }, icon('trash'), '관계 삭제')),
+      ),
+    ];
+  }
+
+  // findView는 열쇠로 뷰를 찾는다(서버의 findView 와 같은 규칙).
+  findView(key) {
+    const want = String(key ?? '').toLowerCase();
+    return (this.doc.schema?.views ?? []).find((v) => viewKey(v) === want) ?? null;
+  }
+
+  // openViewDialog는 뷰를 만들거나 정의를 고치는 창이다.
+  //
+  // 정의는 넓은 칸이 필요하다. 컬럼 한 줄에 끼워 넣을 수 없는 글이고(여러 줄짜리
+  // SELECT 다), 인스펙터의 좁은 폭에서 고치면 줄이 계속 접혀 어디가 어디인지
+  // 알 수 없다. 그래서 이것만 창으로 연다.
+  openViewDialog(key) {
+    const existing = key ? this.findView(key) : null;
+    const nameInput = input({
+      value: existing ? existing.name : '',
+      placeholder: '예: daily_sales',
+      autofocus: !existing,
+    });
+    const nsInput = input({
+      value: existing?.namespace ?? '',
+      placeholder: '스키마 (선택, 예: public)',
+    });
+    const defBox = h('textarea.input.textarea.erd-view-sql', {
+      rows: 12, spellcheck: false,
+      placeholder: 'SELECT ...',
+      value: existing?.definition ?? '',
+    });
+    const commentInput = input({ value: existing?.comment ?? '', placeholder: '설명 (선택)' });
+
+    openModal({
+      title: existing ? `뷰 ${viewDisplay(existing)}` : '뷰 추가',
+      width: 720,
+      body: () => [
+        field('이름', nameInput),
+        field('스키마', nsInput, '비워 두면 기본 스키마에 만듭니다.'),
+        h('div.field', {}, h('span.field-label', {}, '정의 (SELECT)'), defBox,
+          h('p.field-help', {},
+            'CREATE OR REPLACE VIEW … AS 뒤에 그대로 들어갑니다. 세미콜론은 빼도 됩니다. '
+            + '정의에 이름이 나오는 표에는 도면에서 점선이 이어집니다.')),
+        field('설명', commentInput),
+      ],
+      footer: (close) => [
+        h('button.btn', { type: 'button', onclick: close }, '취소'),
+        h('button.btn.btn-primary', {
+          type: 'button',
+          onclick: () => {
+            const name = nameInput.value.trim();
+            const definition = defBox.value.trim();
+            if (!name) {
+              toast('뷰 이름을 적으세요', 'error');
+              return;
+            }
+            if (!definition) {
+              toast('정의(SELECT)를 적으세요', 'error');
+              return;
+            }
+            const payload = {
+              name, namespace: nsInput.value.trim(),
+              definition, comment: commentInput.value.trim(),
+            };
+            if (existing) {
+              this.send('view.update', { key: viewKey(existing), ...payload });
+              // 이름이 바뀌면 선택도 새 열쇠로 옮긴다. 그러지 않으면 인스펙터가
+              // 없는 대상을 가리켜 비어 버린다(외래키 이름 바꾸기와 같은 자리다).
+              const next = viewKey({ name, namespace: payload.namespace });
+              if (this.sel?.kind === 'view' && this.sel.id === viewKey(existing)) {
+                this.sel = { kind: 'view', id: next };
+                this.marks = [this.sel];
+              }
+            } else {
+              // 새 카드는 지금 보고 있는 화면 가운데에 놓는다. 화면 밖에서 태어나면
+              // 만든 사람이 그것을 찾아다녀야 한다.
+              this.send('view.add', { ...payload, ...this.canvas.center(130, 60) });
+            }
+            close();
+          },
+        }, existing ? '저장' : '추가'),
+      ],
+    });
+  }
+
+  // viewPanel은 뷰를 고른 상태의 인스펙터다.
+  //
+  // 여기서 정의를 바로 고치지 않고 창으로 보내는 이유는 openViewDialog 에 적어 두었다.
+  // 대신 **읽는 데 필요한 것**은 여기 다 있다: 전문과 이 뷰가 읽는 표들.
+  viewPanel(view) {
+    const ro = !this.editable();
+    const key = viewKey(view);
+    const refs = viewRefs(view, this.canvas.boxes());
+    return [
+      this.panelHead(`뷰 ${view.name}`, view.namespace ?? ''),
+      h('div.erd-panel-body', {},
+        h('p.field-help', {}, '뷰는 표를 읽는 정의입니다. 값은 여기에 담기지 않고, '
+          + '마이그레이션에서 CREATE OR REPLACE VIEW 로 만들어집니다.'),
+        (view.comment ?? '').trim()
+          ? h('p.erd-view-comment', {}, view.comment)
+          : null,
+        h('div.field', {},
+          h('span.field-label', {}, '정의'),
+          codeBlock(view.definition ?? '', 'sql', { className: 'sql-block' })),
+        h('div.field', {},
+          h('span.field-label', {}, `읽는 표 ${refs.length}개`),
+          refs.length
+            ? h('div.erd-view-refs', {}, refs.map((k) => {
+              const tbl = this.findTable(k);
+              return h('button.erd-rel-item', {
+                type: 'button',
+                onclick: () => this.select({ kind: 'table', id: k }),
+              }, h('span.erd-rel-item-name', {}, tbl ? tableDisplay(tbl) : k));
+            }))
+            : h('p.muted.small', {}, '정의에서 이 초안의 표 이름을 찾지 못했습니다'),
+          h('p.field-help', {},
+            '정의에 이름이 나오는 표를 찾은 것입니다(별칭이나 CTE 뒤에 숨은 표는 '
+            + '놓칠 수 있습니다).')),
+        ro ? null : h('div.erd-panel-actions', {},
+          h('button.btn.btn-small', {
+            type: 'button', onclick: () => this.openViewDialog(key),
+          }, icon('edit', 13), ' 정의 고치기')),
+        ro ? null : h('div.erd-panel-danger', {},
+          h('button.btn.btn-small.btn-danger', {
+            type: 'button',
+            onclick: async () => {
+              const ok = await confirmDialog({
+                title: '뷰 삭제',
+                message: `"${viewDisplay(view)}" 을(를) 초안에서 지웁니다.`,
+                confirmLabel: '삭제', danger: true,
+              });
+              if (!ok) return;
+              this.send('view.delete', { key });
+              this.select(null);
+            },
+          }, icon('trash'), '뷰 삭제')),
       ),
     ];
   }
@@ -4951,9 +5108,13 @@ export function applyLightOp(doc, op) {
       // 아이콘을 골라도 아무 일이 없던 이유가 이것이었다.
       const prev = doc.layout[p.key] ?? {};
       const next = { ...prev, x: p.x, y: p.y };
-      for (const k of ['collapsed', 'color', 'icon', 'width', 'logical']) {
+      for (const k of ['collapsed', 'color', 'icon', 'logical']) {
         if (p[k] !== undefined) next[k] = p[k];
       }
+      // 폭은 이름이 다르다: op 는 width 로 보내고 Box 는 w 로 담는다(서버의 JSON도
+      // w 다). 그대로 옮겨 담고 있어서, 남이 카드 폭을 바꾸면 내 화면에서는
+      // 새로고침해야 나타났다.
+      if (p.width !== undefined) next.w = p.width;
       // 컬럼 아이콘은 **보낸 것만** 덮어쓴다(서버의 applyTableMove와 같다).
       // 통째로 갈아 끼우면 방금 다른 사람이 고른 아이콘이 내 화면에서만 사라진다.
       if (p.columnIcons) {
@@ -4975,6 +5136,12 @@ export function applyLightOp(doc, op) {
         next.columnLogical = labels;
       }
       doc.layout[p.key] = next;
+      break;
+    }
+    case 'view.move': {
+      // 뷰 카드의 자리도 좌표 대입이라 화면이 직접 반영한다(table.move 와 같다).
+      const key = String(p.key ?? '').toLowerCase();
+      doc.layout[key] = { ...(doc.layout[key] ?? {}), x: p.x, y: p.y };
       break;
     }
     case 'note.add':

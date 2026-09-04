@@ -18,7 +18,10 @@ import {
   h, mount, icon, select, input, spinner, emptyState, pageHeader, badge, envBadge,
   toast, relativeTime, formatDate, openModal, confirmDialog,
 } from '../core/ui.js';
-import { ErdCanvas, newLocalID, tableDisplay } from '../core/erdcanvas.js';
+import {
+  ErdCanvas, newLocalID, tableDisplay, viewKey, viewDisplay, viewRefs,
+} from '../core/erdcanvas.js';
+import { codeBlock } from '../core/highlight.js';
 import { navigate } from '../core/router.js';
 import { serverDbPicker } from '../core/connpick.js';
 import { panelResizeHandle, attachPanelResize } from '../core/panelresize.js';
@@ -188,6 +191,10 @@ class StructureView {
       // 선택은 종류를 함께 갖는다. 메모·그룹도 인스펙터에서 고치므로
       // "무엇을 고른 상태인가"를 문자열 하나로는 표현할 수 없다.
       onSelect: (key) => this.select(key ? { kind: 'table', id: key } : null),
+      // 뷰도 고를 수 있다. 구조 화면에서 뷰는 읽기 전용이지만(실제 DB의 것이다)
+      // "이 뷰가 무엇을 읽는가"는 여기서 가장 자주 묻는 질문이다.
+      onSelectView: (key) => this.select({ kind: 'view', id: key }),
+      onViewMove: (key, x, y) => this.op('view.move', { key, x, y }),
       onSelectNote: (id) => this.select({ kind: 'note', id }),
       onSelectGroup: (id) => this.select({ kind: 'group', id }),
       // 여럿 고르기. 구조 화면에서도 배치는 손으로 정리하는 일이라, 카드 열 장을
@@ -374,7 +381,10 @@ class StructureView {
       src.kind === 'version'
         ? `버전 ${src.versionNo} · ${relativeTime(src.createdAt)}`
         : '현재 DB',
-      ` · 테이블 ${stats.tables ?? 0}개`);
+      ` · 테이블 ${stats.tables ?? 0}개`,
+      // 뷰가 있으면 함께 센다. 도면에 뷰 카드가 있는데 머리글은 표만 세면,
+      // 그 카드가 어디서 왔는지 화면에 설명이 없다.
+      stats.views ? ` · 뷰 ${stats.views}개` : '');
   }
 
   renderToolbar() {
@@ -498,6 +508,7 @@ class StructureView {
     const batch = newLocalID();
     for (const m of moves) {
       if (m.kind === 'table') this.op('table.move', { key: m.id, x: m.x, y: m.y }, batch);
+      else if (m.kind === 'view') this.op('view.move', { key: m.id, x: m.x, y: m.y }, batch);
       else if (m.kind === 'note') this.op('note.update', { id: m.id, x: m.x, y: m.y }, batch);
       else if (m.kind === 'group') this.op('group.update', { id: m.id, x: m.x, y: m.y }, batch);
     }
@@ -505,6 +516,44 @@ class StructureView {
 
   note(id) {
     return (this.doc?.notes ?? []).find((n) => n.id === id) ?? null;
+  }
+
+  // viewPanel은 뷰를 고른 상태의 인스펙터다(읽기 전용).
+  //
+  // 설계 화면의 같은 자리와 다른 점: 고칠 수 없다. 이것은 실제 DB에 있는 뷰이고,
+  // 고치는 일은 초안에서 하고 마이그레이션으로 옮긴다.
+  viewPanel(view) {
+    const refs = viewRefs(view, this.canvas.boxes());
+    return h('div', {},
+      h('div.erd-panel-head', {},
+        h('h2', {}, viewDisplay(view)),
+        badge('뷰', 'accent'),
+        h('button.icon-btn', {
+          type: 'button', title: '선택 해제', onclick: () => this.select(null),
+        }, icon('x')),
+      ),
+      h('div.erd-panel-body', {},
+        h('p.field-help', {}, '뷰는 표를 읽는 정의입니다. 이 화면에서는 고칠 수 없고, '
+          + '고치려면 ERD 초안에서 바꾼 뒤 마이그레이션으로 반영합니다.'),
+        (view.comment ?? '').trim() ? h('p.erd-view-comment', {}, view.comment) : null,
+        h('div.field', {},
+          h('span.field-label', {}, '정의'),
+          view.definition
+            ? codeBlock(view.definition, 'sql', { className: 'sql-block' })
+            : h('p.muted.small', {}, '정의를 읽지 못했습니다')),
+        h('div.field', {},
+          h('span.field-label', {}, `읽는 표 ${refs.length}개`),
+          refs.length
+            ? h('div.erd-view-refs', {}, refs.map((k) => {
+              const tbl = (this.doc?.schema?.tables ?? []).find((t) => keyOf(t) === k);
+              return h('button.erd-rel-item', {
+                type: 'button',
+                onclick: () => this.select({ kind: 'table', id: k }),
+              }, h('span.erd-rel-item-name', {}, tbl ? tableDisplay(tbl) : k));
+            }))
+            : h('p.muted.small', {}, '정의에서 이 DB의 표 이름을 찾지 못했습니다')),
+      ),
+    );
   }
 
   // multiView는 여럿을 고른 상태의 인스펙터다.
@@ -660,6 +709,15 @@ class StructureView {
     if (this.marks.length > 1) {
       mount(this.panel, this.multiView());
       return;
+    }
+    if (this.selection?.kind === 'view') {
+      const view = (this.doc?.schema?.views ?? [])
+        .find((v) => viewKey(v) === this.selection.id);
+      if (view) {
+        mount(this.panel, this.viewPanel(view));
+        return;
+      }
+      this.selection = null;
     }
     if (this.selection?.kind === 'note') {
       const note = this.note(this.selection.id);
