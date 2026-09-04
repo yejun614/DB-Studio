@@ -84,8 +84,9 @@ CPU·메모리·디스크를 함께 봅니다.</td>
 
 ## 다룰 수 있는 대상
 
-**데이터베이스** — PostgreSQL · MySQL · MS-SQL · Oracle · SQLite · MongoDB · Redis
-**분산 스토리지** — Hadoop(HDFS·YARN) · Ceph
+**데이터베이스** — PostgreSQL · MySQL · MS-SQL · Oracle · SQLite · ClickHouse · MongoDB · Redis
+**벡터 DB** — Qdrant · Pinecone · pgvector(PostgreSQL 확장)
+**분산 스토리지** — Hadoop(HDFS·YARN) · Ceph · S3 호환 오브젝트 스토리지
 **메시지 브로커** — RabbitMQ · Kafka
 
 드라이버는 모두 순수 Go입니다. CGO를 쓰면 단일 바이너리 배포가 깨지기 때문입니다.
