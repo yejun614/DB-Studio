@@ -700,34 +700,44 @@ class ChatView {
   // 보내기 전에 그 말이 무엇인지 볼 수 있어야 한다 — 고치고 싶은 한 줄이 늘 있고,
   // 무엇을 보냈는지 모른 채 받은 답은 검토할 수도 없다.
   async openSkills() {
-    // 목록은 열 때마다 받는다. 만들고 지운 것이 바로 보여야 하고, 남이 공유한
-    // 스킬도 그렇다 — 한 번 받아 캐시해 두면 "만들었는데 목록에 없다"가 된다.
-    let skills = [];
-    try {
-      const res = await api.get('/ai/skills');
-      skills = res.items ?? [];
-    } catch (err) {
-      toastError(err);
-      return;
-    }
-
     // 팝업에서는 패널 안 모달을 쓴다. 화면 전체를 덮으면 "뒤 화면을 보면서 쓰는
     // 도구"라는 전제가 무너진다(floatpanel 의 panelModal 과 같은 이유).
     const open = (opts) => (this.panel ? panelModal(this.panel, opts) : openModal(opts));
+
+    const listBox = h('div.ai-skill-list');
+
+    // 목록을 **자기 자리에서** 다시 그린다.
+    //
+    // 예전에는 만들기·고치기로 갈 때 이 창을 닫고 편집창을 열었고, 저장하면 목록을
+    // 다시 열었다. 그래서 편집을 **취소하면 목록까지 사라졌다** — 사람은 스킬 하나를
+    // 만들다 말았을 뿐인데 처음부터 다시 찾아 들어가야 했다. 편집창은 이 창 위에
+    // 얹고(모달 위의 모달), 저장한 뒤에는 이 함수만 다시 부른다.
+    const draw = async () => {
+      mount(listBox, spinner('스킬을 불러오는 중…'));
+      // 목록은 그릴 때마다 받는다. 만들고 지운 것이 바로 보여야 하고, 남이 공유한
+      // 스킬도 그렇다 — 한 번 받아 캐시해 두면 "만들었는데 목록에 없다"가 된다.
+      let skills = [];
+      try {
+        const res = await api.get('/ai/skills');
+        skills = res.items ?? [];
+      } catch (err) {
+        mount(listBox, h('p.muted', {}, '스킬 목록을 불러오지 못했습니다.'));
+        toastError(err);
+        return;
+      }
+      mount(listBox, skills.length
+        ? skills.map((sk) => this.skillRow(sk, draw, (picked) => {
+          close();
+          this.fillSkill(picked);
+        }))
+        : h('p.muted', {}, '스킬이 없습니다. 아래에서 새로 만들 수 있습니다.'));
+    };
 
     const close = open({
       title: 'AI 스킬',
       width: 560,
       body: () => [
-        skills.length
-          ? h('div.ai-skill-list', {}, skills.map((sk) => this.skillRow(sk, () => {
-            close();
-            this.openSkills();
-          }, (picked) => {
-            close();
-            this.fillSkill(picked);
-          })))
-          : h('p.muted', {}, '스킬이 없습니다. 아래에서 새로 만들 수 있습니다.'),
+        listBox,
         h('p.field-help', {},
           '스킬은 미리 적어 둔 지시문입니다. 고르면 입력칸에 채워지고, 보내기 전에 '
           + '고칠 수 있습니다.'),
@@ -735,26 +745,26 @@ class ChatView {
       footer: (dismiss) => [
         h('button.btn.btn-primary', {
           type: 'button',
-          onclick: () => {
-            dismiss();
-            this.editSkill(null);
-          },
+          onclick: () => this.editSkill(null, draw),
         }, icon('plus'), '새 스킬'),
         h('button.btn', { type: 'button', onclick: dismiss }, '닫기'),
       ],
     });
+    await draw();
   }
 
   // skillRow는 목록의 한 줄이다. 내가 만든 것에만 연필과 휴지통이 붙는다.
-  skillRow(sk, onChanged, onPick) {
+  //
+  // onRefresh는 목록을 그 자리에서 다시 그리는 함수다. 창을 닫고 다시 여는 것이
+  // 아니다 — 그러면 편집을 취소했을 때 돌아갈 목록이 없다.
+  skillRow(sk, onRefresh, onPick) {
     const actions = [];
     if (sk.mine) {
       actions.push(h('button.icon-btn.btn-tip', {
         type: 'button', 'data-tip': '고치기',
         onclick: (e) => {
           e.stopPropagation();
-          onChanged();
-          this.editSkill(sk);
+          this.editSkill(sk, onRefresh);
         },
       }, icon('edit', 14)));
       actions.push(h('button.icon-btn.btn-tip.danger', {
@@ -770,7 +780,7 @@ class ChatView {
           try {
             await api.del(`/ai/skills/${encodeURIComponent(sk.id)}`);
             toast('스킬을 지웠습니다', 'success');
-            onChanged();
+            onRefresh();
           } catch (err) {
             toastError(err);
           }
@@ -799,7 +809,10 @@ class ChatView {
   }
 
   // editSkill은 스킬을 만들거나 고치는 창이다.
-  editSkill(existing) {
+  //
+  // 목록 창 위에 얹힌다. onSaved는 저장한 뒤 목록을 다시 그리는 함수이고, 취소하면
+  // 아무것도 부르지 않는다 — 취소는 "없던 일로 한다"이지 "목록을 닫는다"가 아니다.
+  editSkill(existing, onSaved) {
     const nameInput = input({ value: existing?.name ?? '', placeholder: '예: 감사 컬럼 붙이기' });
     const descInput = input({
       value: existing?.description ?? '',
@@ -896,7 +909,7 @@ class ChatView {
               else await api.post('/ai/skills', payload);
               toast(existing ? '스킬을 고쳤습니다' : '스킬을 만들었습니다', 'success');
               close();
-              this.openSkills();
+              onSaved?.();
             } catch (err) {
               // 저장이 막히는 이유는 대개 지시문과 입력값이 어긋난 것이다. 그 문장은
               // 길어서 토스트로는 읽히지 않으므로 창 안에 남긴다.
