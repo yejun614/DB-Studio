@@ -345,6 +345,9 @@ func aiTools() map[string]*aiTool {
 	// ERD 초안을 고치는 툴. ERD 화면 안의 대화가 쓰는 것과 **같은 구현**이고,
 	// 여기서는 "어느 초안인가"(document)를 인자로 받는다(ai_tools_erddoc.go).
 	list = append(list, erdDocTools()...)
+	// 매크로를 만드는 툴(ai_tools_macro.go). 노드 설명과 만들기를 함께 둔다 —
+	// 설명 없이 만들게 하면 모델이 설정 칸 이름을 지어낸다.
+	list = append(list, macroTools()...)
 
 	out := make(map[string]*aiTool, len(list))
 	for _, t := range list {

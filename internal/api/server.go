@@ -510,6 +510,10 @@ func (s *Server) routes() {
 	assistant.Delete("/providers/:id", s.requireConnManager, s.handleDeleteAIProvider)
 	assistant.Post("/providers/:id/test", s.requireConnManager, s.handleTestAIProvider)
 
+	// 스킬은 미리 적어 둔 지시문이다(ai_skills.go). 목록만 준다 — 실행은 사용자가
+	// 그 글을 자기 말로 보내는 것이고, 그러면 지금까지의 툴·승인 규칙이 그대로 적용된다.
+	assistant.Get("/skills", s.handleListAISkills)
+
 	assistant.Get("/sessions", s.handleListAISessions)
 	assistant.Post("/sessions", s.handleCreateAISession)
 	assistant.Get("/sessions/:id", s.handleGetAISession)
