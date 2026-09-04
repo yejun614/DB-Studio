@@ -63,6 +63,12 @@ type Capabilities struct {
 	// Broker는 메시지 브로커 관리 화면 대상이다(RabbitMQ/Kafka).
 	// Storage와 같은 이유로 따로 둔다 — 화면은 이 값을 보고 브로커 화면을 연다.
 	Broker bool `json:"broker"`
+	// Vector는 벡터 화면 대상이다(Qdrant/Pinecone).
+	//
+	// PostgreSQL 은 여기서 참이 아니다 — pgvector 는 **확장**이라 깔려 있는지는
+	// 붙어 봐야 안다. "이 종류에서 벡터 화면을 열어 볼 수 있는가"는
+	// SupportsVector 가 답하고, "볼 것이 있는가"는 실제로 붙어서 답한다.
+	Vector bool `json:"vector"`
 }
 
 // ServerInfo는 연결 테스트 시 수집하는 대상 서버 기본 정보다.

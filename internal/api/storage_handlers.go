@@ -2,6 +2,7 @@ package api
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
 
@@ -61,6 +62,10 @@ func cephClient(t dbx.Target) *storage.Ceph {
 	return storage.NewCeph(storage.ConfigFrom(t.Conn, t.Secret, storage.CephDefaultPort))
 }
 
+func s3Client(t dbx.Target) *storage.S3 {
+	return storage.NewS3(storage.ConfigFrom(t.Conn, t.Secret, storage.S3DefaultPort))
+}
+
 // handleStorageOverview는 클러스터 개요 한 장이다.
 func (s *Server) handleStorageOverview(c *fiber.Ctx) error {
 	conn, t, err := s.resolveStorage(c, model.LevelMonitor)
@@ -73,6 +78,8 @@ func (s *Server) handleStorageOverview(c *fiber.Ctx) error {
 		ov, err = hadoopClient(t).Overview(c.Context())
 	case model.KindCeph:
 		ov, err = cephClient(t).Overview(c.Context())
+	case model.KindS3:
+		ov, err = s3Client(t).Overview(c.Context())
 	}
 	if err != nil {
 		return failDetail(c, fiber.StatusBadGateway, "storage_unreachable",
@@ -97,6 +104,14 @@ func storageFeatures(kind model.DBKind) fiber.Map {
 		// 쓰기가 false인 이유는 storage/ceph.go의 주석에 있다(되돌릴 수 없는 조작이다).
 		return fiber.Map{"browse": false, "apps": false, "pools": true, "osds": true,
 			"buckets": true, "write": false}
+	case model.KindS3:
+		// 오브젝트 스토리지에는 버킷과 객체만 있다. 풀·OSD·경로는 다른 종류의
+		// 개념이라 그 탭을 그리지 않는다.
+		//
+		// objects 가 buckets 와 따로 있는 이유: Ceph 도 버킷 목록은 주지만
+		// 객체를 훑는 길은 없다(대시보드 API 에 그 자리가 없다).
+		return fiber.Map{"browse": false, "apps": false, "pools": false, "osds": false,
+			"buckets": true, "objects": true, "write": false}
 	}
 	return fiber.Map{}
 }
@@ -183,15 +198,73 @@ func (s *Server) handleStorageBuckets(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	if conn.Kind != model.KindCeph {
+	var (
+		buckets []storage.Bucket
+		note    string
+	)
+	switch conn.Kind {
+	case model.KindCeph:
+		buckets, note, err = cephClient(t).Buckets(c.Context())
+	case model.KindS3:
+		buckets, note, err = s3Client(t).Buckets(c.Context())
+	default:
 		return fiber.NewError(fiber.StatusBadRequest, "이 종류에는 버킷이 없습니다")
 	}
-	buckets, note, err := cephClient(t).Buckets(c.Context())
 	if err != nil {
 		return failDetail(c, fiber.StatusBadGateway, "buckets_failed",
 			"버킷 목록을 읽지 못했습니다", err.Error())
 	}
 	return c.JSON(fiber.Map{"buckets": buckets, "note": note})
+}
+
+// handleStorageObjects는 S3 버킷 안의 객체 목록 한 장이다.
+//
+// 접두사로 접어서 보여준다(delimiter="/"). 수백만 개의 키를 평평하게 늘어놓으면
+// 사람이 읽을 수 없고, 접두사로 접으면 파일 탐색기처럼 읽힌다 — 그것이 사람이
+// 키 이름을 지을 때 실제로 의도한 구조다.
+func (s *Server) handleStorageObjects(c *fiber.Ctx) error {
+	conn, t, err := s.resolveStorage(c, model.LevelMonitor)
+	if err != nil {
+		return err
+	}
+	if !conn.Kind.IsObjectStore() {
+		return fiber.NewError(fiber.StatusBadRequest, "이 종류에는 객체 목록이 없습니다")
+	}
+	bucket := strings.TrimSpace(c.Query("bucket"))
+	if bucket == "" {
+		return fail(c, fiber.StatusBadRequest, "bad_request", "버킷을 고르세요")
+	}
+	page, err := s3Client(t).Objects(c.Context(), bucket,
+		c.Query("prefix"), c.Query("cursor"))
+	if err != nil {
+		return failDetail(c, fiber.StatusBadGateway, "objects_failed",
+			"객체 목록을 읽지 못했습니다", err.Error())
+	}
+	return c.JSON(fiber.Map{"page": page})
+}
+
+// handleStorageBucketStat은 버킷 하나의 크기를 어림잡는다.
+//
+// 따로 부르는 이유: S3 에는 이것을 묻는 API 가 없어 객체를 나열해 세는 수밖에
+// 없다. 목록을 여는 값으로는 너무 크므로, 사람이 그 버킷을 골랐을 때만 센다.
+func (s *Server) handleStorageBucketStat(c *fiber.Ctx) error {
+	conn, t, err := s.resolveStorage(c, model.LevelMonitor)
+	if err != nil {
+		return err
+	}
+	if !conn.Kind.IsObjectStore() {
+		return fiber.NewError(fiber.StatusBadRequest, "이 종류에는 버킷이 없습니다")
+	}
+	bucket := strings.TrimSpace(c.Query("bucket"))
+	if bucket == "" {
+		return fail(c, fiber.StatusBadRequest, "bad_request", "버킷을 고르세요")
+	}
+	stat, err := s3Client(t).Stat(c.Context(), bucket)
+	if err != nil {
+		return failDetail(c, fiber.StatusBadGateway, "stat_failed",
+			"버킷 크기를 재지 못했습니다", err.Error())
+	}
+	return c.JSON(fiber.Map{"stat": stat})
 }
 
 // storagePathRequest는 경로 조작 입력이다.
@@ -203,6 +276,10 @@ type storagePathRequest struct {
 
 // requireStorageWrite는 쓰기 능력을 확인한다.
 func (s *Server) requireStorageWrite(c *fiber.Ctx, conn *model.Connection) error {
+	if conn.Kind.IsObjectStore() {
+		return fiber.NewError(fiber.StatusBadRequest,
+			"오브젝트 스토리지는 조회 전용입니다. 객체 삭제는 되돌릴 수 없어 이 앱에서 실행하지 않습니다")
+	}
 	if conn.Kind == model.KindCeph {
 		return fiber.NewError(fiber.StatusBadRequest,
 			"Ceph는 조회 전용입니다. 풀·OSD 조작은 되돌릴 수 없어 이 앱에서 실행하지 않습니다")

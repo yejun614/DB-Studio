@@ -345,6 +345,15 @@ func (s *Server) routes() {
 	conns.Get("/:id/storage/pools", s.handleStoragePools)
 	conns.Get("/:id/storage/osds", s.handleStorageOSDs)
 	conns.Get("/:id/storage/buckets", s.handleStorageBuckets)
+	conns.Get("/:id/storage/objects", s.handleStorageObjects)
+	// 벡터 DB. 커넥션 아래에 두는 이유는 스토리지와 같다 — 권한·자격증명이
+	// 커넥션의 것이기 때문이다(vector_handlers.go 참고). 쓰기 경로는 없다.
+	conns.Get("/:id/vector", s.handleVectorOverview)
+	conns.Get("/:id/vector/scroll", s.handleVectorScroll)
+	conns.Get("/:id/vector/fetch", s.handleVectorFetch)
+	conns.Post("/:id/vector/search", s.handleVectorSearch)
+	conns.Post("/:id/vector/compare", s.handleVectorCompare)
+	conns.Get("/:id/storage/bucket-stat", s.handleStorageBucketStat)
 	conns.Post("/:id/storage/mkdir", s.handleStorageMkdir)
 	conns.Post("/:id/storage/rename", s.handleStorageRename)
 	conns.Post("/:id/storage/delete", s.handleStorageDelete)
