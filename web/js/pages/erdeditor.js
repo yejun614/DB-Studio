@@ -38,6 +38,7 @@ import { groupedSelect } from '../core/connpick.js';
 import { renderMarkdown } from '../core/markdown.js';
 import { openImageExportDialog } from '../core/erdimage.js';
 import { findInDocument, hitCenter, KIND_LABEL } from '../core/erdfind.js';
+import { specsFor, optionEditor, optionChips } from '../core/dboptions.js';
 import {
   cardinality, describeRelation, isJunction, junctionPartners,
 } from '../core/erdrel.js';
@@ -1126,6 +1127,44 @@ class Editor {
     connSelect.addEventListener('change', syncDialect);
     syncDialect();
 
+    // ---------- 저장 설정 ----------
+    //
+    // 문서 기본값과 새 DB 계획은 문서의 내용이라 op 로 보낸다(REST 로 보내는
+    // 이름·상태와 다른 길이다). 한 창에서 고치지만 두 요청으로 나간다.
+    const optionsBox = h('div.erd-doc-options');
+    const dbBox = h('div.erd-doc-options');
+    const target = this.doc.targetDb ?? null;
+    const newDbToggle = checkbox('새 데이터베이스를 만듭니다', {
+      checked: Boolean(target), disabled: ro,
+    });
+    const newDbName = input({
+      value: target?.name ?? '', disabled: ro, placeholder: '예: shop',
+    });
+    let tableDefaults = null;
+    let dbOptions = null;
+    const syncOptions = () => {
+      const dialect = dialectSelect.value;
+      tableDefaults = optionEditor(specsFor(dialect, 'table'), this.doc.tableDefaults ?? {},
+        { disabled: ro });
+      optionsBox.replaceChildren(...(tableDefaults.nodes.length
+        ? tableDefaults.nodes
+        : [h('p.muted', {}, `${kindLabel(dialect)} 에는 표마다 정할 저장 설정이 없습니다.`)]));
+
+      dbOptions = optionEditor(specsFor(dialect, 'database'), target?.options ?? {},
+        { disabled: ro || !newDbToggle.querySelector('input').checked });
+      dbBox.replaceChildren(...dbOptions.nodes);
+      dbBox.hidden = !newDbToggle.querySelector('input').checked;
+      newDbName.disabled = ro || !newDbToggle.querySelector('input').checked;
+    };
+    dialectSelect.addEventListener('change', syncOptions);
+    connSelect.addEventListener('change', syncOptions);
+    newDbToggle.querySelector('input').addEventListener('change', syncOptions);
+    syncOptions();
+
+    // 이미 있는 표에도 적용할지는 사람이 고른다. 기본값을 고쳤다고 이미 있는 표가
+    // 따라 바뀌면, 표마다 일부러 다르게 정해 둔 값이 소리 없이 사라진다.
+    const applyAll = checkbox('이미 있는 표에도 모두 적용', { disabled: ro });
+
     openModal({
       title: 'ERD 설계 설정',
       width: 560,
@@ -1143,6 +1182,22 @@ class Editor {
               ? '대상 DB가 있으면 문법은 그 DB의 것으로 정해집니다.'
               : '이미 적어 둔 컬럼 타입은 그대로 남습니다 — 내보낼 때 변환 경고로 알려 줍니다.')),
         h('label.field', {}, h('span.field-label', {}, '메모'), noteBox),
+
+        h('h3.erd-sub', {}, '새 데이터베이스'),
+        newDbToggle,
+        h('p.field-help', {},
+          '설계 단계에서는 만들지 않습니다. 내보낸 SQL과 마이그레이션의 첫 문장이 '
+          + 'CREATE DATABASE 가 되고, 그것이 실행될 때 만들어집니다.'),
+        h('label.field', {}, h('span.field-label', {}, '데이터베이스 이름'), newDbName),
+        dbBox,
+
+        h('h3.erd-sub', {}, '표 기본 저장 설정'),
+        h('p.field-help', {},
+          '여기서 정한 값은 새로 만드는 표가 물려받습니다. 이미 있는 표는 그대로입니다 — '
+          + '표마다 다르게 정하려면 그 표를 고르고 속성에서 바꾸세요.'),
+        optionsBox,
+        ro ? null : applyAll,
+
         ro
           ? h('p.notice.notice-info', {}, icon('lock'),
             '문서 설정은 만든 사람과 관리 권한이 있는 사람만 바꿀 수 있습니다.')
@@ -1167,6 +1222,9 @@ class Editor {
                 });
                 this.doc.name = res.document?.name ?? nameInput.value.trim();
                 this.note = res.document?.note ?? noteBox.value;
+                this.saveDocOptions({
+                  tableDefaults, dbOptions, newDbToggle, newDbName, applyAll, target,
+                });
                 close();
                 toast('문서 설정을 저장했습니다', 'success');
                 // 대상이나 문법이 바뀌면 화면의 절반이 달라진다(마이그레이션 단추,
@@ -1181,6 +1239,34 @@ class Editor {
           }, '저장'),
       ].filter(Boolean),
     });
+  }
+
+  // saveDocOptions는 문서 설정 창에서 고친 저장 설정을 op 로 보낸다.
+  //
+  // 바뀐 것이 없으면 아무것도 보내지 않는다. 빈 패치를 보내면 서버가 거절하고
+  // (바꿀 설정이 없습니다), 사람은 이름만 고쳤는데 오류를 본다.
+  saveDocOptions({ tableDefaults, dbOptions, newDbToggle, newDbName, applyAll, target }) {
+    const payload = {};
+    const defaults = tableDefaults?.patch() ?? {};
+    if (Object.keys(defaults).length) payload.tableDefaults = defaults;
+    if (applyAll?.querySelector('input')?.checked) payload.applyToTables = true;
+
+    const wantDb = Boolean(newDbToggle?.querySelector('input')?.checked);
+    const name = (newDbName?.value ?? '').trim();
+    if (!wantDb && target) {
+      // 이름을 비우는 것이 "새 DB 를 만들지 않는다"는 뜻이다.
+      payload.targetDb = { name: '' };
+    } else if (wantDb) {
+      const db = {};
+      if (name !== (target?.name ?? '')) db.name = name;
+      const opts = dbOptions?.patch() ?? {};
+      if (Object.keys(opts).length) db.options = opts;
+      // 처음 켜는 것이면 이름을 반드시 함께 보낸다(서버가 계획을 만들 근거다).
+      if (!target && name) db.name = name;
+      if (Object.keys(db).length) payload.targetDb = db;
+    }
+    if (!Object.keys(payload).length) return;
+    this.send('doc.options', payload);
   }
 
   // refreshHead는 머리글의 제목과 상태 배지를 지금 문서에 맞춘다.
@@ -2342,6 +2428,42 @@ class Editor {
   // 그려지지 않는 유령이 되고(미리보기가 아무 데도 반영되지 않는다) 잡아 둔 키는
   // 이름이 바뀐 뒤에는 서버가 모르는 이름이 된다. 그래서 **키만** 들고 다니며
   // 필요할 때마다 문서에서 다시 찾는다.
+  // tableOptionsEditor는 이 표의 저장 설정이다(엔진·문자셋·테이블스페이스).
+  //
+  // 고칠 수 없는 화면(구조 문서·발표)에서는 정해 둔 값만 조각으로 보여 준다. 빈
+  // 칸까지 늘어놓으면 "여기서 정할 수 있는데 안 되네"로 읽힌다.
+  tableOptionsEditor(ref, tbl, ro) {
+    const dialect = this.doc.dialect ?? this.doc.schema?.dialect ?? '';
+    const specs = specsFor(dialect, 'table');
+    if (!specs.length) return null;
+    if (ro) {
+      const chips = optionChips(dialect, tbl.options);
+      return h('div.erd-panel-section', {},
+        h('h3.erd-sub', {}, '저장 설정'),
+        chips ?? h('p.muted', {}, '정해 둔 것이 없습니다 (데이터베이스 기본값을 따릅니다)'));
+    }
+    // 비운 칸이 무엇을 따르는지 적는다. 문서 기본값이 있으면 그것을, 없으면
+    // 데이터베이스의 기본값을 따른다 — 이 구분이 없으면 빈 칸이 "기본값으로
+    // 바꿔라"로 읽힌다.
+    const editor = optionEditor(specs, tbl.options ?? {},
+      { inherit: this.doc.tableDefaults ?? {} });
+    const commit = () => {
+      const patch = editor.patch();
+      if (!Object.keys(patch).length) return;
+      this.send('table.update', { key: ref.serverKey, options: patch });
+    };
+    for (const node of editor.nodes) {
+      const el = node.querySelector('input, select');
+      if (!el) continue;
+      el.addEventListener('change', commit);
+      el.addEventListener('blur', commit);
+    }
+    return h('div.erd-panel-section', {},
+      h('h3.erd-sub', {}, '저장 설정',
+        h('span.erd-sub-hint', {}, '비우면 문서 기본값')),
+      ...editor.nodes);
+  }
+
   tableRef(tbl) {
     const key = tableKey(tbl);
     const ref = {
@@ -2396,6 +2518,7 @@ class Editor {
         field('논리명', logicalInput,
           'DB에는 만들어지지 않는 설계용 이름입니다. 도구 줄에서 어느 이름을 보일지 고릅니다.'),
         h('label.field', {}, h('span.field-label', {}, '주석'), commentInput),
+        this.tableOptionsEditor(ref, tbl, ro),
         ro ? null : this.appearanceEditor(ref),
 
         h('h3.erd-sub', {}, '컬럼', h('span.muted', {}, `${tbl.columns?.length ?? 0}개`),

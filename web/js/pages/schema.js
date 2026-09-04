@@ -11,6 +11,7 @@ import { serverDbPicker } from '../core/connpick.js';
 import { setScreenDetail, screenConn } from '../core/screen.js';
 import { codeBlock } from '../core/highlight.js';
 import { errorPanel } from './users.js';
+import { optionChips } from '../core/dboptions.js';
 
 export async function renderSchema(outlet, params, query) {
   mount(outlet, spinner('커넥션 목록을 불러오는 중…'));
@@ -420,6 +421,12 @@ function tableDetail(t, sc, edit = null) {
     parts.push(h('p.table-comment', {}, t.comment));
   }
 
+  // 저장 설정(엔진·문자셋·테이블스페이스). 실제 DB 에서 읽은 값이라 여기서는
+  // 보기만 한다 — 바꾸는 것은 마이그레이션이 할 일이고, 이 화면에서 조용히
+  // ALTER TABLE 이 나가면 그것이 이력에 남지 않는다.
+  const opts = optionChips(sc.dialect, t.options);
+  if (opts) parts.push(opts);
+
   const pkCols = new Set((t.primaryKey?.columns ?? []).map((c) => c.toLowerCase()));
   const fkCols = new Map();
   for (const fk of t.foreignKeys) {
@@ -706,6 +713,7 @@ async function showDDL(conn) {
 
 const CHANGE_LABELS = {
   create_table: '테이블 생성', drop_table: '테이블 삭제', alter_table_comment: '주석 변경',
+  alter_table_options: '저장 설정 변경',
   add_column: '컬럼 추가', drop_column: '컬럼 삭제', alter_column: '컬럼 변경',
   add_primary_key: 'PK 추가', drop_primary_key: 'PK 삭제',
   add_index: '인덱스 추가', drop_index: '인덱스 삭제',

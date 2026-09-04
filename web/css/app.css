@@ -5691,3 +5691,20 @@ tr.is-clickable:focus-visible { outline: 2px solid var(--primary); outline-offse
 .project-actions { display: flex; gap: 6px; margin-left: auto; }
 .plain-list { margin: 8px 0 0; padding-left: 18px; }
 .plain-list li { margin-bottom: 4px; }
+
+/* ---------- 저장 설정(엔진·문자셋·테이블스페이스) ---------- */
+/* 값을 정해 둔 것만 조각으로 보여 준다. 빈 칸까지 늘어놓으면 자리만 차지하고
+   "여기서 정할 수 있는데 안 되네"로 읽힌다. */
+.db-option-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.db-option-chip {
+  display: inline-flex; align-items: baseline; gap: 6px;
+  padding: 3px 8px; font-size: 11.5px;
+  border: 1px solid var(--border-soft); border-radius: 999px;
+  background: var(--bg-alt);
+}
+.db-option-chip > span:last-child { font-family: var(--mono); color: var(--text); }
+.db-option-notice { margin: 8px 0; }
+/* 문서 설정 창의 설정 묶음. 칸 사이를 조금 좁혀 창이 길어지는 것을 줄인다. */
+.erd-doc-options { display: flex; flex-direction: column; gap: 8px; }
+.erd-doc-options .field { margin: 0; }
+.erd-panel-section { margin-top: 12px; }
