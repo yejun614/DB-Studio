@@ -12,7 +12,9 @@ import {
   copyToClipboard,
 } from '../core/ui.js';
 import { navigate, currentPath, setLeaveGuard } from '../core/router.js';
-import { openFloatPanel, panelModal, isPanelOpen, closeFloatPanel } from '../core/floatpanel.js';
+import {
+  openFloatPanel, panelModal, isPanelOpen, closeFloatPanel, pulsePanelDot, setPanelBusy,
+} from '../core/floatpanel.js';
 import { renderMarkdown } from '../core/markdown.js';
 import { errorPanel } from './users.js';
 import { serverDbPicker, groupedSelect } from '../core/connpick.js';
@@ -698,19 +700,14 @@ class ChatView {
   // 보내기 전에 그 말이 무엇인지 볼 수 있어야 한다 — 고치고 싶은 한 줄이 늘 있고,
   // 무엇을 보냈는지 모른 채 받은 답은 검토할 수도 없다.
   async openSkills() {
-    let skills = this.skills;
-    if (!skills) {
-      try {
-        const res = await api.get('/ai/skills');
-        skills = res.items ?? [];
-        this.skills = skills;
-      } catch (err) {
-        toastError(err);
-        return;
-      }
-    }
-    if (!skills.length) {
-      toast('쓸 수 있는 스킬이 없습니다', 'info');
+    // 목록은 열 때마다 받는다. 만들고 지운 것이 바로 보여야 하고, 남이 공유한
+    // 스킬도 그렇다 — 한 번 받아 캐시해 두면 "만들었는데 목록에 없다"가 된다.
+    let skills = [];
+    try {
+      const res = await api.get('/ai/skills');
+      skills = res.items ?? [];
+    } catch (err) {
+      toastError(err);
       return;
     }
 
@@ -718,26 +715,199 @@ class ChatView {
     // 도구"라는 전제가 무너진다(floatpanel 의 panelModal 과 같은 이유).
     const open = (opts) => (this.panel ? panelModal(this.panel, opts) : openModal(opts));
 
-    const pickSkill = () => {
-      const close = open({
-        title: 'AI 스킬',
-        width: 520,
-        body: () => h('div.ai-skill-list', {}, skills.map((sk) => h('button.ai-skill-item', {
+    const close = open({
+      title: 'AI 스킬',
+      width: 560,
+      body: () => [
+        skills.length
+          ? h('div.ai-skill-list', {}, skills.map((sk) => this.skillRow(sk, () => {
+            close();
+            this.openSkills();
+          }, (picked) => {
+            close();
+            this.fillSkill(picked);
+          })))
+          : h('p.muted', {}, '스킬이 없습니다. 아래에서 새로 만들 수 있습니다.'),
+        h('p.field-help', {},
+          '스킬은 미리 적어 둔 지시문입니다. 고르면 입력칸에 채워지고, 보내기 전에 '
+          + '고칠 수 있습니다.'),
+      ],
+      footer: (dismiss) => [
+        h('button.btn.btn-primary', {
           type: 'button',
           onclick: () => {
-            close();
-            this.fillSkill(sk);
+            dismiss();
+            this.editSkill(null);
           },
+        }, icon('plus'), '새 스킬'),
+        h('button.btn', { type: 'button', onclick: dismiss }, '닫기'),
+      ],
+    });
+  }
+
+  // skillRow는 목록의 한 줄이다. 내가 만든 것에만 연필과 휴지통이 붙는다.
+  skillRow(sk, onChanged, onPick) {
+    const actions = [];
+    if (sk.mine) {
+      actions.push(h('button.icon-btn.btn-tip', {
+        type: 'button', 'data-tip': '고치기',
+        onclick: (e) => {
+          e.stopPropagation();
+          onChanged();
+          this.editSkill(sk);
         },
-        h('span.ai-skill-icon', {}, icon(sk.icon || 'sparkles', 16)),
-        h('span.ai-skill-main', {},
-          h('strong', {}, sk.name),
-          h('span.muted.small', {}, sk.description)),
-        ))),
-        footer: (dismiss) => [h('button.btn', { type: 'button', onclick: dismiss }, '닫기')],
-      });
+      }, icon('edit', 14)));
+      actions.push(h('button.icon-btn.btn-tip.danger', {
+        type: 'button', 'data-tip': '지우기',
+        onclick: async (e) => {
+          e.stopPropagation();
+          const ok = await confirmDialog({
+            title: '스킬 삭제',
+            message: `"${sk.name}" 스킬을 지웁니다.${sk.shared ? ' 공유된 스킬이라 다른 사람도 쓸 수 없게 됩니다.' : ''}`,
+            confirmLabel: '삭제', danger: true,
+          });
+          if (!ok) return;
+          try {
+            await api.del(`/ai/skills/${encodeURIComponent(sk.id)}`);
+            toast('스킬을 지웠습니다', 'success');
+            onChanged();
+          } catch (err) {
+            toastError(err);
+          }
+        },
+      }, icon('trash', 14)));
+    }
+
+    return h('div.ai-skill-row', {},
+      h('button.ai-skill-item', {
+        type: 'button',
+        onclick: () => onPick(sk),
+      },
+      h('span.ai-skill-icon', {}, icon(sk.icon || 'sparkles', 16)),
+      h('span.ai-skill-main', {},
+        h('strong', {}, sk.name,
+          sk.builtin ? null : badge(sk.shared ? '공유' : '내 스킬', sk.shared ? 'accent' : 'neutral')),
+        h('span.muted.small', {}, sk.description || '(설명 없음)'),
+        // 남이 공유한 스킬은 누가 만든 것인지 보여야 한다. 같은 이름의 스킬이
+        // 둘 있을 때 어느 쪽이 내 것인지 구별할 유일한 표시다.
+        !sk.builtin && !sk.mine && sk.owner
+          ? h('span.muted.small', {}, `만든 사람: ${sk.owner}`)
+          : null),
+      ),
+      actions.length ? h('div.ai-skill-actions', {}, actions) : null,
+    );
+  }
+
+  // editSkill은 스킬을 만들거나 고치는 창이다.
+  editSkill(existing) {
+    const nameInput = input({ value: existing?.name ?? '', placeholder: '예: 감사 컬럼 붙이기' });
+    const descInput = input({
+      value: existing?.description ?? '',
+      placeholder: '이 스킬이 무엇을 하는지 한 줄',
+    });
+    const promptBox = h('textarea.input.textarea.ai-skill-prompt', {
+      rows: 12, spellcheck: false,
+      placeholder: '모델에게 시킬 일을 적으세요. {{이름}} 자리는 쓸 때 물어봅니다.',
+      value: existing?.prompt ?? '',
+    });
+    const sharedBox = h('input', { type: 'checkbox', checked: Boolean(existing?.shared) });
+
+    // 입력값 편집기. 줄을 더하고 지운다.
+    const argsWrap = h('div.ai-skill-args');
+    const rows = (existing?.args ?? []).map((a) => ({ ...a }));
+    const drawArgs = () => {
+      mount(argsWrap, rows.length
+        ? rows.map((arg, i) => {
+          const key = input({ value: arg.key ?? '', placeholder: 'key' });
+          key.addEventListener('input', () => { rows[i].key = key.value; });
+          const label = input({ value: arg.label ?? '', placeholder: '화면에 보일 이름' });
+          label.addEventListener('input', () => { rows[i].label = label.value; });
+          const type = select([
+            { value: 'text', label: '글' },
+            { value: 'number', label: '숫자' },
+            { value: 'connection', label: 'DB 커넥션' },
+            { value: 'erd', label: 'ERD 초안' },
+          ], { value: arg.type ?? 'text' });
+          type.addEventListener('change', () => { rows[i].type = type.value; });
+          const multi = h('input', { type: 'checkbox', checked: Boolean(arg.multiline) });
+          multi.addEventListener('change', () => { rows[i].multiline = multi.checked; });
+          const opt = h('input', { type: 'checkbox', checked: Boolean(arg.optional) });
+          opt.addEventListener('change', () => { rows[i].optional = opt.checked; });
+          return h('div.ai-skill-arg', {},
+            key, label, type,
+            h('label.ai-skill-arg-flag', {}, multi, h('span', {}, '여러 줄')),
+            h('label.ai-skill-arg-flag', {}, opt, h('span', {}, '선택')),
+            h('button.icon-btn.danger', {
+              type: 'button', title: '이 입력값 지우기',
+              onclick: () => {
+                rows.splice(i, 1);
+                drawArgs();
+              },
+            }, icon('trash', 13)));
+        })
+        : h('p.muted.small', {}, '물어볼 값이 없습니다. 지시문에 {{ }} 자리가 있으면 여기에 더하세요.'));
     };
-    pickSkill();
+    drawArgs();
+
+    const opts = {
+      title: existing ? `스킬 ${existing.name}` : '새 스킬',
+      width: 720,
+      body: () => [
+        field('이름', nameInput),
+        field('설명', descInput),
+        h('div.field', {}, h('span.field-label', {}, '지시문'), promptBox,
+          h('p.field-help', {},
+            '{{key}} 자리에 아래 입력값이 들어갑니다. 툴 이름을 적어 두면 모델이 그 툴을 '
+            + '씁니다(예: introspect_schema, erd_read_schema).')),
+        h('div.field', {}, h('span.field-label', {}, '물어볼 값'), argsWrap,
+          h('button.btn.btn-small', {
+            type: 'button',
+            onclick: () => {
+              rows.push({ key: '', label: '', type: 'text' });
+              drawArgs();
+            },
+          }, icon('plus', 13), '입력값 추가'),
+          h('p.field-help', {},
+            '열쇠(key)는 지시문의 {{ }} 안에 적는 이름입니다. 지시문에 없는 값을 물어보거나, '
+            + '물어보지 않는 값을 지시문에 쓰면 저장할 때 알려 줍니다.')),
+        h('label.field.field-inline', {}, sharedBox,
+          h('span', {}, '모두와 공유 (고치고 지우는 것은 나만)')),
+      ],
+      footer: (close) => [
+        h('button.btn', { type: 'button', onclick: close }, '취소'),
+        h('button.btn.btn-primary', {
+          type: 'button',
+          onclick: async () => {
+            const payload = {
+              name: nameInput.value.trim(),
+              description: descInput.value.trim(),
+              prompt: promptBox.value,
+              args: rows.map((a) => ({
+                key: (a.key ?? '').trim(),
+                label: (a.label ?? '').trim(),
+                type: a.type || 'text',
+                multiline: Boolean(a.multiline),
+                optional: Boolean(a.optional),
+              })),
+              shared: sharedBox.checked,
+            };
+            try {
+              if (existing) await api.put(`/ai/skills/${encodeURIComponent(existing.id)}`, payload);
+              else await api.post('/ai/skills', payload);
+              toast(existing ? '스킬을 고쳤습니다' : '스킬을 만들었습니다', 'success');
+              close();
+              this.openSkills();
+            } catch (err) {
+              // 저장이 막히는 이유는 대개 지시문과 입력값이 어긋난 것이다. 그 문장은
+              // 길어서 토스트로는 읽히지 않으므로 창 안에 남긴다.
+              toastError(err);
+            }
+          },
+        }, icon('check'), existing ? '저장' : '만들기'),
+      ],
+    };
+    if (this.panel) panelModal(this.panel, opts);
+    else openModal(opts);
   }
 
   // fillSkill은 스킬이 물어보는 값을 받아 지시문을 입력칸에 채운다.
@@ -1330,6 +1500,8 @@ class ChatView {
     this.controller = new AbortController();
     // 여기서부터 단추는 **중단**이다.
     this.renderComposer();
+    // 창을 접어 둔 채 기다리는 사람에게는 아이콘이 유일한 소식이다.
+    setPanelBusy(ASSISTANT_PANEL, true);
     try {
       await streamAIChat(this.sessionId, text, (ev) => this.handleEvent(ev),
         this.controller.signal, replaceFrom);
@@ -1341,6 +1513,10 @@ class ChatView {
     } finally {
       this.controller = null;
       this.renderComposer();
+      setPanelBusy(ASSISTANT_PANEL, false);
+      // 답이 도착했다. 접어 둔 사람은 다른 화면을 보고 있으므로, 이 순간 아이콘이
+      // 조용하면 그 답은 아무도 읽지 않은 채로 남는다.
+      pulsePanelDot(ASSISTANT_PANEL);
       // 시계를 멈춘다. 끊겼든 끝났든, 안 멈추면 화면을 떠난 뒤에도 계속 돈다.
       this.streaming?.stop();
       clearTimeout(waitTimer);

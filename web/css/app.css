@@ -3669,6 +3669,23 @@ h5.md-h, h6.md-h { font-size: 13.5px; color: var(--text-dim); }
 .ai-skill-item:hover { border-color: var(--primary); background: var(--surface-2); }
 .ai-skill-icon { color: var(--accent); flex: none; display: inline-flex; padding-top: 1px; }
 .ai-skill-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.ai-skill-main strong { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+/* 목록의 한 줄: 고르는 단추가 폭을 다 쓰고, 내 스킬이면 오른쪽에 연필·휴지통. */
+.ai-skill-row { display: flex; align-items: stretch; gap: 4px; }
+.ai-skill-row .ai-skill-item { flex: 1; min-width: 0; }
+.ai-skill-actions { display: flex; align-items: center; gap: 2px; flex: none; }
+/* 스킬 편집기. 지시문은 넓게, 입력값은 한 줄에 담는다. */
+.ai-skill-prompt { font-family: var(--mono); font-size: 12.5px; line-height: 1.6; }
+.ai-skill-args { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.ai-skill-arg {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+}
+.ai-skill-arg .input { flex: 1 1 110px; min-width: 90px; }
+.ai-skill-arg select { flex: 0 1 130px; }
+.ai-skill-arg-flag {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 12px; color: var(--text-mute); flex: none;
+}
 
 .ai-suggestions { display: flex; flex-direction: column; gap: 10px; }
 .ai-chips { display: flex; gap: 8px; flex-wrap: wrap; }
