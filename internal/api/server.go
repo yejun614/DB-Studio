@@ -513,6 +513,11 @@ func (s *Server) routes() {
 	// 스킬은 미리 적어 둔 지시문이다(ai_skills.go). 목록만 준다 — 실행은 사용자가
 	// 그 글을 자기 말로 보내는 것이고, 그러면 지금까지의 툴·승인 규칙이 그대로 적용된다.
 	assistant.Get("/skills", s.handleListAISkills)
+	// 사람이 만든 스킬. 고치고 지우는 것은 주인(과 사용자 관리자)만 한다 —
+	// 공유된 스킬을 아무나 바꾸면 "어제 쓰던 스킬이 오늘 다른 말을 한다"가 된다.
+	assistant.Post("/skills", s.handleCreateAISkill)
+	assistant.Put("/skills/:id", s.handleUpdateAISkill)
+	assistant.Delete("/skills/:id", s.handleDeleteAISkill)
 
 	assistant.Get("/sessions", s.handleListAISessions)
 	assistant.Post("/sessions", s.handleCreateAISession)

@@ -1,11 +1,16 @@
 package api
 
 import (
+	"encoding/json"
+	"errors"
+	"log/slog"
+	"regexp"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
 
 	"dbstudio/internal/model"
+	"dbstudio/internal/store"
 )
 
 // AI 스킬.
@@ -43,7 +48,16 @@ type skillArg struct {
 
 // aiSkill은 스킬 하나다.
 type aiSkill struct {
-	ID          string     `json:"id"`
+	ID string `json:"id"`
+	// Builtin이면 앱이 들고 있는 스킬이다(고칠 수 없다).
+	//
+	// 화면이 이 값으로 연필·휴지통을 감춘다. 서버도 같은 판정을 다시 한다 —
+	// 화면에서 감추는 것은 안내이지 규칙이 아니다.
+	Builtin bool `json:"builtin"`
+	// Mine이면 내가 만든 것이다(고치고 지울 수 있다).
+	Mine        bool       `json:"mine,omitempty"`
+	Shared      bool       `json:"shared,omitempty"`
+	Owner       string     `json:"owner,omitempty"`
 	Name        string     `json:"name"`
 	Description string     `json:"description"`
 	Icon        string     `json:"icon"`
@@ -197,16 +211,229 @@ erd_set_logical_names 로 한 번에 반영하세요.
 }
 
 // handleListAISkills는 이 사용자가 쓸 수 있는 스킬 목록이다.
+//
+// 앱의 것을 앞에, 사람이 만든 것을 뒤에 둔다. 새로 만든 스킬을 목록 맨 아래에서
+// 찾게 되는 것이 이상해 보일 수 있지만, 앱의 것은 자리가 늘 같아야 손이 기억한다.
 func (s *Server) handleListAISkills(c *fiber.Ctx) error {
 	u := currentUser(c)
-	out := make([]*aiSkill, 0, len(aiSkills()))
+	out := []*aiSkill{}
 	for _, sk := range aiSkills() {
 		if sk.RequiresPerm != "" && !u.HasPerm(sk.RequiresPerm) {
+			continue
+		}
+		copy := *sk
+		copy.Builtin = true
+		out = append(out, &copy)
+	}
+
+	mine, err := s.st.ListAISkills(c.Context(), u.ID)
+	if err != nil {
+		return err
+	}
+	for _, row := range mine {
+		sk, cerr := skillFromRow(row, u)
+		if cerr != nil {
+			// 한 줄이 깨졌다고 목록 전체를 못 쓰게 하지 않는다. 그 스킬만 빠진다.
+			slog.Error("스킬을 읽지 못했습니다", "id", row.ID, "error", cerr)
 			continue
 		}
 		out = append(out, sk)
 	}
 	return c.JSON(fiber.Map{"items": out})
+}
+
+// skillFromRow는 저장된 줄을 화면이 쓰는 모양으로 바꾼다.
+func skillFromRow(row *store.AISkill, u *model.User) (*aiSkill, error) {
+	args := []skillArg{}
+	if strings.TrimSpace(row.Args) != "" {
+		if err := json.Unmarshal([]byte(row.Args), &args); err != nil {
+			return nil, err
+		}
+	}
+	owner := row.CreatedName
+	if owner == "" {
+		owner = "(알 수 없음)"
+	}
+	return &aiSkill{
+		ID: row.ID, Name: row.Name, Description: row.Description,
+		Icon: row.Icon, Args: args, Prompt: row.Prompt,
+		Mine:   row.CreatedBy == u.ID || u.Role.CanManageUsers(),
+		Shared: row.Shared,
+		Owner:  owner,
+	}, nil
+}
+
+// skillSlotRe는 지시문의 {{열쇠}} 자리다.
+var skillSlotRe = regexp.MustCompile(`\{\{(\w+)\}\}`)
+
+type saveSkillBody struct {
+	Name        string     `json:"name"`
+	Description string     `json:"description"`
+	Icon        string     `json:"icon"`
+	Prompt      string     `json:"prompt"`
+	Args        []skillArg `json:"args"`
+	Shared      bool       `json:"shared"`
+}
+
+// validate는 저장 전에 스킬을 확인한다.
+//
+// 지시문과 인자가 서로를 가리키는지 보는 것이 요점이다. 어긋나면 두 가지가 조용히
+// 일어난다: 채울 인자가 없는 자리는 "{{focus}}" 그대로 남아 모델이 그 글자를 지시로
+// 읽고, 쓰이지 않는 인자는 사람에게 묻고 나서 아무 데도 안 쓰인다. 둘 다 화면에서는
+// "답이 좀 이상하다"로만 보인다 — 그래서 만들 때 막는다.
+func (b *saveSkillBody) validate() (store.SaveAISkillParams, error) {
+	var out store.SaveAISkillParams
+	name := strings.TrimSpace(b.Name)
+	prompt := strings.TrimSpace(b.Prompt)
+	if name == "" {
+		return out, errors.New("스킬 이름을 적으세요")
+	}
+	if len([]rune(name)) > 60 {
+		return out, errors.New("스킬 이름이 너무 깁니다 (60자 제한)")
+	}
+	if prompt == "" {
+		return out, errors.New("지시문을 적으세요")
+	}
+	if len([]rune(prompt)) > 20000 {
+		return out, errors.New("지시문이 너무 깁니다 (20000자 제한)")
+	}
+
+	keys := map[string]bool{}
+	for i := range b.Args {
+		a := &b.Args[i]
+		a.Key = strings.TrimSpace(a.Key)
+		a.Label = strings.TrimSpace(a.Label)
+		if a.Key == "" {
+			return out, errors.New("입력값의 열쇠(key)를 적으세요")
+		}
+		if !regexp.MustCompile(`^\w+$`).MatchString(a.Key) {
+			return out, errors.New("입력값의 열쇠는 영문·숫자·밑줄만 쓸 수 있습니다: " + a.Key)
+		}
+		if keys[a.Key] {
+			return out, errors.New("입력값의 열쇠가 겹칩니다: " + a.Key)
+		}
+		keys[a.Key] = true
+		if a.Label == "" {
+			a.Label = a.Key
+		}
+		switch a.Type {
+		case "connection", "erd", "text", "number":
+		default:
+			return out, errors.New("입력값 종류가 올바르지 않습니다: " + a.Type)
+		}
+	}
+
+	used := map[string]bool{}
+	for _, m := range skillSlotRe.FindAllStringSubmatch(prompt, -1) {
+		used[m[1]] = true
+		if !keys[m[1]] {
+			return out, errors.New("지시문의 {{" + m[1] + "}} 를 채울 입력값이 없습니다")
+		}
+	}
+	for key := range keys {
+		if !used[key] {
+			return out, errors.New("입력값 " + key + " 를 지시문에서 쓰지 않습니다 " +
+				"({{" + key + "}} 를 넣으세요)")
+		}
+	}
+
+	raw, err := json.Marshal(b.Args)
+	if err != nil {
+		return out, err
+	}
+	return store.SaveAISkillParams{
+		Name: name, Description: strings.TrimSpace(b.Description),
+		Icon: strings.TrimSpace(b.Icon), Prompt: prompt,
+		Args: string(raw), Shared: b.Shared,
+	}, nil
+}
+
+func (s *Server) handleCreateAISkill(c *fiber.Ctx) error {
+	var body saveSkillBody
+	if err := c.BodyParser(&body); err != nil {
+		return fail(c, fiber.StatusBadRequest, "bad_request", "요청 본문을 해석할 수 없습니다")
+	}
+	params, err := body.validate()
+	if err != nil {
+		return fail(c, fiber.StatusBadRequest, "invalid_skill", err.Error())
+	}
+	u := currentUser(c)
+	row, err := s.st.CreateAISkill(c.Context(), params, u.ID)
+	if err != nil {
+		return err
+	}
+	s.audit(c, store.AuditParams{
+		Action: "ai.skill.create", TargetType: "ai_skill", TargetID: row.ID,
+		Detail: map[string]any{"name": row.Name, "shared": row.Shared},
+	})
+	sk, cerr := skillFromRow(row, u)
+	if cerr != nil {
+		return cerr
+	}
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"skill": sk})
+}
+
+// requireOwnSkill은 고치거나 지울 수 있는 스킬인지 본다.
+//
+// 공유된 스킬은 누구나 **쓸** 수 있지만 고치는 것은 주인(과 사용자 관리자)뿐이다.
+// 남이 쓰고 있는 글을 아무나 바꿀 수 있으면 "어제 쓰던 스킬이 오늘 다른 말을 한다"가
+// 된다 — 그때 답이 달라진 이유를 아무도 찾지 못한다.
+func (s *Server) requireOwnSkill(c *fiber.Ctx) (*store.AISkill, error) {
+	row, err := s.st.GetAISkill(c.Context(), c.Params("id"))
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, fiber.NewError(fiber.StatusNotFound, "스킬을 찾을 수 없습니다")
+	}
+	if err != nil {
+		return nil, err
+	}
+	u := currentUser(c)
+	if row.CreatedBy != u.ID && !u.Role.CanManageUsers() {
+		return nil, fiber.NewError(fiber.StatusForbidden, "내가 만든 스킬만 고칠 수 있습니다")
+	}
+	return row, nil
+}
+
+func (s *Server) handleUpdateAISkill(c *fiber.Ctx) error {
+	row, err := s.requireOwnSkill(c)
+	if err != nil {
+		return err
+	}
+	var body saveSkillBody
+	if perr := c.BodyParser(&body); perr != nil {
+		return fail(c, fiber.StatusBadRequest, "bad_request", "요청 본문을 해석할 수 없습니다")
+	}
+	params, verr := body.validate()
+	if verr != nil {
+		return fail(c, fiber.StatusBadRequest, "invalid_skill", verr.Error())
+	}
+	next, uerr := s.st.UpdateAISkill(c.Context(), row.ID, params)
+	if uerr != nil {
+		return uerr
+	}
+	s.audit(c, store.AuditParams{
+		Action: "ai.skill.update", TargetType: "ai_skill", TargetID: row.ID,
+		Detail: map[string]any{"name": next.Name, "shared": next.Shared},
+	})
+	sk, cerr := skillFromRow(next, currentUser(c))
+	if cerr != nil {
+		return cerr
+	}
+	return c.JSON(fiber.Map{"skill": sk})
+}
+
+func (s *Server) handleDeleteAISkill(c *fiber.Ctx) error {
+	row, err := s.requireOwnSkill(c)
+	if err != nil {
+		return err
+	}
+	if derr := s.st.DeleteAISkill(c.Context(), row.ID); derr != nil {
+		return derr
+	}
+	s.audit(c, store.AuditParams{
+		Action: "ai.skill.delete", TargetType: "ai_skill", TargetID: row.ID,
+		Detail: map[string]any{"name": row.Name},
+	})
+	return c.SendStatus(fiber.StatusNoContent)
 }
 
 // skillPromptFor는 시험과 다른 서버 코드가 스킬 지시문을 찾을 때 쓴다.
