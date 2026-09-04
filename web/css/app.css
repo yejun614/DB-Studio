@@ -2213,13 +2213,11 @@ option { background: var(--surface); color: var(--text); }
 .erd-canvas.is-pan .erd-card-g,
 .erd-canvas.is-pan .erd-note-g,
 .erd-canvas.is-pan .erd-group-g,
-.erd-canvas.is-pan .erd-note-grip,
-.erd-canvas.is-pan .erd-group-grip,
+.erd-canvas.is-pan .erd-resize,
 .erd-canvas.is-space-pan .erd-card-g,
 .erd-canvas.is-space-pan .erd-note-g,
 .erd-canvas.is-space-pan .erd-group-g,
-.erd-canvas.is-space-pan .erd-note-grip,
-.erd-canvas.is-space-pan .erd-group-grip { cursor: grab; }
+.erd-canvas.is-space-pan .erd-resize { cursor: grab; }
 .erd-canvas.is-pan:active .erd-card-g,
 .erd-canvas.is-space-pan:active .erd-card-g { cursor: grabbing; }
 
@@ -2404,7 +2402,16 @@ option { background: var(--surface); color: var(--text); }
   stroke: var(--group-accent); stroke-width: 1.5; stroke-dasharray: 8 5;
 }
 .erd-group-label { fill: var(--group-accent); font: 600 13px var(--sans); }
-.erd-group-grip { fill: var(--group-accent); fill-opacity: 0.6; cursor: nwse-resize; }
+/* 크기 조절 띠. 보이지 않고 커서로만 알린다.
+ *
+ * 손잡이 하나(오른쪽 아래)를 없애고 여덟 방향으로 바꾼 이유는 캔버스의 resizeEdges 에
+ * 적어 두었다. 여기서는 방향마다 커서만 정한다 — 커서가 곧 "여기를 잡으면 이 변이
+ * 움직인다"는 안내이고, 보이는 손잡이가 없으니 그것이 유일한 안내다. */
+.erd-resize { fill: transparent; }
+.erd-resize.is-n, .erd-resize.is-s { cursor: ns-resize; }
+.erd-resize.is-e, .erd-resize.is-w { cursor: ew-resize; }
+.erd-resize.is-nw, .erd-resize.is-se { cursor: nwse-resize; }
+.erd-resize.is-ne, .erd-resize.is-sw { cursor: nesw-resize; }
 /* 고른 것은 테두리로 표시한다. 색을 바꾸면 그룹·메모의 자기 색과 섞인다. */
 .erd-group-g.is-selected .erd-group-bg { stroke-width: 2.5; stroke-dasharray: none; }
 
@@ -5311,7 +5318,7 @@ a.stat:hover { border-color: var(--text-mute); background: hsl(var(--h-muted) / 
 tr.is-clickable { cursor: pointer; }
 tr.is-clickable:hover td { background: var(--surface-2); }
 tr.is-clickable:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
-.erd-note-grip { fill: var(--note-accent); fill-opacity: 0.55; cursor: nwse-resize; }
+
 
 /* 패널 안에서만 덮는 대화상자 */
 .float-modal {

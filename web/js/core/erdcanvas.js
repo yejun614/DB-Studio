@@ -938,15 +938,11 @@ export class ErdCanvas {
       g.appendChild(svgEl('text', { class: 'erd-group-label', x: 12, y: 22 }, group.label));
     }
     if (this.canEdit) {
-      const grip = svgEl('rect', {
-        class: 'erd-group-grip', x: (group.w || 320) - 16, y: (group.h || 240) - 16,
-        width: 12, height: 12, rx: 3,
-      });
-      grip.addEventListener('pointerdown', (e) => this.onGroupPointerDown(e, group, 'resize'));
-      g.appendChild(grip);
+      resizeEdges(g, group.w || 320, group.h || 240,
+        (e, dir) => this.onGroupPointerDown(e, group, 'resize', dir));
     }
     g.addEventListener('pointerdown', (e) => {
-      if (e.target.classList.contains('erd-group-grip')) return;
+      if (e.target.classList.contains('erd-resize')) return;
       this.onGroupPointerDown(e, group, 'move');
     });
     g.addEventListener('dblclick', () => this.opts.onEditGroup?.(group));
@@ -971,14 +967,13 @@ export class ErdCanvas {
     // 메모도 그룹처럼 손으로 크기를 정한다. 자동으로만 늘어나면 긴 메모가
     // 캔버스를 가로지르고, 그것을 줄일 방법이 없다.
     if (this.canEdit) {
-      const grip = svgEl('rect', {
-        class: 'erd-note-grip', x: width - 12, y: height - 12,
-        width: 9, height: 9, rx: 2,
-      });
-      grip.addEventListener('pointerdown', (e) => this.onNotePointerDown(e, note, 'resize'));
-      g.appendChild(grip);
+      resizeEdges(g, width, height,
+        (e, dir) => this.onNotePointerDown(e, note, 'resize', dir));
     }
-    g.addEventListener('pointerdown', (e) => this.onNotePointerDown(e, note));
+    g.addEventListener('pointerdown', (e) => {
+      if (e.target.classList.contains('erd-resize')) return;
+      this.onNotePointerDown(e, note);
+    });
     g.addEventListener('dblclick', () => this.opts.onEditNote?.(note));
     return g;
   }
@@ -1168,27 +1163,26 @@ export class ErdCanvas {
         return;
       }
       if (this.drag.mode === 'note-resize') {
-        const w = Math.max(120, round1(this.drag.size.w + (point.x - this.drag.start.x)));
-        const hh = Math.max(60, round1(this.drag.size.h + (point.y - this.drag.start.y)));
-        this.drag.lastSize = { w, h: hh };
+        const box = resizeBox(this.drag.dir, this.drag.from,
+          point.x - this.drag.start.x, point.y - this.drag.start.y,
+          { w: 120, h: 60 });
+        this.drag.lastBox = box;
         const el = this.dragEl();
         if (!el) return;
+        // 왼쪽·위 변을 끌면 자리도 바뀐다. 크기만 고치면 상자가 반대쪽으로 자란다.
+        el.setAttribute('transform', `translate(${box.x},${box.y})`);
         const rect = el.querySelector('.erd-note-bg');
-        const grip = el.querySelector('.erd-note-grip');
         if (rect) {
-          rect.setAttribute('width', w);
-          rect.setAttribute('height', hh);
+          rect.setAttribute('width', box.w);
+          rect.setAttribute('height', box.h);
         }
-        if (grip) {
-          grip.setAttribute('x', w - 12);
-          grip.setAttribute('y', hh - 12);
-        }
+        placeResizeEdges(el, box.w, box.h);
         // 글도 지금 크기로 다시 나눈다. 손을 뗀 뒤에 나누면, 끄는 동안 사람이 보는
         // 것은 "글이 상자를 넘은 모습"인데 정작 정하려는 것이 그 폭이다.
         //
         // 프레임마다 해도 값이 싸다: 상자 하나의 글자를 재는 일이고 measure 는 잰
         // 값을 기억한다. 관계선처럼 도면 전체를 다시 찾는 일이 아니다.
-        paintNoteText(el, noteLines(this.drag.note?.text || '(빈 메모)', w, hh));
+        paintNoteText(el, noteLines(this.drag.note?.text || '(빈 메모)', box.w, box.h));
         return;
       }
       if (this.drag.mode === 'card-resize') {
@@ -1204,21 +1198,19 @@ export class ErdCanvas {
         return;
       }
       if (this.drag.mode === 'group-resize') {
-        const w = Math.max(80, round1(this.drag.size.w + (point.x - this.drag.start.x)));
-        const hh = Math.max(60, round1(this.drag.size.h + (point.y - this.drag.start.y)));
-        this.drag.lastSize = { w, h: hh };
+        const box = resizeBox(this.drag.dir, this.drag.from,
+          point.x - this.drag.start.x, point.y - this.drag.start.y,
+          { w: 80, h: 60 });
+        this.drag.lastBox = box;
         const el = this.dragEl();
         if (!el) return;
+        el.setAttribute('transform', `translate(${box.x},${box.y})`);
         const rect = el.querySelector('.erd-group-bg');
-        const grip = el.querySelector('.erd-group-grip');
         if (rect) {
-          rect.setAttribute('width', w);
-          rect.setAttribute('height', hh);
+          rect.setAttribute('width', box.w);
+          rect.setAttribute('height', box.h);
         }
-        if (grip) {
-          grip.setAttribute('x', w - 16);
-          grip.setAttribute('y', hh - 16);
-        }
+        placeResizeEdges(el, box.w, box.h);
         return;
       }
       if (this.drag.mode === 'card' || this.drag.mode === 'note'
@@ -1262,13 +1254,17 @@ export class ErdCanvas {
         this.render();
         return;
       }
-      if (drag?.mode === 'note-resize' && drag.lastSize) {
+      if (drag?.mode === 'note-resize' && drag.lastBox) {
         const note = (this.doc.notes ?? []).find((n) => n.id === drag.id);
         if (note) {
-          note.w = drag.lastSize.w;
-          note.h = drag.lastSize.h;
+          note.x = drag.lastBox.x;
+          note.y = drag.lastBox.y;
+          note.w = drag.lastBox.w;
+          note.h = drag.lastBox.h;
         }
-        this.opts.onNoteResize?.(drag.id, drag.lastSize.w, drag.lastSize.h);
+        // 자리까지 함께 보낸다. 왼쪽·위 변을 끌면 크기와 자리가 같은 동작에서
+        // 바뀌므로, 나눠 보내면 그중 하나만 되돌려지는 되돌리기가 생긴다.
+        this.opts.onNoteResize?.(drag.id, drag.lastBox);
         this.render();
         return;
       }
@@ -1284,13 +1280,15 @@ export class ErdCanvas {
         this.render();
         return;
       }
-      if (drag?.mode === 'group-resize' && drag.lastSize) {
+      if (drag?.mode === 'group-resize' && drag.lastBox) {
         const group = (this.doc.groups ?? []).find((x) => x.id === drag.id);
         if (group) {
-          group.w = drag.lastSize.w;
-          group.h = drag.lastSize.h;
+          group.x = drag.lastBox.x;
+          group.y = drag.lastBox.y;
+          group.w = drag.lastBox.w;
+          group.h = drag.lastBox.h;
         }
-        this.opts.onGroupResize?.(drag.id, drag.lastSize.w, drag.lastSize.h);
+        this.opts.onGroupResize?.(drag.id, drag.lastBox);
         this.render();
         return;
       }
@@ -1631,7 +1629,7 @@ export class ErdCanvas {
     };
   }
 
-  onNotePointerDown(e, note, mode = 'move') {
+  onNotePointerDown(e, note, mode = 'move', dir = 'se') {
     e.stopPropagation();
     if (this.otherButton(e)) return;
     if (this.spaceHeld) {
@@ -1660,8 +1658,14 @@ export class ErdCanvas {
     const selector = `.erd-note-g[data-note="${cssEscape(note.id)}"]`;
     this.drag = mode === 'resize'
       ? {
-        mode: 'note-resize', id: note.id, el, selector, note,
-        start: p, size: { w: note.w || NOTE_W, h: note.h || noteHeight(note) },
+        mode: 'note-resize', id: note.id, el, selector, note, dir,
+        start: p,
+        // 시작 상자를 통째로 담는다. 왼쪽·위 변을 끌면 자리도 함께 바뀌므로
+        // 크기만으로는 되돌릴 기준이 없다.
+        from: {
+          x: note.x, y: note.y,
+          w: note.w || NOTE_W, h: note.h || noteHeight(note),
+        },
       }
       : {
         mode: 'note', id: note.id, el, selector,
@@ -1669,7 +1673,7 @@ export class ErdCanvas {
       };
   }
 
-  onGroupPointerDown(e, group, mode) {
+  onGroupPointerDown(e, group, mode, dir = 'se') {
     e.stopPropagation();
     if (this.otherButton(e)) return;
     if (this.spaceHeld) {
@@ -1695,8 +1699,9 @@ export class ErdCanvas {
     const selector = `.erd-group-g[data-group="${cssEscape(group.id)}"]`;
     this.drag = mode === 'resize'
       ? {
-        mode: 'group-resize', id: group.id, el, selector, group,
-        start: p, size: { w: group.w || 320, h: group.h || 240 },
+        mode: 'group-resize', id: group.id, el, selector, group, dir,
+        start: p,
+        from: { x: group.x, y: group.y, w: group.w || 320, h: group.h || 240 },
       }
       : { mode: 'group', id: group.id, el, selector, grab: { x: p.x - group.x, y: p.y - group.y } };
   }
@@ -2141,6 +2146,14 @@ const NOTE_LINE = 16;
 // 여섯 줄인 이유: 도면에서 뷰를 볼 때 알고 싶은 것은 "무엇을 어디서 읽는가"이고,
 // 그것은 SELECT 의 처음 몇 줄에 있다(대상 표와 주요 컬럼). 전문을 담으면 카드가
 // 화면을 덮고, 그 SQL 을 읽으려는 사람은 어차피 인스펙터를 연다.
+// 크기 조절 띠의 폭과 모서리 사각형의 크기(도면 좌표).
+//
+// 보이지 않는 띠다. 테두리에 딱 붙은 1px 을 잡게 하면 사람이 못 맞히고, 너무 넓히면
+// 상자 안쪽을 눌러 옮기려던 손이 크기 조절로 빠진다. 창 가장자리를 잡는 손버릇에서
+// 7px 안팎이 무난하다.
+const EDGE_GRAB = 7;
+const CORNER_GRAB = 13;
+
 const VIEW_PAD = 8;
 const VIEW_LINE = 14;
 const VIEW_ROWS = 6;
@@ -2241,18 +2254,91 @@ function noteLines(text, width, height) {
   return wrapNote(text, width, max);
 }
 
+// RESIZE_DIRS는 여덟 방향이다(변 넷과 모서리 넷).
+//
+// 모서리를 나중에 넣는 이유: 같은 자리에서 겹칠 때 나중에 놓인 것이 위에 온다.
+// 모서리에서는 두 변을 함께 끌 수 있어야 하므로 모서리가 이겨야 한다.
+const RESIZE_DIRS = ['n', 's', 'w', 'e', 'nw', 'ne', 'sw', 'se'];
+
+// resizeEdges는 상자 둘레에 잡을 수 있는 띠를 얹는다.
+//
+// 예전에는 오른쪽 아래 손잡이 하나뿐이었다. 그것으로는 오른쪽·아래로 넓히는 일만
+// 되고, 왼쪽이나 위로 늘리려면 상자를 옮기고 크기를 다시 잡는 두 걸음이 된다.
+// 창을 다루는 손버릇은 어느 변이든 잡아 끄는 것이라, 그 손버릇을 그대로 쓴다.
+function resizeEdges(g, w, h, onDown) {
+  for (const dir of RESIZE_DIRS) {
+    const el = svgEl('rect', { class: `erd-resize is-${dir}` });
+    el.addEventListener('pointerdown', (e) => onDown(e, dir));
+    g.appendChild(el);
+  }
+  placeResizeEdges(g, w, h);
+}
+
+// placeResizeEdges는 띠를 지금 크기에 맞춘다(크기를 바꾸는 동안 매 프레임 부른다).
+function placeResizeEdges(g, w, h) {
+  const G = EDGE_GRAB;
+  const C = CORNER_GRAB;
+  const at = {
+    n: [0, -G / 2, w, G],
+    s: [0, h - G / 2, w, G],
+    w: [-G / 2, 0, G, h],
+    e: [w - G / 2, 0, G, h],
+    nw: [-C / 2, -C / 2, C, C],
+    ne: [w - C / 2, -C / 2, C, C],
+    sw: [-C / 2, h - C / 2, C, C],
+    se: [w - C / 2, h - C / 2, C, C],
+  };
+  for (const dir of RESIZE_DIRS) {
+    const el = g.querySelector(`.erd-resize.is-${dir}`);
+    if (!el) continue;
+    const [x, y, ww, hh] = at[dir];
+    el.setAttribute('x', round1(x));
+    el.setAttribute('y', round1(y));
+    el.setAttribute('width', Math.max(1, round1(ww)));
+    el.setAttribute('height', Math.max(1, round1(hh)));
+  }
+}
+
+// resizeBox는 끄는 방향에 따라 새 상자를 만든다.
+//
+// 왼쪽·위 변을 끌면 크기와 **자리가 함께** 바뀐다(반대쪽 변이 제자리를 지켜야 한다).
+// 하한에 닿았을 때도 마찬가지다 — 끌던 자리로 계산하면 크기가 멈춘 뒤에도 상자가
+// 계속 미끄러진다(카드 폭에서 한 번 겪은 일이다).
+function resizeBox(dir, from, dx, dy, min) {
+  let { x, y, w, h } = from;
+  if (dir.includes('e')) w = from.w + dx;
+  if (dir.includes('s')) h = from.h + dy;
+  if (dir.includes('w')) {
+    w = from.w - dx;
+    x = from.x + dx;
+  }
+  if (dir.includes('n')) {
+    h = from.h - dy;
+    y = from.y + dy;
+  }
+  if (w < min.w) {
+    if (dir.includes('w')) x = from.x + (from.w - min.w);
+    w = min.w;
+  }
+  if (h < min.h) {
+    if (dir.includes('n')) y = from.y + (from.h - min.h);
+    h = min.h;
+  }
+  return { x: round1(x), y: round1(y), w: round1(w), h: round1(h) };
+}
+
 // paintNoteText는 메모의 글줄을 다시 그린다.
 //
-// 손잡이(grip)보다 앞에 끼워 넣는다. 뒤에 붙이면 글이 손잡이를 덮어 크기를 잡을
+// 크기 조절 띠보다 **앞에** 끼워 넣는다. 뒤에 붙이면 글이 띠를 덮어 가장자리를 잡을
 // 곳이 사라진다 — 크기를 바꾸는 동안 매 프레임 다시 그리므로 더 그렇다.
 function paintNoteText(g, lines) {
   for (const old of [...g.querySelectorAll('.erd-note-text')]) old.remove();
-  const grip = g.querySelector('.erd-note-grip');
+  const firstEdge = g.querySelector('.erd-resize');
   for (let i = 0; i < lines.length; i += 1) {
     const el = svgEl('text', {
       class: 'erd-note-text', x: NOTE_PAD, y: NOTE_PAD + 10 + i * NOTE_LINE,
     }, lines[i]);
-    if (grip) g.insertBefore(el, grip);
+    if (firstEdge) g.insertBefore(el, firstEdge);
     else g.appendChild(el);
   }
 }

@@ -209,9 +209,11 @@ class StructureView {
         this.op('table.move', { key, x: box.x ?? 0, y: box.y ?? 0, width });
       },
       onNoteMove: (id, x, y) => this.op('note.update', { id, x, y }),
-      onNoteResize: (id, w, h) => this.op('note.update', { id, w, h }),
+      // 크기 조절은 자리까지 함께 보낸다. 왼쪽·위 변을 끌면 둘이 같은 동작에서
+      // 바뀌기 때문이다(캔버스의 resizeBox).
+      onNoteResize: (id, box) => this.op('note.update', { id, ...box }),
       onGroupMove: (id, x, y) => this.op('group.update', { id, x, y }),
-      onGroupResize: (id, w, h) => this.op('group.update', { id, w, h }),
+      onGroupResize: (id, box) => this.op('group.update', { id, ...box }),
       onToggleCollapse: (key, geom) => this.op('table.move', {
         key, x: geom.x, y: geom.y, collapsed: !geom.layout.collapsed,
       }),

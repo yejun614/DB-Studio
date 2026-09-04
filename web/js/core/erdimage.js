@@ -38,7 +38,7 @@ const MAX_PIXELS = 16000;
 // 관계선의 투명한 굵은 선(누르기 쉬우라고 겹쳐 둔 것)도 보이지는 않지만 파일만
 // 키우고, 벡터 편집기에서 열면 정체를 알 수 없는 도형으로 걸린다.
 const CHROME_ONLY = [
-  'erd-group-grip', 'erd-note-grip', 'erd-card-grip', 'erd-link-hit', 'erd-card-outline',
+  'erd-resize', 'erd-card-grip', 'erd-link-hit', 'erd-card-outline',
   // 폭을 끄는 동안 보여 주는 px 숫자.
   'erd-card-wnote',
   // 마우스를 올렸거나 골라서 잠깐 카드 위로 올려 둔 관계선. 같은 선이 아래

@@ -248,9 +248,11 @@ class Editor {
         this.send('table.move', { key, x: box.x ?? 0, y: box.y ?? 0, width });
       },
       onNoteMove: (id, x, y) => this.send('note.update', { id, x, y }),
-      onNoteResize: (id, w, h) => this.send('note.update', { id, w, h }),
+      // 크기 조절은 자리까지 함께 보낸다. 왼쪽·위 변을 끌면 둘이 같은 동작에서
+      // 바뀌기 때문이다(캔버스의 resizeBox).
+      onNoteResize: (id, box) => this.send('note.update', { id, ...box }),
       onGroupMove: (id, x, y) => this.send('group.update', { id, x, y }),
-      onGroupResize: (id, w, h) => this.send('group.update', { id, w, h }),
+      onGroupResize: (id, box) => this.send('group.update', { id, ...box }),
       onToggleCollapse: (key, geom) => this.toggleCollapse(key, geom),
       // 메모·그룹 편집은 인스펙터에서 한다. 두 번 눌러도 같은 곳이 열리도록
       // 선택만 시킨다 — 편집기가 두 벌이면 한쪽만 고치게 된다.
@@ -2201,7 +2203,7 @@ class Editor {
         h('label.field', {}, h('span.field-label', {}, '이름'), nameInput),
         h('div.field', {}, h('span.field-label', {}, '색'), this.tintPicker(
           group.color, (value) => this.send('group.update', { id: group.id, color: value }), ro)),
-        h('p.field-help', {}, '크기는 오른쪽 아래 모서리를 끌어 조절합니다'),
+        h('p.field-help', {}, '크기는 상자의 변이나 모서리를 잡아 끌어 조절합니다'),
         ro ? null : h('div.erd-panel-danger', {},
           h('button.btn.btn-small.btn-danger', {
             type: 'button',
