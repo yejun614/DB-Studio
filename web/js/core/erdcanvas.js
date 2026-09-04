@@ -1222,7 +1222,8 @@ export class ErdCanvas {
           const el = this.svg.querySelector(it.selector);
           el?.setAttribute('transform', `translate(${it.x + dx},${it.y + dy})`);
           // 관계선은 카드 좌표에서 계산되므로 레이아웃도 함께 옮겨 둔다.
-          if (it.kind !== 'table') continue;
+          // 표와 뷰가 같은 레이아웃 지도를 쓰므로 둘 다 여기서 옮긴다.
+          if (it.kind !== 'table' && it.kind !== 'view') continue;
           this.doc.layout[it.id] = { ...(this.doc.layout[it.id] ?? {}), x: it.x + dx, y: it.y + dy };
         }
         this.refreshLinks();
@@ -1295,7 +1296,12 @@ export class ErdCanvas {
         this.dragEl()?.setAttribute('transform', `translate(${nx},${ny})`);
         // 관계선은 두 카드의 위치에서 계산되므로 카드만 옮기면 선이 제자리에 남는다.
         // 카드가 선에서 떨어져 나온 그림은 "연결이 끊겼나"로 읽힌다.
-        if (this.drag.mode === 'card') this.moveLinks(this.drag.key, nx, ny);
+        //
+        // 뷰도 표와 똑같다. 뷰 카드에도 선이 붙어 있고(그 뷰가 읽는 표로 간다),
+        // 레이아웃 지도도 표와 같은 것을 쓴다 — 그래서 같은 함수로 옮긴다.
+        if (this.drag.mode === 'card' || this.drag.mode === 'view') {
+          this.moveLinks(this.drag.key, nx, ny);
+        }
       }
     };
     const onPointerUp = () => {
@@ -1653,7 +1659,15 @@ export class ErdCanvas {
     this.linkFrame = requestAnimationFrame(() => {
       this.linkFrame = 0;
       if (!this.layers?.links) return;
-      this.links(this.boxes(), Boolean(this.drag));
+      const boxes = this.boxes();
+      this.links(boxes, Boolean(this.drag));
+      // 뷰 선도 함께 다시 그린다.
+      //
+      // 빼놓으면 **뷰 선이 사라진다.** links() 는 선 레이어를 비우고 다시 채우는데,
+      // 뷰 선은 그 레이어의 같은 자리에 있다. 그래서 카드를 하나 끄는 동안 도면의
+      // 모든 뷰 선이 없어졌다가 손을 뗀 뒤에 돌아왔다 — 끄는 사람이 보는 것은
+      // "내가 뷰를 건드려 관계가 끊겼다"였다.
+      this.viewLinks(boxes, this.viewBoxes());
     });
   }
 
@@ -2078,6 +2092,11 @@ function normalizeMark(mark) {
 // markSelector는 고른 것의 SVG 요소를 찾는 선택자다.
 function markSelector(mark) {
   if (mark.kind === 'table') return `.erd-card-g[data-key="${cssEscape(mark.id)}"]`;
+  // 뷰를 빼놓았더니 묶음 선택자로 떨어졌다(마지막 줄이 기본값이다). 맞는 요소가
+  // 없으니 여럿을 함께 끄는 동안 뷰 카드만 제자리에 남아 있다가, 손을 뗀 뒤에야
+  // 새 자리로 튀었다 — markPos·placeMark 는 뷰를 알고 있어서 좌표는 옳게 저장됐고,
+  // 그래서 "저장은 되는데 화면만 안 따라오는" 모양이 됐다.
+  if (mark.kind === 'view') return `.erd-view-g[data-view="${cssEscape(mark.id)}"]`;
   if (mark.kind === 'note') return `.erd-note-g[data-note="${cssEscape(mark.id)}"]`;
   return `.erd-group-g[data-group="${cssEscape(mark.id)}"]`;
 }
