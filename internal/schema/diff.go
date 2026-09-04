@@ -2,6 +2,7 @@ package schema
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -12,23 +13,25 @@ const (
 	CreateTable ChangeKind = "create_table"
 	DropTable   ChangeKind = "drop_table"
 	AlterTable  ChangeKind = "alter_table_comment"
-	AddColumn   ChangeKind = "add_column"
-	DropColumn  ChangeKind = "drop_column"
-	AlterColumn ChangeKind = "alter_column"
-	AddPrimary  ChangeKind = "add_primary_key"
-	DropPrimary ChangeKind = "drop_primary_key"
-	AddIndex    ChangeKind = "add_index"
-	DropIndex   ChangeKind = "drop_index"
-	AddForeign  ChangeKind = "add_foreign_key"
-	DropForeign ChangeKind = "drop_foreign_key"
-	AddCheck    ChangeKind = "add_check"
-	DropCheck   ChangeKind = "drop_check"
-	CreateEnum  ChangeKind = "create_enum"
-	DropEnum    ChangeKind = "drop_enum"
-	AlterEnum   ChangeKind = "alter_enum"
-	CreateView  ChangeKind = "create_view"
-	DropView    ChangeKind = "drop_view"
-	ReplaceView ChangeKind = "replace_view"
+	// AlterTableOptions는 엔진·문자셋·정렬 규칙·테이블스페이스가 달라진 것이다.
+	AlterTableOptions ChangeKind = "alter_table_options"
+	AddColumn         ChangeKind = "add_column"
+	DropColumn        ChangeKind = "drop_column"
+	AlterColumn       ChangeKind = "alter_column"
+	AddPrimary        ChangeKind = "add_primary_key"
+	DropPrimary       ChangeKind = "drop_primary_key"
+	AddIndex          ChangeKind = "add_index"
+	DropIndex         ChangeKind = "drop_index"
+	AddForeign        ChangeKind = "add_foreign_key"
+	DropForeign       ChangeKind = "drop_foreign_key"
+	AddCheck          ChangeKind = "add_check"
+	DropCheck         ChangeKind = "drop_check"
+	CreateEnum        ChangeKind = "create_enum"
+	DropEnum          ChangeKind = "drop_enum"
+	AlterEnum         ChangeKind = "alter_enum"
+	CreateView        ChangeKind = "create_view"
+	DropView          ChangeKind = "drop_view"
+	ReplaceView       ChangeKind = "replace_view"
 )
 
 // Change는 스키마 변경 한 건이다.
@@ -75,6 +78,10 @@ type DiffResult struct {
 	DestructiveCount int `json:"destructiveCount"`
 	// Unsupported는 diff로 표현할 수 없어 사람이 처리해야 하는 항목이다.
 	Unsupported []string `json:"unsupported,omitempty"`
+	// Dialect는 견준 두 스키마의 방언이다. 표 설정처럼 방언마다 있는 것이 다른
+	// 항목을 견줄 때 필요하다 — 어느 방언인지 모르면 MySQL 의 엔진 칸을 SQLite
+	// 스키마에서도 변경으로 잡는다.
+	Dialect string `json:"dialect,omitempty"`
 }
 
 func (r *DiffResult) IsEmpty() bool { return len(r.Changes) == 0 }
@@ -88,6 +95,11 @@ func Diff(from, to *Schema) *DiffResult {
 	res := &DiffResult{Changes: []Change{}, Counts: map[ChangeKind]int{}}
 	if from == nil || to == nil {
 		return res
+	}
+	// 목표 스키마의 방언을 따른다. 목표가 비어 있으면(빈 DB 로 처음 올릴 때)
+	// 원본의 것을 쓴다.
+	if res.Dialect = to.Dialect; res.Dialect == "" {
+		res.Dialect = from.Dialect
 	}
 	from.Sort()
 	to.Sort()
@@ -160,6 +172,7 @@ func diffTables(res *DiffResult, from, to *Schema) {
 }
 
 func diffTable(res *DiffResult, ft, tt *Table) {
+	diffTableOptions(res, ft, tt)
 	if ft.Comment != tt.Comment {
 		res.add(Change{
 			Kind: AlterTable, Table: tt.Display(), TableRef: tt, OldTable: ft,
@@ -583,4 +596,57 @@ func missing(a, b []string) []string {
 		}
 	}
 	return out
+}
+
+// diffTableOptions는 표 설정이 달라진 것을 찾는다.
+//
+// **초안에 값이 있는 열쇠만** 견준다. 실제 DB 에는 언제나 엔진과 문자셋이 있고
+// (서버 기본값으로라도), 초안에는 대개 비어 있다 — 비어 있는 것을 "다르다"로 보면
+// 아무것도 정하지 않은 초안이 표마다 변경을 만들어 낸다. 비운 칸의 뜻은 "정하지
+// 않았다(DB 기본값을 따른다)"이지 "기본값으로 바꿔라"가 아니다.
+//
+// 우리가 아는 열쇠만 본다(KnownOptionKeys). 실제 DB 에서 읽은 지도에는 통계처럼
+// 설정이 아닌 것도 들어 있다.
+func diffTableOptions(res *DiffResult, ft, tt *Table) {
+	if len(tt.Options) == 0 {
+		return
+	}
+	known := KnownOptionKeys(res.Dialect)
+	attrs := map[string]string{}
+	changed := []string{}
+	for key, next := range tt.Options {
+		if next == "" || !known[key] {
+			continue
+		}
+		prev := ft.Options[key]
+		if strings.EqualFold(prev, next) {
+			continue
+		}
+		attrs[key] = next
+		attrs["old_"+key] = prev
+		changed = append(changed, fmt.Sprintf("%s %s → %s",
+			OptionLabel(res.Dialect, key), emptyAs(prev, "(정하지 않음)"), next))
+	}
+	if len(changed) == 0 {
+		return
+	}
+	sort.Strings(changed)
+	res.add(Change{
+		Kind: AlterTableOptions, Table: tt.Display(), TableRef: tt, OldTable: ft,
+		Summary: fmt.Sprintf("%s 설정 변경 — %s", tt.Display(), strings.Join(changed, ", ")),
+		Attrs:   attrs,
+		// 엔진·문자셋 변경은 표를 통째로 다시 쓴다. 데이터가 사라지지는 않지만
+		// 큰 표에서는 그동안 쓰기가 막히고, 문자셋 변환은 되돌려도 원래 바이트로
+		// 돌아온다는 보장이 없다.
+		Destructive: attrs["engine"] != "" || attrs["charset"] != "",
+		LossyDetail: "표를 다시 쓰는 작업입니다. 큰 표에서는 그동안 쓰기가 막히고, " +
+			"문자셋 변환은 되돌려도 원래 바이트로 돌아온다는 보장이 없습니다",
+	})
+}
+
+func emptyAs(v, alt string) string {
+	if strings.TrimSpace(v) == "" {
+		return alt
+	}
+	return v
 }

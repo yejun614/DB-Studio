@@ -222,7 +222,7 @@ func order(changes []Change) []Change {
 		CreateEnum: 4, AlterEnum: 4,
 		CreateTable: 5,
 		AddColumn:   6,
-		AlterColumn: 7, AlterTable: 7,
+		AlterColumn: 7, AlterTable: 7, AlterTableOptions: 7,
 		DropColumn: 8,
 		AddPrimary: 9, AddIndex: 10, AddCheck: 11, AddForeign: 12,
 		CreateView: 13, ReplaceView: 13,
@@ -304,6 +304,8 @@ func (r *renderer) render(c Change) {
 		r.alterColumn(c)
 	case AlterTable:
 		r.tableComment(c)
+	case AlterTableOptions:
+		r.tableOptions(c)
 	case AddPrimary:
 		r.addPrimary(c)
 	case DropPrimary:
@@ -398,6 +400,8 @@ func (r *renderer) createTable(c Change) {
 	b.WriteString("\n)")
 	r.markCreated(t)
 
+	// 표 설정(엔진·문자셋·정렬 규칙·테이블스페이스). 비어 있는 것은 적지 않는다 —
+	// 적지 않으면 데이터베이스의 기본값을 물려받고, 그것이 대개 옳다.
 	if r.dialect == "mysql" {
 		if engine := t.Options["engine"]; engine != "" {
 			fmt.Fprintf(&b, " ENGINE=%s", engine)
@@ -405,9 +409,18 @@ func (r *renderer) createTable(c Change) {
 		if charset := t.Options["charset"]; charset != "" {
 			fmt.Fprintf(&b, " DEFAULT CHARSET=%s", charset)
 		}
+		// 정렬 규칙도 함께 낸다. 문자셋만 정하면 MySQL 이 그 문자셋의 기본 규칙을
+		// 고르는데, 서버마다 그 기본이 달라서(8.0 에서 바뀌었다) 같은 스크립트가
+		// 서버마다 다른 정렬로 만들어진다.
+		if collation := t.Options["collation"]; collation != "" {
+			fmt.Fprintf(&b, " COLLATE=%s", collation)
+		}
 		if t.Comment != "" {
 			fmt.Fprintf(&b, " COMMENT=%s", quoteLiteral(t.Comment))
 		}
+	}
+	if ts := t.Options["tablespace"]; ts != "" && (r.dialect == "postgres" || r.dialect == "oracle") {
+		fmt.Fprintf(&b, " TABLESPACE %s", ts)
 	}
 	r.up(c, b.String(), "")
 
@@ -536,6 +549,105 @@ func (r *renderer) primaryKeyClause(pk *PrimaryKey) string {
 		return fmt.Sprintf("CONSTRAINT %s PRIMARY KEY (%s)", r.id(pk.Name), strings.Join(cols, ", "))
 	}
 	return fmt.Sprintf("PRIMARY KEY (%s)", strings.Join(cols, ", "))
+}
+
+// tableOptions는 표 설정 변경을 DDL 로 낸다.
+//
+// 되돌리기(down)에 옛 값을 그대로 적는다. 값이 없었다면 되돌릴 문장을 만들 수 없다 —
+// "설정하지 않은 상태"로 되돌리는 DDL 이 없기 때문이다. 그때는 되돌릴 수 없다고
+// 적어 둔다(irreversible). 조용히 지금 값을 남겨 두면, 되돌린 뒤에도 바뀐 설정이
+// 그대로인 채로 "되돌렸다"고 보고하게 된다.
+func (r *renderer) tableOptions(c Change) {
+	t := c.TableRef
+	if t == nil {
+		return
+	}
+	name := r.tableName(t)
+	switch r.dialect {
+	case "mysql":
+		clauses, back := []string{}, []string{}
+		// 문자셋과 정렬 규칙은 한 절로 낸다: CONVERT TO CHARACTER SET cs COLLATE col.
+		// 따로 내면 CONVERT 가 컬럼들을 그 문자셋의 **기본** 정렬로 바꾼 뒤, 표의
+		// 기본 정렬만 따로 바뀐다 — 컬럼과 표가 서로 다른 규칙을 갖게 된다.
+		convert := func(cs, col string) string {
+			if cs == "" {
+				if col == "" {
+					return ""
+				}
+				return "COLLATE=" + col
+			}
+			if col == "" {
+				return "CONVERT TO CHARACTER SET " + cs
+			}
+			return "CONVERT TO CHARACTER SET " + cs + " COLLATE " + col
+		}
+		// 무엇이 **바뀌었는가**는 Attrs 가 말하고, 지금 값이 무엇인가는 두 표가
+		// 말한다. 한쪽만 바뀐 경우에도 다른 쪽의 지금 값을 함께 적어야 하기 때문에
+		// 둘 다 필요하다.
+		next, prev := t.Options, map[string]string{}
+		if c.OldTable != nil {
+			prev = c.OldTable.Options
+		}
+		if engine, ok := c.Attrs["engine"]; ok {
+			clauses = append(clauses, "ENGINE="+engine)
+			if old := prev["engine"]; old != "" {
+				back = append(back, "ENGINE="+old)
+			} else {
+				back = append(back, "")
+			}
+		}
+		_, csChanged := c.Attrs["charset"]
+		_, colChanged := c.Attrs["collation"]
+		if csChanged || colChanged {
+			// 초안이 정하지 않은 쪽은 지금 값을 그대로 둔다 — 정렬 규칙만 바꾸는데
+			// 문자셋을 빼면 MySQL 이 무엇으로 바꿀지 알 수 없다.
+			cs := next["charset"]
+			if cs == "" {
+				cs = prev["charset"]
+			}
+			col := next["collation"]
+			if col == "" {
+				col = prev["collation"]
+			}
+			if v := convert(cs, col); v != "" {
+				clauses = append(clauses, v)
+			}
+			// 되돌리려면 예전 문자셋을 알아야 한다. 모르면 아래에서 되돌릴 수
+			// 없다고 적는다.
+			back = append(back, convert(prev["charset"], prev["collation"]))
+		}
+		if len(clauses) == 0 {
+			return
+		}
+		// 빈 문자열이 하나라도 있으면 되돌리는 문장을 완성할 수 없다.
+		for _, v := range back {
+			if v == "" {
+				back = nil
+				break
+			}
+		}
+		// 엔진과 문자셋 변경은 표를 통째로 다시 쓴다. 큰 표에서는 그 시간 동안
+		// 쓰기가 막히므로, 실행하는 사람이 미리 알아야 한다.
+		r.up(c, fmt.Sprintf("ALTER TABLE %s %s", name, strings.Join(clauses, ", ")), "")
+		if back != nil && len(back) == len(clauses) {
+			r.down(c, fmt.Sprintf("ALTER TABLE %s %s", name, strings.Join(back, ", ")), "")
+		} else {
+			r.irreversible(c, "예전 설정이 비어 있어 되돌리는 문장을 만들 수 없습니다")
+		}
+	case "postgres", "oracle":
+		next, ok := c.Attrs["tablespace"]
+		if !ok || next == "" {
+			return
+		}
+		r.up(c, fmt.Sprintf("ALTER TABLE %s SET TABLESPACE %s", name, next), "")
+		if prev := c.Attrs["old_tablespace"]; prev != "" {
+			r.down(c, fmt.Sprintf("ALTER TABLE %s SET TABLESPACE %s", name, prev), "")
+		} else {
+			r.irreversible(c, "예전 테이블스페이스를 알 수 없어 되돌릴 수 없습니다")
+		}
+	default:
+		r.warn("%s는 표 설정 변경을 DDL로 지원하지 않습니다 (%s)", r.dialect, t.Display())
+	}
 }
 
 func (r *renderer) tableComment(c Change) {
