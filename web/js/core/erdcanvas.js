@@ -2543,10 +2543,15 @@ function tipForColumn(col, layout, label, rawType, domain, room, pk = null) {
 
   if (pk) rows.push(['기본키', `복합키의 ${pk.at}번째 (전체 ${pk.of}개)`]);
   if ((col.default ?? '') !== '') rows.push(['기본값', String(col.default)]);
+  // 자동 갱신은 카드 줄에 적을 자리가 없다. 그런데 이것을 모르면 "왜 값이 자꾸
+  // 바뀌지"의 답을 도면에서 찾을 수 없다 — 기본값과 나란히 두어 둘의 차이가
+  // 보이게 한다(넣을 때 한 번 / 고칠 때마다).
+  const onUpdate = (col.onUpdate ?? '').trim();
+  if (onUpdate) rows.push(['자동 갱신', `ON UPDATE ${onUpdate}`]);
   const comment = (col.comment ?? '').trim();
   if (comment) rows.push(['주석', comment]);
   // 이름도 안 잘리고 주석도 없으면 띄울 이유가 없다. 타입은 이미 줄에 보인다.
-  // 복합키의 자리는 예외다 — 그것은 카드에 적혀 있지 않다.
-  if (!comment && !logical && !cut && !domain && !pk) return null;
+  // 복합키의 자리와 자동 갱신은 예외다 — 그 둘은 카드에 적혀 있지 않다.
+  if (!comment && !logical && !cut && !domain && !pk && !onUpdate) return null;
   return rows.length ? rows : null;
 }

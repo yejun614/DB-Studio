@@ -4650,6 +4650,24 @@ class Editor {
     const defaultWrap = field('기본값', defaultPick.node,
       '비워 두면 기본값을 두지 않습니다. 함수는 대상 DB의 문법 그대로 적습니다.');
 
+    // 자동 갱신(ON UPDATE). 기본값 칸과 따로 두는 이유: 이 둘은 서로 다른 순간을
+    // 말한다 — DEFAULT 는 **넣을 때** 한 번이고 이것은 **고칠 때마다**다. 한 컬럼에
+    // 둘 다 두는 것이 흔한 쓰임이라(updated_at) 한 칸으로 합칠 수 없다.
+    //
+    // 이 기능이 없는 DB 에서는 칸 자체를 그리지 않는다(cat.onUpdateLabel 이 비어
+    // 있다). 다른 DB 에서 같은 일을 하려면 트리거가 필요한데, 그것은 컬럼의 성질이
+    // 아니라 표에 붙는 별개의 물건이라 여기서 만들어 주는 척하면 ERD 가 실제
+    // 스키마와 어긋난다.
+    const onUpdatePick = suggestInput({
+      items: (cat.onUpdateExprs ?? []).map((d) => ({
+        value: d.expr, label: d.expr, hint: d.label,
+      })),
+      value: col.onUpdate ?? '',
+      placeholder: '비우면 자동 갱신 없음',
+    });
+    const onUpdateWrap = field(`${cat.onUpdateLabel ?? 'ON UPDATE'} (자동 갱신)`,
+      onUpdatePick.node, cat.onUpdateNote ?? '');
+
     const unsignedBox = checkbox('UNSIGNED (음수 없음)', { checked: state0.unsigned });
     const arrayBox = checkbox('배열 ([])', { checked: state0.array });
     // 자동 증가를 타입 창에 둔 이유: 붙일 수 있는 타입이 정해져 있고(정수 계열),
@@ -4685,6 +4703,9 @@ class Editor {
       // 안 되는 것은 다르다.
       autoWrap.style.display = usingDomain ? 'none'
         : (state0.manual || identityFits(def, state0.arg) ? '' : 'none');
+      // 자동 갱신도 같은 규칙이다. 이 DB 에 기능이 없으면 아예 그리지 않는다.
+      onUpdateWrap.style.display = !cat.onUpdateLabel || usingDomain ? 'none'
+        : (state0.manual || def?.onUpdate ? '' : 'none');
 
       const showParam = !usingDomain && !state0.manual && Boolean(def?.param);
       paramWrap.style.display = showParam ? '' : 'none';
@@ -4742,6 +4763,7 @@ class Editor {
         arrayBox,
         autoWrap,
         defaultWrap,
+        onUpdateWrap,
         manualToggle,
         manualWrap,
         noteLine,
@@ -4775,10 +4797,17 @@ class Editor {
       // 컬럼이 남고, ERD에서는 멀쩡해 보이다가 마이그레이션에서 거부된다.
       const wantsAuto = autoWrap.style.display !== 'none'
         && autoBox.querySelector('input').checked;
+      // 자동 갱신도 identity 와 같은 이유로 늘 함께 보낸다. 칸이 사라지는 경우
+      // (시각 계열이 아닌 타입을 골랐다)에도 값을 정리해야 한다 — 그러지 않으면
+      // INT 인데 ON UPDATE CURRENT_TIMESTAMP 가 남고, ERD 에서는 멀쩡해 보이다가
+      // 마이그레이션에서 거부된다.
+      const wantsOnUpdate = onUpdateWrap.style.display !== 'none'
+        ? onUpdatePick.value.trim() : '';
       this.send('column.update', {
         table: ref.serverKey, name, type: text, domain: '', identity: wantsAuto,
         // 기본값도 함께 보낸다. 비우면 서버가 "기본값 없음"으로 정리한다.
         default: defaultPick.value.trim(),
+        onUpdate: wantsOnUpdate,
       });
       close();
     });
