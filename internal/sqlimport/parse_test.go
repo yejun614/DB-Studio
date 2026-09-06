@@ -251,3 +251,43 @@ func columnNames(t *schema.Table) []string {
 	}
 	return out
 }
+
+// 컬럼의 ON UPDATE(MySQL 의 자동 갱신)를 읽는다.
+//
+// 외래키의 ON UPDATE 와 글자가 같지만 있는 자리가 다르다. 읽지 않고 지나가면
+// 덤프를 불러올 때 이 값만 조용히 사라지고, 그러면 초안과 실제 DB 가 매번 다르다고
+// 보고된다 — 그 차이를 없애려고 만든 마이그레이션이 자동 갱신을 지운다.
+func TestColumnOnUpdate(t *testing.T) {
+	res, err := Parse("mysql", "CREATE TABLE posts (\n"+
+		"  `id` BIGINT NOT NULL AUTO_INCREMENT,\n"+
+		"  `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),\n"+
+		"  `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) "+
+		"ON UPDATE CURRENT_TIMESTAMP(3),\n"+
+		"  `member_id` BIGINT NULL REFERENCES members (id) ON UPDATE CASCADE,\n"+
+		"  PRIMARY KEY (`id`)\n);")
+	if err != nil {
+		t.Fatalf("파싱 실패: %v", err)
+	}
+	if len(res.Tables) != 1 {
+		t.Fatalf("표 %d개", len(res.Tables))
+	}
+	byName := map[string]*schema.Column{}
+	for _, c := range res.Tables[0].Columns {
+		byName[c.Name] = c
+	}
+	if got := byName["updated_at"].OnUpdate; got != "CURRENT_TIMESTAMP(3)" {
+		t.Errorf("자동 갱신을 읽지 못했습니다: %q", got)
+	}
+	if got := byName["created_at"].OnUpdate; got != "" {
+		t.Errorf("없는 자동 갱신이 생겼습니다: %q", got)
+	}
+	// 외래키의 ON UPDATE 는 컬럼의 것이 아니다. 둘을 섞으면 CASCADE 가 컬럼의
+	// 자동 갱신 식으로 들어간다.
+	if got := byName["member_id"].OnUpdate; got != "" {
+		t.Errorf("외래키의 ON UPDATE 를 컬럼에 넣었습니다: %q", got)
+	}
+	fks := res.Tables[0].ForeignKeys
+	if len(fks) != 1 || !strings.EqualFold(fks[0].OnUpdate, "CASCADE") {
+		t.Errorf("외래키의 ON UPDATE 가 사라졌습니다: %+v", fks)
+	}
+}

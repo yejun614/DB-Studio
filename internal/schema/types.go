@@ -69,6 +69,12 @@ func (t LogicalType) Canonical() string {
 		if t.Precision > 0 {
 			fmt.Fprintf(&b, "(%d,%d)", t.Precision, t.Scale)
 		}
+	case TypeTime, TypeTimestamp, TypeTimestampTZ:
+		// 초의 소수 자릿수도 지문에 넣는다. 넣지 않으면 DATETIME(3) 을 DATETIME 으로
+		// 바꿔도 "같다"가 되어, 밀리초를 잃는 변경이 diff 에 나타나지 않는다.
+		if t.Precision > 0 {
+			fmt.Fprintf(&b, "(%d)", t.Precision)
+		}
 	case TypeEnum:
 		if t.EnumName != "" {
 			fmt.Fprintf(&b, ":%s", strings.ToLower(t.EnumName))
@@ -184,6 +190,15 @@ func ParseType(dialect, raw string) LogicalType {
 				return LogicalType{Base: TypeBigInt}
 			}
 		}
+	case TypeTime, TypeTimestamp, TypeTimestampTZ:
+		// 초의 소수 자릿수. Precision 칸을 나눠 쓴다 — 시각 타입에는 자릿수가
+		// 하나뿐이라 Decimal 과 겹칠 일이 없다.
+		//
+		// 잃으면 안 되는 이유: DATETIME(3) 과 DATETIME 은 다른 컬럼이다. 밀리초가
+		// 늘 0 이 되는데 값은 들어가므로 오류가 나지 않는다 — "시계가 이상하다"로만
+		// 보이는, 조용히 어긋나는 종류다. MySQL 의 ON UPDATE CURRENT_TIMESTAMP(3)
+		// 은 컬럼의 자릿수가 같아야 해서, 여기서 잃으면 그 문장이 아예 거절된다.
+		t.Precision = p1
 	case TypeUnknown:
 		// 알 수 없는 타입도 파라미터는 보존해 사용자가 원인을 파악할 수 있게 한다.
 		t.Length = p1
@@ -330,12 +345,12 @@ func renderMySQL(t LogicalType) string {
 	case TypeDate:
 		return "DATE"
 	case TypeTime:
-		return "TIME"
+		return fracSpec("TIME", t)
 	case TypeTimestamp:
-		return "DATETIME"
+		return fracSpec("DATETIME", t)
 	case TypeTimestampTZ:
 		// MySQL의 TIMESTAMP는 UTC 저장 + 세션 타임존 변환으로 tz 의미에 가장 가깝다.
-		return "TIMESTAMP"
+		return fracSpec("TIMESTAMP", t)
 	case TypeUUID:
 		return "CHAR(36)"
 	case TypeJSON:
@@ -387,11 +402,11 @@ func renderPostgres(t LogicalType) string {
 	case TypeDate:
 		return "date"
 	case TypeTime:
-		return "time"
+		return fracSpec("time", t)
 	case TypeTimestamp:
-		return "timestamp"
+		return fracSpec("timestamp", t)
 	case TypeTimestampTZ:
-		return "timestamptz"
+		return fracSpec("timestamptz", t)
 	case TypeUUID:
 		return "uuid"
 	case TypeJSON:
@@ -453,11 +468,11 @@ func renderMSSQL(t LogicalType) string {
 	case TypeDate:
 		return "date"
 	case TypeTime:
-		return "time"
+		return fracSpec("time", t)
 	case TypeTimestamp:
-		return "datetime2"
+		return fracSpec("datetime2", t)
 	case TypeTimestampTZ:
-		return "datetimeoffset"
+		return fracSpec("datetimeoffset", t)
 	case TypeUUID:
 		return "uniqueidentifier"
 	case TypeJSON, TypeArray, TypeDocument:
@@ -512,8 +527,11 @@ func renderOracle(t LogicalType) string {
 		// Oracle에는 순수 TIME 타입이 없다. INTERVAL로 근사한다.
 		return "INTERVAL DAY(0) TO SECOND(6)"
 	case TypeTimestamp:
-		return "TIMESTAMP"
+		return fracSpec("TIMESTAMP", t)
 	case TypeTimestampTZ:
+		if t.Precision > 0 {
+			return fmt.Sprintf("TIMESTAMP(%d) WITH TIME ZONE", t.Precision)
+		}
 		return "TIMESTAMP WITH TIME ZONE"
 	case TypeUUID:
 		return "RAW(16)"
@@ -566,6 +584,15 @@ func lengthSpec(name string, t LogicalType, def int) string {
 		n = def
 	}
 	return fmt.Sprintf("%s(%d)", name, n)
+}
+
+// fracSpec은 초의 소수 자릿수를 붙인다. 0이면 붙이지 않는다 —
+// 안 적은 것과 (0)은 같은 뜻이고, 안 적은 쪽이 원본에 가깝다.
+func fracSpec(name string, t LogicalType) string {
+	if t.Precision <= 0 {
+		return name
+	}
+	return fmt.Sprintf("%s(%d)", name, t.Precision)
 }
 
 func decimalSpec(name string, t LogicalType) string {

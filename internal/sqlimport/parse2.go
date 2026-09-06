@@ -367,6 +367,10 @@ func (p *parser) alterColumn(tbl *schema.Table) bool {
 				case p.accept("DEFAULT"):
 					col.Default = p.expr()
 					col.HasDefault = col.Default != ""
+				case p.accept("ON", "UPDATE"):
+					// MODIFY COLUMN 은 정의 전체를 다시 쓴다. 여기서 읽지 않으면
+					// 덤프의 ALTER 문을 지날 때마다 자동 갱신이 지워진다.
+					col.OnUpdate = p.expr()
 				case p.accept("COMMENT"):
 					if p.peek().kind == tString {
 						col.Comment = p.next().val

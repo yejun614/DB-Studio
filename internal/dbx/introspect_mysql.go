@@ -107,6 +107,10 @@ func introspectMySQL(ctx context.Context, db *sql.DB, t Target, s *schema.Schema
 		if genExpr != "" {
 			col.Generated = genExpr
 		}
+		// 자동 갱신(ON UPDATE)은 EXTRA 에 문장 조각으로 들어 있다
+		// ("on update CURRENT_TIMESTAMP(3)"). 자동 증가와 같은 칸을 나눠 쓰므로
+		// 한 컬럼에 둘 다 적혀 있을 수도 있다.
+		col.OnUpdate = mysqlOnUpdateExpr(extra)
 		if def.Valid {
 			col.HasDefault = true
 			col.Default = mysqlDefaultExpr(def.String, col.Type)
@@ -295,4 +299,24 @@ func mysqlDefaultExpr(raw string, t schema.LogicalType) string {
 		return "'" + strings.ReplaceAll(raw, "'", "''") + "'"
 	}
 	return raw
+}
+
+// mysqlOnUpdateExpr는 EXTRA 문자열에서 자동 갱신 식을 뽑는다.
+//
+// EXTRA 는 여러 표시가 쉼표로 이어진 칸이다("auto_increment",
+// "on update CURRENT_TIMESTAMP(3)", "DEFAULT_GENERATED on update CURRENT_TIMESTAMP").
+// 그래서 있는지 없는지만 보지 않고 **뒤에 붙은 식까지** 읽는다 — 정밀도를 잃으면
+// 초안과 실제 DB 가 매번 다르다고 보고된다.
+func mysqlOnUpdateExpr(extra string) string {
+	lower := strings.ToLower(extra)
+	at := strings.Index(lower, "on update ")
+	if at < 0 {
+		return ""
+	}
+	rest := strings.TrimSpace(extra[at+len("on update "):])
+	// 뒤에 다른 표시가 더 있으면 잘라 낸다.
+	if comma := strings.Index(rest, ","); comma >= 0 {
+		rest = strings.TrimSpace(rest[:comma])
+	}
+	return rest
 }

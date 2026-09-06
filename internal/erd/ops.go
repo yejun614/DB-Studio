@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -898,6 +899,11 @@ func applyColumnAdd(doc *Document, op *Op) error {
 	return nil
 }
 
+// maxOnUpdateExpr는 자동 갱신 식의 길이 제한이다. 이 자리에 오는 것은
+// CURRENT_TIMESTAMP(6) 남짓이라, 길게 열어 두면 DDL 에 그대로 들어가는 자유
+// 입력칸이 하나 더 생긴다.
+const maxOnUpdateExpr = 64
+
 type columnUpdatePayload struct {
 	Table   string  `json:"table"`
 	Name    string  `json:"name"`
@@ -912,7 +918,10 @@ type columnUpdatePayload struct {
 	Identity  *bool   `json:"identity,omitempty"`
 	Comment   *string `json:"comment,omitempty"`
 	Generated *string `json:"generated,omitempty"`
-	Position  *int    `json:"position,omitempty"`
+	// OnUpdate는 행을 고칠 때마다 다시 넣을 식이다. 빈 문자열이면 없앤다.
+	// null(필드 생략)은 "변경 없음"이다 — Default 와 같은 규칙이다.
+	OnUpdate *string `json:"onUpdate,omitempty"`
+	Position *int    `json:"position,omitempty"`
 }
 
 func applyColumnUpdate(doc *Document, op *Op) error {
@@ -984,6 +993,13 @@ func applyColumnUpdate(doc *Document, op *Op) error {
 	}
 	if p.Generated != nil {
 		col.Generated = strings.TrimSpace(*p.Generated)
+	}
+	if p.OnUpdate != nil {
+		expr, err := validateOnUpdate(*p.OnUpdate)
+		if err != nil {
+			return err
+		}
+		col.OnUpdate = expr
 	}
 	if p.Position != nil {
 		moveColumn(tbl, col, *p.Position)
@@ -2085,4 +2101,42 @@ func applyColumnMove(doc *Document, op *Op) error {
 		c.Position = i + 1
 	}
 	return nil
+}
+
+// validateOnUpdate는 자동 갱신 식을 검사한다.
+//
+// 이 값은 DDL 에 따옴표 없이 그대로 들어간다(ON UPDATE <식>). 그래서 자유 문자열로
+// 두면 그 자리가 곧 문장 구조를 바꾸는 통로가 된다 — ERD 를 그리는 사람과
+// 마이그레이션을 실행하는 사람이 다를 수 있으므로 여기서 막는 것이 맞다.
+//
+// 받는 것은 시각 함수 하나와 선택적인 소수 자릿수뿐이다. 그것이 이 문법으로
+// 실제로 쓸 수 있는 전부이기도 하다(MySQL 은 ON UPDATE 에 임의 식을 받지 않는다).
+func validateOnUpdate(raw string) (string, error) {
+	expr := strings.TrimSpace(raw)
+	if expr == "" {
+		return "", nil
+	}
+	if len(expr) > maxOnUpdateExpr {
+		return "", invalid("자동 갱신 식이 너무 깁니다 (%d자 제한)", maxOnUpdateExpr)
+	}
+	name, arg := expr, ""
+	if open := strings.Index(expr, "("); open >= 0 {
+		if !strings.HasSuffix(expr, ")") {
+			return "", invalid("자동 갱신 식의 괄호가 닫히지 않았습니다: %s", expr)
+		}
+		name = strings.TrimSpace(expr[:open])
+		arg = strings.TrimSpace(expr[open+1 : len(expr)-1])
+	}
+	switch strings.ToUpper(name) {
+	case "CURRENT_TIMESTAMP", "NOW", "LOCALTIME", "LOCALTIMESTAMP":
+	default:
+		return "", invalid("자동 갱신에는 CURRENT_TIMESTAMP 계열만 쓸 수 있습니다: %s", expr)
+	}
+	if arg != "" {
+		n, err := strconv.Atoi(arg)
+		if err != nil || n < 0 || n > 6 {
+			return "", invalid("소수 자릿수는 0에서 6 사이여야 합니다: %s", expr)
+		}
+	}
+	return expr, nil
 }

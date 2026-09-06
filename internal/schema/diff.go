@@ -264,6 +264,13 @@ func diffColumn(res *DiffResult, tt, ft *Table, fc, tc *Column) {
 		attrs["generated"] = tc.Generated
 		attrs["oldGenerated"] = fc.Generated
 	}
+	// 대소문자와 괄호 표기는 서버마다 다르게 돌려준다(current_timestamp() 와
+	// CURRENT_TIMESTAMP 는 같은 것이다). 그대로 견주면 아무것도 고치지 않은 표가
+	// 매번 변경으로 잡힌다.
+	if !sameOnUpdate(fc.OnUpdate, tc.OnUpdate) {
+		attrs["onUpdate"] = tc.OnUpdate
+		attrs["oldOnUpdate"] = fc.OnUpdate
+	}
 	if len(attrs) == 0 {
 		return
 	}
@@ -649,4 +656,37 @@ func emptyAs(v, alt string) string {
 		return alt
 	}
 	return v
+}
+
+// sameOnUpdate는 자동 갱신 식이 같은 것인지 본다.
+//
+// 표기가 여럿이다: CURRENT_TIMESTAMP, current_timestamp(), now(),
+// CURRENT_TIMESTAMP(3). 앞의 셋은 같은 것이고 마지막은 정밀도가 다르므로 다른
+// 것이다. 그래서 이름은 뭉뚱그리되 괄호 안의 수는 지켜서 견준다.
+func sameOnUpdate(a, b string) bool {
+	return canonicalOnUpdate(a) == canonicalOnUpdate(b)
+}
+
+func canonicalOnUpdate(v string) string {
+	v = strings.ToLower(strings.TrimSpace(v))
+	if v == "" {
+		return ""
+	}
+	arg := ""
+	if open := strings.Index(v, "("); open >= 0 {
+		if close := strings.LastIndex(v, ")"); close > open {
+			arg = strings.TrimSpace(v[open+1 : close])
+		}
+		v = strings.TrimSpace(v[:open])
+	}
+	// now 와 localtime 계열은 모두 CURRENT_TIMESTAMP 의 다른 이름이다.
+	switch v {
+	case "now", "localtime", "localtimestamp", "current_timestamp":
+		v = "current_timestamp"
+	}
+	// 0 자리는 안 적은 것과 같다.
+	if arg == "" || arg == "0" {
+		return v
+	}
+	return v + "(" + arg + ")"
 }

@@ -600,6 +600,19 @@ func (r *renderer) columnDef(t *Table, col *Column) string {
 	if col.HasDefault && col.Default != "" && !col.Identity {
 		fmt.Fprintf(&b, " DEFAULT %s", col.Default)
 	}
+	// ON UPDATE 는 DEFAULT 뒤에 온다(MySQL 의 문법 순서다). 이 둘은 서로 다른
+	// 순간을 말하므로 한 컬럼에 함께 있는 것이 흔하다 — 넣을 때 한 번(DEFAULT),
+	// 고칠 때마다(ON UPDATE).
+	if col.OnUpdate != "" {
+		if r.dialect == "mysql" {
+			fmt.Fprintf(&b, " ON UPDATE %s", col.OnUpdate)
+		} else {
+			// 다른 DB 에는 이 문법이 없다. 조용히 빼면 "ERD 에는 있는데 DB 에는
+			// 없는" 컬럼이 되므로, 무엇을 해야 하는지까지 적어 둔다.
+			r.warn("%s는 컬럼의 ON UPDATE를 지원하지 않아 %s.%s 의 자동 갱신을 생략했습니다 — "+
+				"트리거로 만들어야 합니다", r.dialect, t.Display(), col.Name)
+		}
+	}
 	if col.Comment != "" && r.q.supportsInlineComment {
 		fmt.Fprintf(&b, " COMMENT %s", quoteLiteral(col.Comment))
 	}

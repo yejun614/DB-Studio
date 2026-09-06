@@ -51,6 +51,12 @@ type TypeDef struct {
 	Max int `json:"max,omitempty"`
 	// Unsigned가 참이면 UNSIGNED를 붙일 수 있다(MySQL 숫자형).
 	Unsigned bool `json:"unsigned,omitempty"`
+	// OnUpdate가 참이면 이 타입에 ON UPDATE(자동 갱신)를 붙일 수 있다.
+	//
+	// Identity 와 같은 이유로 타입마다 표시한다: MySQL 에서 이것은 시각 계열
+	// 둘(DATETIME·TIMESTAMP)에만 붙는다. 화면이 이름을 보고 짐작하면 그 규칙이
+	// 화면에 한 벌 더 생긴다.
+	OnUpdate bool `json:"onUpdate,omitempty"`
 	// Identity가 참이면 이 타입에 자동 증가를 붙일 수 있다.
 	//
 	// 타입마다 표시하는 이유: 자동 증가는 "정수 계열에만"이라는 규칙이 DB마다 조금씩
@@ -88,6 +94,17 @@ type Catalog struct {
 	AutoIncrement string `json:"autoIncrement,omitempty"`
 	// AutoIncrementNote는 자동 증가에 걸린 제약이다(SQLite처럼 조건이 있는 경우).
 	AutoIncrementNote string `json:"autoIncrementNote,omitempty"`
+
+	// OnUpdateLabel은 이 DB에서 자동 갱신을 부르는 이름이다. 비어 있으면 그 DB에는
+	// 이 기능이 없다는 뜻이고, 화면은 칸 자체를 그리지 않는다.
+	//
+	// 다른 DB에서 같은 일을 하려면 트리거를 만들어야 한다. 트리거는 컬럼의 성질이
+	// 아니라 표에 붙는 별개의 물건이라, 여기서 만들어 주는 척하면 ERD 가 실제
+	// 스키마와 어긋난다.
+	OnUpdateLabel string `json:"onUpdateLabel,omitempty"`
+	// OnUpdateExprs는 고를 수 있는 식이다(정밀도가 다른 것들).
+	OnUpdateExprs []DefaultSuggestion `json:"onUpdateExprs,omitempty"`
+	OnUpdateNote  string              `json:"onUpdateNote,omitempty"`
 }
 
 // 기본값 제안 목록.
@@ -209,6 +226,10 @@ func TypeCatalog(dialect string) Catalog {
 			Defaults:          mysqlDefaults,
 			AutoIncrement:     "AUTO_INCREMENT",
 			AutoIncrementNote: "정수 계열에만 붙일 수 있고, 그 컬럼은 키(대개 기본키)여야 합니다.",
+			OnUpdateLabel:     "ON UPDATE",
+			OnUpdateExprs:     mysqlOnUpdateExprs,
+			OnUpdateNote: "행을 고칠 때마다 이 컬럼을 다시 채웁니다(updated_at 에 씁니다). " +
+				"DATETIME·TIMESTAMP 에만 붙고, 소수 자리는 컬럼의 정밀도와 같아야 합니다.",
 		}
 	case "mssql", "sqlserver":
 		return Catalog{
@@ -315,6 +336,17 @@ var postgresTypes = []TypeDef{
 	{Name: "DATERANGE", Label: "날짜 범위", Category: CatOther},
 }
 
+// mysqlOnUpdateExprs는 자동 갱신 칸에서 고를 수 있는 식이다.
+//
+// 정밀도를 나눠 두는 이유: ON UPDATE 의 소수 자리는 **컬럼의 정밀도와 같아야**
+// 한다. DATETIME(3) 컬럼에 ON UPDATE CURRENT_TIMESTAMP 를 적으면 MySQL 이
+// 문장을 거절한다 — 목록에 미리 올려 두면 사람이 그 규칙을 몰라도 맞는 것을 고른다.
+var mysqlOnUpdateExprs = []DefaultSuggestion{
+	{Expr: "CURRENT_TIMESTAMP", Label: "고칠 때마다 지금 시각"},
+	{Expr: "CURRENT_TIMESTAMP(3)", Label: "지금 시각 (밀리초)"},
+	{Expr: "CURRENT_TIMESTAMP(6)", Label: "지금 시각 (마이크로초)"},
+}
+
 var mysqlTypes = []TypeDef{
 	{Name: "TINYINT", Label: "아주 작은 정수 (1바이트)", Category: CatNumber, Unsigned: true, Identity: true},
 	{Name: "SMALLINT", Label: "작은 정수 (2바이트)", Category: CatNumber, Unsigned: true, Identity: true},
@@ -340,9 +372,9 @@ var mysqlTypes = []TypeDef{
 
 	{Name: "DATE", Label: "날짜", Category: CatTime},
 	{Name: "TIME", Label: "시각", Category: CatTime, Param: ParamFraction, Default: "0", Max: 6},
-	{Name: "DATETIME", Label: "날짜+시각", Category: CatTime, Param: ParamFraction, Default: "0", Max: 6,
+	{Name: "DATETIME", Label: "날짜+시각", Category: CatTime, Param: ParamFraction, Default: "0", Max: 6, OnUpdate: true,
 		Note: "타임존을 저장하지 않습니다. 값을 넣은 그대로 돌려줍니다."},
-	{Name: "TIMESTAMP", Label: "날짜+시각 (UTC 변환)", Category: CatTime, Param: ParamFraction, Default: "0", Max: 6,
+	{Name: "TIMESTAMP", Label: "날짜+시각 (UTC 변환)", Category: CatTime, Param: ParamFraction, Default: "0", Max: 6, OnUpdate: true,
 		Note: "세션 타임존으로 변환해 저장합니다. 2038년 상한이 있습니다."},
 	{Name: "YEAR", Label: "연도", Category: CatTime},
 

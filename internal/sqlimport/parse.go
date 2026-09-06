@@ -438,6 +438,14 @@ func (p *parser) columnDef(tbl *schema.Table) bool {
 		case p.accept("DEFAULT"):
 			col.Default = p.expr()
 			col.HasDefault = col.Default != ""
+		case p.accept("ON", "UPDATE"):
+			// 컬럼에 붙은 ON UPDATE(MySQL 의 자동 갱신)다. 외래키의 ON UPDATE 와
+			// 글자가 같지만 있는 자리가 다르다 — 저쪽은 REFERENCES 뒤에 온다.
+			//
+			// 읽지 않고 지나가면 안 되는 이유: 덤프를 불러올 때 이 값만 조용히
+			// 사라진다. 그러면 초안과 실제 DB 가 매번 다르다고 보고되고, 그 차이를
+			// 없애려고 만든 마이그레이션이 자동 갱신을 지운다.
+			col.OnUpdate = p.expr()
 		case p.accept("AUTO_INCREMENT"), p.accept("AUTOINCREMENT"):
 			col.Identity = true
 		case p.accept("IDENTITY"):

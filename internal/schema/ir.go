@@ -95,6 +95,17 @@ type Column struct {
 	Default    string `json:"default,omitempty"` // 원본 표현식 문자열
 	Identity   bool   `json:"identity"`          // auto_increment / IDENTITY / serial
 	Generated  string `json:"generated,omitempty"`
+	// OnUpdate는 행을 고칠 때마다 이 컬럼에 다시 넣을 식이다(MySQL 의
+	// ON UPDATE CURRENT_TIMESTAMP).
+	//
+	// 문자열인 이유: 정밀도를 함께 적을 수 있다(CURRENT_TIMESTAMP(3)). 참/거짓으로
+	// 두면 DATETIME(3) 컬럼에서 소수 자리가 조용히 잘린다 — 값은 들어가지만
+	// 밀리초가 늘 0 이 되고, 그것은 오류가 아니라 "시계가 이상하다"로 보인다.
+	//
+	// 기본값과 따로 두는 까닭: DEFAULT 는 **넣을 때** 한 번이고 이것은 **고칠
+	// 때마다**다. 한 컬럼에 둘 다 있는 것이 흔한 쓰임이라(created_at 은 DEFAULT,
+	// updated_at 은 둘 다) 한 칸으로 합칠 수 없다.
+	OnUpdate string `json:"onUpdate,omitempty"`
 	// Domain은 이 컬럼의 타입이 어느 도메인(재사용 타입)에서 왔는지다.
 	//
 	// 설계 단계에서만 쓰는 값이라 introspect는 채우지 않고 지문(Fingerprint)에도
