@@ -2353,7 +2353,13 @@ option { background: var(--surface); color: var(--text); }
   stroke-width: 1;
   stroke-dasharray: 5 3;
 }
-.erd-view-head { fill: hsl(var(--h-accent) / 0.14); }
+/* 머리띠는 보라(--h-violet)다 — 이 도면에서 보라는 "뷰·도메인·NOT NULL"을 뜻한다.
+ *
+ * 예전에는 --h-accent 를 썼는데 **그런 변수는 없다.** 없는 변수를 쓰면 그 선언이
+ * 통째로 무효가 되고, fill 은 상속 속성이라 조상의 값(초깃값 검정)을 물려받는다.
+ * 어두운 테마에서는 검정 띠가 어두운 바탕에 묻혀 아무도 못 봤고, 밝은 테마에서는
+ * 흰 카드 위에 검은 띠가 그대로 드러났다. */
+.erd-view-head { fill: hsl(var(--h-violet) / 0.14); }
 .erd-view-g[style*="--card-accent"] .erd-view-head { fill: var(--card-accent); fill-opacity: 0.22; }
 .erd-view-name { fill: var(--text); font: 600 12.5px var(--mono); }
 .erd-view-tag { fill: var(--accent); font: 600 9.5px var(--mono); letter-spacing: 0.06em; }
@@ -3073,13 +3079,13 @@ tr.is-destructive td { background: hsl(var(--h-danger) / 0.08); }
   border: none;
   border-radius: 4px;
   background: none;
-  color: var(--muted);
+  color: var(--text-mute);
   cursor: pointer;
   font: inherit;
   font-size: 12.5px;
 }
 .glossary-cat-btn:hover { background: var(--surface-2); color: var(--text); }
-.glossary-cat-sep { margin: 0 1px; color: var(--muted); opacity: 0.55; font-size: 11px; }
+.glossary-cat-sep { margin: 0 1px; color: var(--text-mute); opacity: 0.55; font-size: 11px; }
 
 /* 모달의 세 칸은 한 줄에 나란히 둔다. 대·중·소는 한 덩어리라, 위아래로 늘어놓으면
    서로 다른 세 가지를 묻는 것처럼 보인다. */
