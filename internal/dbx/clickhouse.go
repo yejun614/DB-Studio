@@ -290,9 +290,48 @@ func clickhouseColumns(ctx context.Context, db *sql.DB, dbName string, tables ma
 	return rows.Err()
 }
 
+// clickhouseViewTarget은 구체화 뷰가 결과를 써 넣는 표(TO 절)를 꺼낸다.
+//
+// system.tables 에 이것을 담은 컬럼이 없어서 CREATE 문에서 읽는다. TO 가 없는
+// 구체화 뷰는 결과를 자기 안에 담으므로 빈 문자열을 돌려준다.
+func clickhouseViewTarget(createSQL string) string {
+	words := topLevelWords(createSQL)
+	seenView := false
+	for i, w := range words {
+		switch {
+		case w.word == "VIEW":
+			seenView = true
+			continue
+		case !seenView:
+			continue
+		case w.word == "AS":
+			// TO 없이 AS 까지 왔다. 대상 표가 없다는 뜻이다.
+			return ""
+		case w.word != "TO":
+			continue
+		}
+		rest := createSQL[w.end:]
+		end := len(rest)
+		// 표 이름 다음에는 컬럼 목록이나 AS 가 온다. 먼저 오는 쪽에서 끊는다.
+		if p := strings.IndexByte(rest, '('); p >= 0 && p < end {
+			end = p
+		}
+		for _, nx := range words[i+1:] {
+			if nx.word == "AS" {
+				if q := nx.start - w.end; q >= 0 && q < end {
+					end = q
+				}
+				break
+			}
+		}
+		return strings.ReplaceAll(strings.TrimSpace(rest[:end]), "`", "")
+	}
+	return ""
+}
+
 func clickhouseViews(ctx context.Context, db *sql.DB, dbName string, s *schema.Schema) error {
 	rows, err := db.QueryContext(ctx, `
-		SELECT name, as_select, engine, comment
+		SELECT name, as_select, engine, comment, create_table_query
 		FROM system.tables
 		WHERE database = ? AND engine LIKE '%View'
 		ORDER BY name`, dbName)
@@ -301,18 +340,26 @@ func clickhouseViews(ctx context.Context, db *sql.DB, dbName string, s *schema.S
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var name, definition, engine, comment string
-		if err := rows.Scan(&name, &definition, &engine, &comment); err != nil {
+		var name, definition, engine, comment, createSQL string
+		if err := rows.Scan(&name, &definition, &engine, &comment, &createSQL); err != nil {
 			return fmt.Errorf("뷰 정보를 읽지 못했습니다: %w", err)
 		}
-		if strings.EqualFold(engine, "MaterializedView") && comment == "" {
+		materialized := strings.EqualFold(engine, "MaterializedView")
+		if materialized && comment == "" {
 			// 구체화 뷰는 실제로 표를 하나 더 만든다. 그 사실을 적어 두지 않으면
 			// "뷰라서 공간을 안 쓴다"는 오해가 그대로 남는다.
 			comment = "구체화 뷰 — 결과를 실제로 저장합니다"
 		}
-		s.Views = append(s.Views, &schema.View{
+		v := &schema.View{
 			Name: name, Definition: definition, Comment: comment,
-		})
+			Materialized: materialized,
+		}
+		if materialized {
+			// 안내 문구로만 적어 두면 DDL 을 만들 때는 사라진다. 그러면
+			// 평범한 뷰가 만들어지고 대상 표에 행이 쌓이지 않기 시작한다.
+			v.Target = clickhouseViewTarget(createSQL)
+		}
+		s.Views = append(s.Views, v)
 	}
 	return rows.Err()
 }

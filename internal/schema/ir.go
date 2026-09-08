@@ -185,6 +185,16 @@ type View struct {
 	Name       string `json:"name"`
 	Definition string `json:"definition,omitempty"`
 	Comment    string `json:"comment,omitempty"`
+	// Materialized는 결과를 실제로 저장하는 뷰인지다(ClickHouse 의 구체화 뷰).
+	//
+	// 이것을 담아 두지 않으면 뷰로만 보이고, 다시 만들 때 평범한 뷰가 된다.
+	// 구체화 뷰는 INSERT 가 일어날 때 결과를 Target 표에 **써 넣는** 것이라
+	// 읽을 때 계산하는 평범한 뷰와 하는 일이 다르다 — 바뀐 것을 알아채기가
+	// 어려운 쪽으로 다르다. 오류 없이 조용히 행이 쌓이지 않기 시작한다.
+	Materialized bool `json:"materialized,omitempty"`
+	// Target은 구체화 뷰가 결과를 써 넣는 표다(TO 절). 비어 있으면 뷰가
+	// 자기 안에 담는다.
+	Target string `json:"target,omitempty"`
 }
 
 func (v *View) Key() string {

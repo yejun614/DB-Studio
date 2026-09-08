@@ -1189,6 +1189,32 @@ func (r *renderer) createView(c Change) {
 		r.warn("뷰 %s의 정의를 읽지 못해 DDL을 생성하지 못했습니다", v.Key())
 		return
 	}
+	// 구체화 뷰는 평범한 뷰로 바꿔 쓸 수 없다. 그렇게 쓰면 문장은 통과하지만
+	// 결과를 저장하지 않는 다른 것이 만들어지고, 그때부터 대상 표에 행이
+	// 쌓이지 않는다 — 오류가 없으니 알아채기까지 한참 걸린다.
+	//
+	// OR REPLACE 도 쓰지 않는다. ClickHouse 는 구체화 뷰에 그 문법을 허용하지
+	// 않으므로, 있는 것을 건드리지 않는 IF NOT EXISTS 로 둔다.
+	if v.Materialized {
+		name := r.tableNameParts(v.Namespace, v.Name)
+		// 바꾸는 것이라면 먼저 지운다. IF NOT EXISTS 만 두면 이미 있는 뷰에는
+		// 아무 일도 일어나지 않고, 화면에는 "바꿨다"고 남는다.
+		if c.Kind == ReplaceView {
+			r.up(c, "DROP VIEW "+r.ifExistsClause()+name, "")
+		}
+		stmt := "CREATE MATERIALIZED VIEW IF NOT EXISTS " + name
+		if v.Target != "" {
+			stmt += " TO " + v.Target
+		}
+		note := ""
+		if v.Target == "" {
+			note = "구체화 뷰가 결과를 자기 안에 담습니다. 대상 표를 따로 두려면 TO 절이 필요합니다"
+		}
+		r.up(c, stmt+" AS "+v.Definition, note)
+		r.down(c, "DROP VIEW "+r.ifExistsClause()+name, "")
+		return
+	}
+
 	verb := "CREATE OR REPLACE VIEW"
 	if r.dialect == "mssql" && c.Kind == ReplaceView {
 		verb = "ALTER VIEW"

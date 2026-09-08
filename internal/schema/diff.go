@@ -559,10 +559,24 @@ func diffViews(res *DiffResult, from, to *Schema) {
 			})
 			continue
 		}
-		if normalizeExpr(fv.Definition) != normalizeExpr(tv.Definition) {
+		// 정의만 보면 안 된다. 구체화 뷰인지와 결과를 써 넣는 표가 달라지면
+		// 같은 SELECT 라도 하는 일이 달라진다 — 읽을 때 계산하던 것이 INSERT
+		// 때 써 넣는 것이 되거나, 그 반대가 된다.
+		switch {
+		case normalizeExpr(fv.Definition) != normalizeExpr(tv.Definition):
 			res.add(Change{
 				Kind: ReplaceView, Object: tv.Name, ViewRef: tv,
 				Summary: fmt.Sprintf("뷰 %s 정의 변경", tv.Key()),
+			})
+		case fv.Materialized != tv.Materialized:
+			res.add(Change{
+				Kind: ReplaceView, Object: tv.Name, ViewRef: tv,
+				Summary: fmt.Sprintf("뷰 %s 종류 변경 (구체화 뷰 여부)", tv.Key()),
+			})
+		case fv.Target != tv.Target:
+			res.add(Change{
+				Kind: ReplaceView, Object: tv.Name, ViewRef: tv,
+				Summary: fmt.Sprintf("뷰 %s 가 결과를 써 넣는 표 변경", tv.Key()),
 			})
 		}
 	}
