@@ -3,6 +3,12 @@
 # 정리: docker compose -f docker/compose.test.yaml down -v
 #
 # 포트는 로컬에 이미 떠 있는 DB와 충돌하지 않도록 1을 접두사로 붙였다.
+#
+# ClickHouse + Kafka 만 띄우려면:
+#   docker compose -f docker/compose.test.yaml up -d clickhouse kafka kafka-seed
+# 그 둘은 **이어져 있다** — 카프카의 events 토픽을 ClickHouse 가 소비해 표에 쌓는다
+# (clickhouse-init/01-kafka-pipeline.sql). 한 흐름을 스키마·데이터 화면과 브로커
+# 화면에서 함께 확인할 수 있다.
 name: dbstudio-test
 
 services:
@@ -100,20 +106,92 @@ services:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
-      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      # 호스트에서 접속할 주소다. 컨테이너 안에서는 9092지만, 호스트에서는
-      # 19092로 매핑되므로 광고 주소도 그에 맞춘다.
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:19092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      # 리스너를 **둘로 나눈다**: 컨테이너끼리(INTERNAL)와 호스트에서(HOST).
+      #
+      # 하나로는 안 되는 이유: 클라이언트는 처음 붙은 주소를 쓰지 않고, 브로커가
+      # 알려 준 광고 주소로 다시 붙는다. 광고 주소가 localhost:19092 하나뿐이면
+      # 같은 네트워크의 다른 컨테이너(ClickHouse)는 그 localhost 를 자기 자신으로
+      # 해석해 연결이 조용히 실패한다 — 붙기는 하고 메시지만 안 온다.
+      KAFKA_LISTENERS: INTERNAL://:9092,HOST://:19092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,HOST://localhost:19092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,HOST:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       # 단일 노드이므로 복제·트랜잭션 관련 기본값을 1로 낮춘다.
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
-    ports: ["19092:9092"]
+    # 호스트에서 보는 포트는 그대로 19092 다(컨테이너 안의 포트만 바뀌었다).
+    ports: ["19092:19092"]
     healthcheck:
       test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  # 토픽을 만들고 메시지 몇 개를 넣어 둔다. 넣고 나면 **끝나서 사라진다** —
+  # `ps` 에 Exited 로 보이는 것이 정상이다.
+  #
+  # 왜 넣어 두는가: 큐가 비어 있으면 ClickHouse 의 표도 비고 컨슈머 그룹도 생기지
+  # 않는다. 그러면 화면에서 볼 것이 없고, "안 되는 것"과 "아직 아무것도 안 넣은
+  # 것"을 구분할 수 없다.
+  kafka-seed:
+    image: apache/kafka:3.9.1
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -e
+        K=/opt/kafka/bin
+        $$K/kafka-topics.sh --bootstrap-server kafka:9092 \
+          --create --if-not-exists --topic events --partitions 3 --replication-factor 1
+        for i in $$(seq 1 200); do
+          printf '{"id":%d,"kind":"%s","at":"%s","payload":"seed-%d"}\n' \
+            "$$i" \
+            "$$([ $$((i % 3)) -eq 0 ] && echo click || echo view)" \
+            "$$(date -u +%Y-%m-%dT%H:%M:%S.000)" \
+            "$$i"
+        done | $$K/kafka-console-producer.sh --bootstrap-server kafka:9092 --topic events
+        echo "events 토픽에 200개를 넣었습니다"
+
+  # ClickHouse. 이 앱에서는 다른 관계형 DB와 같은 자리에서 본다
+  # (스키마·데이터·SQL 콘솔·마이그레이션).
+  #
+  # 커넥션 등록: 호스트 127.0.0.1, 포트 19000(네이티브), DB appdb,
+  # 계정 default / rootpw123. HTTP(18123)는 이 앱이 쓰지 않지만,
+  # curl 로 확인할 때 편하라고 함께 열어 둔다.
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    environment:
+      CLICKHOUSE_DB: appdb
+      CLICKHOUSE_PASSWORD: rootpw123
+      # 관리 권한을 켠다. 없으면 SQL 로 사용자·권한을 만들 수 없어, 권한 관련
+      # 동작을 시험할 수 없다.
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ports:
+      - "19000:9000"  # 네이티브 (이 앱이 쓰는 것)
+      - "18123:8123"  # HTTP
+    volumes:
+      # 처음 뜰 때 한 번 실행된다. 볼륨을 지우지 않으면 다시 실행되지 않는다.
+      - ./clickhouse-init:/docker-entrypoint-initdb.d:ro
+    # 파일 핸들 상한을 올린다. 기본값(1024)으로는 ClickHouse 가 뜨다가 죽는 호스트가
+    # 있고, 그 오류 메시지는 원인을 짐작하기 어렵다.
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    # 카프카에 depends_on 을 걸지 **않는다.**
+    #
+    # 걸면 ClickHouse 만 띄우려는 사람에게 카프카가 딸려 온다(내려받을 것이 400MB
+    # 늘고 뜨는 시간도 길어진다). Kafka 엔진 표는 브로커가 없어도 만들어지고 뒤에
+    # 붙으므로, 순서를 강제할 이유가 없다 — 나중에 카프카를 띄우면 그때부터 소비가
+    # 시작되고 ClickHouse 를 다시 띄울 필요가 없다.
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--password", "rootpw123", "--query", "SELECT 1"]
       interval: 5s
       timeout: 5s
       retries: 30

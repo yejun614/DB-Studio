@@ -37,10 +37,49 @@ SVG와 래스터를 각각 손으로 만들면 도형이 어긋나고 한쪽만 
 ### 테스트용 DB 컨테이너
 
 ```bash
-docker compose -f docker/compose.test.yaml up -d               # MySQL, PostgreSQL, MS-SQL, Mongo, Redis
+docker compose -f docker/compose.test.yaml up -d               # MySQL, PostgreSQL, MS-SQL, Mongo, Redis, ClickHouse, RabbitMQ, Kafka
 docker compose -f docker/compose.test.yaml --profile oracle up -d oracle
 docker compose -f docker/compose.test.yaml down -v             # 정리
 ```
+
+| 대상 | 포트 | 계정 |
+|---|---|---|
+| MySQL | 13306 | root / rootpw123 |
+| PostgreSQL | 15432 | postgres / rootpw123 |
+| MS-SQL | 11433 | sa / RootPw123! |
+| Oracle (프로파일) | 11521 | appuser / RootPw123 |
+| MongoDB | 27018 | root / rootpw123 |
+| Redis | 16379 | (비밀번호만) rootpw123 |
+| ClickHouse | 19000 (네이티브) · 18123 (HTTP) | default / rootpw123 |
+| RabbitMQ | 15673 (관리 API) · 15672 (AMQP) | admin / rootpw123 |
+| Kafka | 19092 | (인증 없음) |
+
+#### ClickHouse + Kafka 를 이어서 보기
+
+둘은 서로 **이어져 있다**. 카프카의 `events` 토픽을 ClickHouse 가 소비해 표에 쌓는다.
+
+```bash
+docker compose -f docker/compose.test.yaml up -d clickhouse kafka kafka-seed
+```
+
+`kafka-seed` 는 토픽을 만들고 메시지 200개를 넣은 뒤 **끝나서 사라진다**(`ps` 에
+Exited 로 보이는 것이 정상이다). 그 뒤에 보이는 것:
+
+- **스키마 화면** — `events_queue`(Kafka 엔진), `events`(MergeTree), `events_mv`(구체화 뷰).
+  ClickHouse 에서 큐를 읽는 방법이 표 하나가 아니라 이 셋이라는 것이 그대로 보인다.
+- **데이터 화면** — `events` 200행, `page_views` 500행(카프카와 무관한 표도 하나 둔다.
+  브로커를 안 띄웠을 때 빈 화면과 "못 읽었다"를 구분할 수 있어야 한다).
+- **브로커 화면** — `events` 토픽과 `clickhouse-events` 컨슈머 그룹의 랙.
+
+같은 흐름을 두 화면에서 보는 것이 요점이다. 메시지를 더 넣으면 두 화면의 숫자가
+함께 움직인다:
+
+```bash
+docker compose -f docker/compose.test.yaml run --rm kafka-seed
+```
+
+정의는 `docker/clickhouse-init/01-kafka-pipeline.sql` 에 있고, 컨테이너가 **처음**
+뜰 때만 실행된다. 고친 뒤에는 `down -v` 로 볼륨을 지워야 다시 돈다.
 
 ### 통합 테스트
 
