@@ -183,13 +183,27 @@ func renderClickHouse(t LogicalType) string {
 // ClickHouseColumnType은 널 허용까지 반영한 컬럼 타입이다.
 //
 // 널 허용을 타입으로 감싸는 것이 ClickHouse 의 방식이다. NOT NULL 을 뒤에 붙이는
-// 다른 방언의 문법을 그대로 내면 문법 오류가 난다.
+// 다른 방언과 달라서, 컬럼 정의를 쓰는 쪽이 이 함수를 거쳐야 한다.
+//
+// 손대지 않은 컬럼은 **원래 타입 문자열을 그대로 쓴다.** 논리 타입으로 다시
+// 쓰면 ClickHouse 만 아는 것들이 조용히 사라지기 때문이다. 재 보면 두 가지가
+// 그랬다.
+//
+//   - LowCardinality(String) 이 String 이 된다. 사전 압축이 풀리는 것이라
+//     같은 표가 아닌데, 논리 타입에는 그것을 담을 자리가 없다.
+//   - UInt32 가 UInt64 가 된다. uint32 를 큰 정수로 읽는 것은 **다른 DB 로
+//     옮길 때** 범위가 넘치지 않게 하려는 것이라 그 자체로는 옳지만, 같은
+//     ClickHouse 로 돌아올 때는 컬럼이 두 배로 넓어진다.
+//
+// 그래서 원래 문자열이 아직 같은 뜻이면 그것을 쓰고, 사람이 타입을 바꿨을
+// 때만(둘의 뜻이 갈릴 때만) 논리 타입으로 다시 쓴다.
 func ClickHouseColumnType(t LogicalType, raw string, nullable bool) string {
-	base := raw
-	if base == "" || t.Base != TypeUnknown {
+	base := strings.TrimSpace(raw)
+	if base == "" || parseClickHouseType(base).Canonical() != t.Canonical() {
 		base = renderClickHouse(t)
 	}
-	inner, alreadyNullable := unwrapClickHouseType(base)
+
+	inner, alreadyNullable := stripClickHouseNullable(base)
 	if !nullable {
 		return inner
 	}
@@ -201,7 +215,39 @@ func ClickHouseColumnType(t LogicalType, raw string, nullable bool) string {
 	if strings.HasPrefix(strings.ToLower(inner), "array(") {
 		return inner
 	}
+	// LowCardinality 는 바깥에 남는다. Nullable(LowCardinality(String)) 은
+	// 지원되지 않는 조합이고, 서버가 쓰는 모양은 LowCardinality(Nullable(String)) 이다.
+	if lc, ok := cutClickHouseWrapper(inner, "lowcardinality"); ok {
+		return "LowCardinality(Nullable(" + lc + "))"
+	}
 	return "Nullable(" + inner + ")"
+}
+
+// stripClickHouseNullable은 Nullable 만 벗기고 나머지 껍질은 남긴다.
+//
+// unwrapClickHouseType 과 다른 점이 여기다. 그쪽은 논리 타입을 알아내려고
+// LowCardinality 까지 벗기는데, 쓰는 쪽에서 그 결과를 그대로 내보내면
+// 사전 압축이 사라진다.
+func stripClickHouseNullable(raw string) (inner string, nullable bool) {
+	s := strings.TrimSpace(raw)
+	if v, ok := cutClickHouseWrapper(s, "nullable"); ok {
+		return v, true
+	}
+	if v, ok := cutClickHouseWrapper(s, "lowcardinality"); ok {
+		if n, ok := cutClickHouseWrapper(v, "nullable"); ok {
+			return "LowCardinality(" + n + ")", true
+		}
+	}
+	return s, false
+}
+
+// cutClickHouseWrapper는 감싼 타입 한 겹을 벗긴다. 이름이 다르면 그대로 둔다.
+func cutClickHouseWrapper(raw, name string) (string, bool) {
+	s := strings.TrimSpace(raw)
+	if !strings.HasPrefix(strings.ToLower(s), name+"(") || !strings.HasSuffix(s, ")") {
+		return s, false
+	}
+	return strings.TrimSpace(s[len(name)+1 : len(s)-1]), true
 }
 
 // ClickHouseEngineClause는 CREATE TABLE 뒤에 붙는 절이다.
