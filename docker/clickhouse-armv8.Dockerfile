@@ -1,6 +1,10 @@
-# ARMv8.0 라즈베리파이용 ClickHouse. 공식 이미지에서 두 가지를 바꾼다.
+# ARMv8.0 CPU 용 ClickHouse. 바꾸는 것은 **바이너리 하나뿐**이다.
 #
-# ── 1. 바이너리 ──────────────────────────────────────────────────────
+# 메모리 설정은 여기 없다. 그것은 기계가 작다는 이야기이고 CPU 와 상관이 없어서
+# compose.test.small.yaml 로 갈라 두었다. 섞어 두면 파이 5 처럼 CPU 는 되지만
+# 여전히 작은 기계로 옮길 때, 이 파일을 빼는 순간 아직 필요한 메모리 설정까지
+# 함께 사라진다.
+#
 # 공식 ARM 빌드는 ARMv8.2-A(LSE 원자 명령)를 요구한다. 파이 4 의 Cortex-A72 와
 # 파이 3 의 Cortex-A53 은 ARMv8.0 이라 그 명령어가 없어서, 설정을 읽는 첫 줄에서
 # SIGILL 로 죽는다:
@@ -19,13 +23,6 @@
 #
 # x86_64 인데 SSE4.2 가 없는 기계(가상 머신의 기본 CPU 모델이 흔하다)라면
 # 아래 URL 의 aarch64v80compat 을 amd64compat 으로 바꾸면 그대로 통한다.
-#
-# ── 2. 메모리 설정 ───────────────────────────────────────────────────
-# 파이에서는 DB Studio 가 같은 기계에서 돌지만 ClickHouse 의 기본값은 서버를
-# 통째로 쓰는 것을 전제한다. 설정 파일은 **이미지 안에 넣는다** — compose 에서
-# 디렉터리로 마운트하면 이미지가 config.d 에 넣어 둔
-# docker_related_config.xml(모든 주소에서 듣기)이 가려져 밖에서 안 보인다.
-# COPY 는 디렉터리를 합치므로 그 문제가 생기지 않는다.
 FROM clickhouse/clickhouse-server:24.8
 
 ADD --chmod=755 https://builds.clickhouse.com/master/aarch64v80compat/clickhouse \
@@ -39,7 +36,3 @@ RUN set -eux; \
       ln -sf /usr/bin/clickhouse "/usr/bin/$name"; \
     done; \
     clickhouse local --query "SELECT 'ClickHouse 가 이 CPU 에서 돕니다: ' || version()"
-
-# 서버 설정은 config.d, 프로필 설정은 users.d 로 간다(각 파일 주석 참고).
-COPY clickhouse-armv8/config.d/ /etc/clickhouse-server/config.d/
-COPY clickhouse-armv8/users.d/  /etc/clickhouse-server/users.d/

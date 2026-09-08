@@ -119,7 +119,8 @@ docker compose -f docker/compose.test.yaml \
 
 ClickHouse 가 그런 CPU 용 호환 빌드를 따로 내므로, 공식 이미지에 그 바이너리를
 갈아 끼운 이미지를 그 자리에서 만든다(`docker/clickhouse-armv8.Dockerfile`).
-아래의 메모리 설정도 같은 이미지에 함께 들어간다.
+이 파일이 바꾸는 것은 **바이너리 하나뿐**이다 — 메모리 설정은 CPU 와 상관없는
+이야기라 아래의 다른 파일로 갈라 두었다.
 
 빌드할 때 `ClickHouse 가 이 CPU 에서 돕니다: …` 가 찍히면 그 지점을 넘긴 것이다.
 안 찍히면 빌드가 그 자리에서 실패하므로, 컨테이너를 띄워 보고 나서 아는 일은 없다.
@@ -130,27 +131,29 @@ ClickHouse 가 그런 CPU 용 호환 빌드를 따로 내므로, 공식 이미�
 x86_64 인데 SSE4.2 가 없는 기계라면 Dockerfile 의 URL 에서 `aarch64v80compat` 을
 `amd64compat` 으로 바꾸면 같은 방법이 그대로 통한다.
 
-#### ClickHouse 설정을 손볼 때 걸리는 것 셋
+#### 메모리가 적은 기계 — 그리고 설정을 손볼 때 걸리는 것 셋
 
-설정 파일은 `docker/clickhouse-armv8/` 에 있고 이미지 안으로 COPY 된다. 파이에서는
-DB Studio 가 같은 기계에서 도는데 ClickHouse 의 기본값은 서버를 통째로 쓰는 것을
-전제한다 — `mark_cache_size` 의 기본값이 5GiB 로 파이의 전체 메모리보다 크고,
-전체보다 큰 값을 상한으로 두는 것은 상한을 두지 않은 것과 같다.
+ClickHouse 의 기본값은 서버를 통째로 쓰는 것을 전제한다. 같은 기계에서
+DB Studio 도 돌면 둘 중 하나가 OOM 으로 죽는다 — `mark_cache_size` 의 기본값이
+5GiB 로 파이의 전체 메모리보다 크고, 전체보다 큰 값을 상한으로 두는 것은 상한을
+두지 않은 것과 같다.
 
-**1. 마운트로 얹지 말 것.** COPY 로 넣는 이유가 있다. 이미지의
-`config.d` 에는 파일이 딱 하나 있고 그 파일이 하는 일이 전부다.
-
-```xml
-<!-- Listen wildcard address to allow accepting connections from other containers and host network. -->
-<listen_host>::</listen_host>
-<listen_host>0.0.0.0</listen_host>
+```bash
+docker compose -f docker/compose.test.yaml \
+               -f docker/compose.test.small.yaml up -d clickhouse
 ```
 
-compose 에서 디렉터리를 그 위에 마운트하면 이것이 가려져 ClickHouse 가 자기
-안에서만 듣는다. 다른 컨테이너에서도, 호스트의 게시된 포트에서도 안 보인다
-(도커의 포트 전달이 컨테이너 IP 로 붙기 때문이다). 증상은 `connection refused`
-하나뿐이라 "설정을 얹은 것"과 "밖에서 안 보이는 것"이 이어지지 않는다.
-`COPY` 는 디렉터리를 합치므로 이 문제가 없다.
+**CPU 와 따로 둔 파일이다.** 파이 4 라면 위의 `armv8` 파일과 겹쳐 쓰고, 파이 5 나
+작은 VM 이라면 이것만 쓴다. 섞어 두면 CPU 는 되지만 여전히 작은 기계로 옮길 때
+`armv8` 을 빼는 순간 아직 필요한 메모리 설정까지 함께 사라진다.
+
+**1. 디렉터리로 얹지 말 것 — 파일 하나씩 얹는다.** 두 곳 다 이미지가 넣어 둔
+파일이 있고, 가리면 잃는 것이 있다. 둘 다 오류가 원인을 가리키지 않는다.
+
+| 가려지는 파일 | 하는 일 | 가리면 |
+|---|---|---|
+| `config.d/docker_related_config.xml` | `listen_host` 를 `0.0.0.0`·`::` 로 (다른 컨테이너·호스트에서 붙게) | 서버가 자기 안에서만 듣는다. 증상은 `connection refused` 하나뿐이라 "설정을 얹은 것"과 이어지지 않는다 |
+| `users.d/default-user.xml` | entrypoint 가 `CLICKHOUSE_PASSWORD` 로 만든다 — 계정·비밀번호·허용 대역 | **비밀번호가 사라진다** |
 
 **2. 파일이 둘인 것도 같은 종류의 함정이다.** 서버 설정(캐시 크기, 전체 메모리
 비율, 동시 질의 수)은 `config.d`, 프로필 설정(`max_memory_usage`·`max_threads` —

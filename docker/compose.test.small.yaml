@@ -1,0 +1,41 @@
+# 메모리가 적은 기계용 덮어쓰기 파일 (라즈베리파이 등).
+#
+#   docker compose -f docker/compose.test.yaml \
+#                  -f docker/compose.test.small.yaml up -d clickhouse
+#
+# CPU 와 상관없는 이야기다. compose.test.armv8.yaml 과 겹쳐 쓸 수 있고
+# (파이 4), 그것 없이 단독으로도 쓴다(파이 5, 작은 VM).
+#
+#   docker compose -f docker/compose.test.yaml \
+#                  -f docker/compose.test.armv8.yaml \
+#                  -f docker/compose.test.small.yaml up -d --build clickhouse
+#
+# 왜 필요한가: ClickHouse 의 기본값은 서버를 통째로 쓰는 것을 전제한다. 같은
+# 기계에서 DB Studio 도 돌면 둘 중 하나가 OOM 으로 죽는다. 특히 mark_cache_size
+# 의 기본값이 5GiB 로 파이의 전체 메모리보다 크다 — 전체보다 큰 값을 상한으로
+# 두는 것은 상한을 두지 않은 것과 같다.
+#
+# ── 반드시 파일 하나씩 얹는다 ────────────────────────────────────────
+# 디렉터리를 얹으면 이미지가 그 안에 넣어 둔 파일이 가려진다. 두 곳 다 잃을 것이
+# 있고, 둘 다 오류가 원인을 가리키지 않는다.
+#
+#   config.d/docker_related_config.xml  "다른 컨테이너와 호스트에서 붙을 수 있게
+#     모든 주소에서 듣기"(listen_host 0.0.0.0). 가리면 ClickHouse 가 자기
+#     안에서만 듣고, 증상은 connection refused 하나뿐이다 — 설정을 얹은 것과
+#     밖에서 안 보이는 것이 이어지지 않는다.
+#
+#   users.d/default-user.xml  entrypoint 가 CLICKHOUSE_PASSWORD 로 만드는 파일.
+#     default 계정과 비밀번호, 접속 허용 대역이 여기 있다. 가리면 **비밀번호가
+#     사라진다.**
+#
+# 두 자리로 나뉘는 이유: 서버 설정(캐시·전체 메모리 몫)은 config.d, 프로필
+# 설정(질의 하나의 몫)은 users.d 다. 프로필을 config.d 에 적으면 오류도 나지
+# 않고 그냥 안 먹는다.
+#
+# 원본의 ./clickhouse-init 마운트는 여기 다시 적지 않는다. compose 는 볼륨을
+# 대상 경로로 견주어 합치므로, 겹치지 않는 것은 그대로 남는다.
+services:
+  clickhouse:
+    volumes:
+      - ./clickhouse-small/config.d/low-memory.xml:/etc/clickhouse-server/config.d/low-memory.xml:ro
+      - ./clickhouse-small/users.d/low-memory.xml:/etc/clickhouse-server/users.d/low-memory.xml:ro
