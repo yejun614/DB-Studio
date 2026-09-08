@@ -113,30 +113,32 @@ lscpu | grep -o -E 'sse4_2|popcnt' | sort -u   # x86_64 에서 비면 SSE4.2 가
 CPU 를 못 바꾸는 기계(라즈베리파이)에는 덮어쓰기 파일을 둔다.
 
 ```bash
-docker compose -f docker/compose.test.yaml                -f docker/compose.test.armv8.yaml up -d clickhouse
+docker compose -f docker/compose.test.yaml \
+               -f docker/compose.test.armv8.yaml up -d --build clickhouse
 ```
 
-ClickHouse 가 그런 CPU 용 호환 빌드를 따로 내므로 공식 이미지에 **바이너리만**
-갈아 끼운다(`docker/clickhouse-armv8.Dockerfile`). 함께 메모리 설정도 얹는다 —
-파이에서는 DB Studio 가 같은 기계에서 돌고, ClickHouse 의 기본값은 서버를 통째로
-쓰는 것을 전제한다(마크 캐시 상한의 기본값이 5GiB 로, 파이의 전체 메모리보다 크다).
+ClickHouse 가 그런 CPU 용 호환 빌드를 따로 내므로, 공식 이미지에 그 바이너리를
+갈아 끼운 이미지를 그 자리에서 만든다(`docker/clickhouse-armv8.Dockerfile`).
+아래의 메모리 설정도 같은 이미지에 함께 들어간다.
 
-#### ClickHouse 설정을 얹을 때 — 디렉터리로 덮지 말 것
+빌드할 때 `ClickHouse 가 이 CPU 에서 돕니다: …` 가 찍히면 그 지점을 넘긴 것이다.
+안 찍히면 빌드가 그 자리에서 실패하므로, 컨테이너를 띄워 보고 나서 아는 일은 없다.
 
-설정 파일은 **파일 하나씩** 마운트한다. 이것을 디렉터리로 하면 증상이
-`connection refused` 하나로만 나오는데, 설정을 얹은 것과 밖에서 안 보이는 것이
-머릿속에서 이어지지 않아 한참 헤맨다.
+호환 빌드에는 **버전이 고정되지 않는다**는 제약이 있다. ClickHouse 가 버전별로
+내지 않고 master 빌드 하나만 두기 때문에, 이미지의 24.8 과 정확히 같은 버전이
+아니다. 시험용으로는 충분하지만 이 조합을 운영에 쓸 것이라면 알고 써야 한다.
+x86_64 인데 SSE4.2 가 없는 기계라면 Dockerfile 의 URL 에서 `aarch64v80compat` 을
+`amd64compat` 으로 바꾸면 같은 방법이 그대로 통한다.
 
-```yaml
-# 안 된다 — 이미지가 config.d 에 넣어 둔 파일이 가려진다
-- ./clickhouse-conf:/etc/clickhouse-server/config.d:ro
+#### ClickHouse 설정을 손볼 때 걸리는 것 셋
 
-# 된다
-- ./clickhouse-conf/low-memory.xml:/etc/clickhouse-server/config.d/low-memory.xml:ro
-- ./clickhouse-users/low-memory.xml:/etc/clickhouse-server/users.d/low-memory.xml:ro
-```
+설정 파일은 `docker/clickhouse-armv8/` 에 있고 이미지 안으로 COPY 된다. 파이에서는
+DB Studio 가 같은 기계에서 도는데 ClickHouse 의 기본값은 서버를 통째로 쓰는 것을
+전제한다 — `mark_cache_size` 의 기본값이 5GiB 로 파이의 전체 메모리보다 크고,
+전체보다 큰 값을 상한으로 두는 것은 상한을 두지 않은 것과 같다.
 
-이미지의 `config.d` 에 있는 파일은 딱 하나이고, 그 파일이 하는 일이 전부다.
+**1. 마운트로 얹지 말 것.** COPY 로 넣는 이유가 있다. 이미지의
+`config.d` 에는 파일이 딱 하나 있고 그 파일이 하는 일이 전부다.
 
 ```xml
 <!-- Listen wildcard address to allow accepting connections from other containers and host network. -->
@@ -144,35 +146,29 @@ ClickHouse 가 그런 CPU 용 호환 빌드를 따로 내므로 공식 이미지
 <listen_host>0.0.0.0</listen_host>
 ```
 
-가리면 ClickHouse 가 자기 안에서만 듣는다. 다른 컨테이너에서도, 호스트의
-게시된 포트에서도 안 보인다(도커의 포트 전달은 컨테이너 IP 로 붙기 때문이다).
+compose 에서 디렉터리를 그 위에 마운트하면 이것이 가려져 ClickHouse 가 자기
+안에서만 듣는다. 다른 컨테이너에서도, 호스트의 게시된 포트에서도 안 보인다
+(도커의 포트 전달이 컨테이너 IP 로 붙기 때문이다). 증상은 `connection refused`
+하나뿐이라 "설정을 얹은 것"과 "밖에서 안 보이는 것"이 이어지지 않는다.
+`COPY` 는 디렉터리를 합치므로 이 문제가 없다.
 
-**파일이 둘로 나뉘는 이유**도 같은 종류의 함정이다. 서버 설정(캐시 크기, 전체
-메모리 비율, 동시 질의 수)은 `config.d` 에서 읽고, 프로필 설정
-(`max_memory_usage`·`max_threads` — 질의 하나의 상한)은 `users.d` 에서 읽는다.
-프로필을 `config.d` 에 적으면 **오류도 나지 않고 그냥 안 먹는다** — 재 보면
-`max_memory_usage` 가 0(무제한)인 채로 남아 있다.
+**2. 파일이 둘인 것도 같은 종류의 함정이다.** 서버 설정(캐시 크기, 전체 메모리
+비율, 동시 질의 수)은 `config.d`, 프로필 설정(`max_memory_usage`·`max_threads` —
+질의 하나의 상한)은 `users.d` 에서 읽는다. 프로필을 `config.d` 에 적으면 오류도
+나지 않고 그냥 안 먹는다 — 재 보면 `max_memory_usage` 가 0(무제한)인 채다.
 
-얹은 것이 실제로 먹었는지는 이렇게 본다.
+**3. 뒷일 스레드 수(`background_pool_size`)는 건드리지 않는다.** 낮추면 서버가 시작을
+거부한다 — 병합 대기열에서 비워 둘 자리 수(`number_of_free_entries_in_pool_to_*`)
+기본값이 풀 크기를 넘기기 때문이고, 그 값이 셋이라 하나를 맞추면 다음 것이 걸린다.
+맞춰 봐도 얻는 것이 없다(스레드 풀은 할 일이 없으면 논다).
+
+먹었는지는 두 표를 따로 봐야 한다.
 
 ```bash
-docker compose -f docker/compose.test.yaml exec clickhouse   clickhouse-client --password rootpw123 --query   "SELECT name, value FROM system.server_settings WHERE name LIKE '%cache_size%' OR name LIKE '%ram_ratio%'"
-
-docker compose -f docker/compose.test.yaml exec clickhouse   clickhouse-client --password rootpw123 --query   "SELECT name, value FROM system.settings WHERE name IN ('max_memory_usage','max_threads')"
+CH="docker compose -f docker/compose.test.yaml exec -T clickhouse clickhouse-client"
+$CH --password rootpw123 --query "SELECT name, value FROM system.server_settings WHERE name LIKE '%cache_size%'"
+$CH --password rootpw123 --query "SELECT name, value FROM system.settings WHERE name IN ('max_memory_usage','max_threads')"
 ```
-
-**뒷일 스레드 수(`background_pool_size`)는 건드리지 않는다.** 낮추면 서버가
-시작을 거부한다 — 병합 대기열에서 비워 둘 자리 수
-(`number_of_free_entries_in_pool_to_*`) 기본값이 풀 크기를 넘기기 때문이고, 그
-값이 셋이라 하나를 맞추면 다음 것이 걸린다. 맞춰 봐도 얻는 것이 없다(스레드
-풀은 할 일이 없으면 논다).
-
-호환 빌드에는 **버전이 고정되지 않는다**는 제약이 있다. ClickHouse 가 버전별로
-내지 않고 master 빌드 하나만 두기 때문에, 이미지의 24.8 과 정확히 같은 버전이
-아니다. 시험용으로는 충분하지만 이 조합을 운영에 쓸 것이라면 알고 써야 한다.
-
-x86_64 인데 SSE4.2 가 없는 기계라면 Dockerfile 의 URL 에서 `aarch64v80compat` 을
-`amd64compat` 으로 바꾸면 같은 방법이 그대로 통한다.
 
 ### 통합 테스트
 

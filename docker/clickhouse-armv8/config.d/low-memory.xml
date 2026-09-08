@@ -1,0 +1,17 @@
+<!-- 서버 설정: 캐시와 전체 메모리 몫.
+
+     파이에서는 DB Studio 가 같은 기계에서 돌지만 ClickHouse 의 기본값은 서버를
+     통째로 쓰는 것을 전제한다. 특히 mark_cache_size 의 기본값이 5GiB 로 파이의
+     전체 메모리보다 크다 — 전체보다 큰 값을 상한으로 두는 것은 상한을 두지
+     않은 것과 같다.
+
+     질의 하나가 잡는 몫은 여기가 아니라 users.d 쪽에 있다(그 파일 주석 참고). -->
+<clickhouse>
+    <!-- 전체 메모리의 절반까지만. 남은 절반을 OS·DB Studio 가 쓴다. -->
+    <max_server_memory_usage_to_ram_ratio>0.5</max_server_memory_usage_to_ram_ratio>
+
+    <mark_cache_size>268435456</mark_cache_size>          <!-- 256 MiB -->
+    <uncompressed_cache_size>0</uncompressed_cache_size>  <!-- 끈다 -->
+
+    <max_concurrent_queries>8</max_concurrent_queries>
+</clickhouse>

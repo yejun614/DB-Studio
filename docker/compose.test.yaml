@@ -178,16 +178,10 @@ services:
     volumes:
       # 처음 뜰 때 한 번 실행된다. 볼륨을 지우지 않으면 다시 실행되지 않는다.
       - ./clickhouse-init:/docker-entrypoint-initdb.d:ro
-    # ARM·오래된 CPU 에서는 이 이미지가 뜨지 않는다.
-    #
-    # 공식 빌드는 x86_64 에 SSE 4.2, aarch64 에 ARMv8.2-A 를 요구한다. 못 미치면
-    # 설정을 읽는 첫 줄에서 SIGILL 로 죽는데(`Illegal instruction`), 그 메시지에
-    # 설정 파일 이야기가 나와서 원인을 엉뚱한 곳에서 찾게 된다. 라즈베리파이 4·3 과
-    # 가상 머신의 기본 CPU 모델(kvm64·qemu64)이 여기 걸린다.
-    #
-    # 그런 기계에서는 덮어쓰기 파일을 이어 붙인다:
-    #   -f docker/compose.test.yaml -f docker/compose.test.armv8.yaml
-    # 자세한 것은 docs/development.md 의 "ClickHouse 가 뜨지 않을 때 — CPU 명령어".
+    # 이 이미지는 x86_64 에 SSE 4.2, aarch64 에 ARMv8.2-A 를 요구한다. 라즈베리파이
+    # 4·3 과 가상 머신의 기본 CPU 모델(kvm64)이 못 미쳐서 `Illegal instruction` 으로
+    # 죽는다. 그때는 compose.test.armv8.yaml 을 이어 붙인다
+    # (docs/development.md 의 "ClickHouse 가 뜨지 않을 때 — CPU 명령어").
 
     # 파일 핸들 상한을 올린다. 기본값(1024)으로는 ClickHouse 가 뜨다가 죽는 호스트가
     # 있고, 그 오류 메시지는 원인을 짐작하기 어렵다.

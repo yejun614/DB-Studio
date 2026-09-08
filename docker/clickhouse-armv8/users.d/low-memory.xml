@@ -1,0 +1,16 @@
+<!-- 프로필 설정: 질의 하나가 잡는 몫.
+
+     **파일이 둘로 나뉘는 이유가 이것이다.** ClickHouse 는 서버 설정을 config.d
+     에서, 프로필 설정을 users.d 에서 읽는다. 프로필을 config.d 에 적으면 오류도
+     나지 않고 그냥 안 먹는다 — 재 보면 max_memory_usage 가 0(무제한)인 채로
+     남아 있다. 오류 없이 조용히 안 먹는 쪽이라 넣어 두고 잡혔다고 믿기 쉽다. -->
+<clickhouse>
+    <profiles>
+        <default>
+            <!-- 넘으면 **그 질의만** 실패하고 서버는 산다. 상한이 없으면 무거운
+                 조회 하나가 서버째로 OOM 을 맞는다 — 파이에서는 이 구분이 중요하다. -->
+            <max_memory_usage>1000000000</max_memory_usage>  <!-- 약 1 GB -->
+            <max_threads>4</max_threads>
+        </default>
+    </profiles>
+</clickhouse>
