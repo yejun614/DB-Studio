@@ -23,7 +23,19 @@ services:
     image: dbstudio-test/clickhouse-armv8:24.8
     volumes:
       - ./clickhouse-init:/docker-entrypoint-initdb.d:ro
-      - ./clickhouse-conf:/etc/clickhouse-server/config.d:ro
+      # 설정은 **파일 하나씩** 얹는다. 디렉터리를 얹으면 안 된다.
+      #
+      # config.d 에는 이미지가 docker_related_config.xml 을 넣어 두었고, 그
+      # 파일이 하는 일이 "다른 컨테이너와 호스트에서 붙을 수 있게 모든 주소에서
+      # 듣기"다. 디렉터리로 덮으면 그것이 가려져 ClickHouse 가 자기 안에서만
+      # 듣고, 증상은 connection refused 하나로만 나온다 — 설정을 얹었다는 것과
+      # 밖에서 안 보인다는 것이 이어지지 않아서 원인을 찾기 어렵다.
+      #
+      # 두 자리로 나뉘는 이유: 서버 설정(캐시·전체 메모리 비율)은 config.d,
+      # 프로필 설정(질의 하나의 상한)은 users.d 다. 프로필을 config.d 에 적으면
+      # 오류 없이 그냥 안 먹는다.
+      - ./clickhouse-conf/low-memory.xml:/etc/clickhouse-server/config.d/low-memory.xml:ro
+      - ./clickhouse-users/low-memory.xml:/etc/clickhouse-server/users.d/low-memory.xml:ro
     # 파일 핸들 상한은 원본에서 262144 로 올려 두었다. 파이의 기본 상한이 그보다
     # 낮으면 컨테이너가 뜨지 않으므로, 여기서는 파이에서 확실히 되는 값으로 낮춘다.
     ulimits:
@@ -31,6 +43,8 @@ services:
         soft: 65536
         hard: 65536
     # 뜨는 데 시간이 더 걸린다(SD 카드·USB 저장장치가 느리다). 기다리는 횟수를 늘린다.
+    # test 는 원본에서 온다 — 여기서 healthcheck 를 통째로 다시 쓰면 test 가
+    # 빠지고, test 없는 healthcheck 는 **아무 검사도 하지 않는다**(오류도 없다).
     healthcheck:
       interval: 10s
       timeout: 10s

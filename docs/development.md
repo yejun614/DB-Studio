@@ -117,10 +117,55 @@ docker compose -f docker/compose.test.yaml                -f docker/compose.test
 ```
 
 ClickHouse 가 그런 CPU 용 호환 빌드를 따로 내므로 공식 이미지에 **바이너리만**
-갈아 끼운다(`docker/clickhouse-armv8.Dockerfile`). 함께 메모리 설정도 얹는다
-(`docker/clickhouse-conf/low-memory.xml`) — 파이에서는 DB Studio 가 같은 기계에서
-돌고, ClickHouse 의 기본값은 서버를 통째로 쓰는 것을 전제한다(마크 캐시 상한의
-기본값이 5GiB 로, 파이의 전체 메모리보다 크다).
+갈아 끼운다(`docker/clickhouse-armv8.Dockerfile`). 함께 메모리 설정도 얹는다 —
+파이에서는 DB Studio 가 같은 기계에서 돌고, ClickHouse 의 기본값은 서버를 통째로
+쓰는 것을 전제한다(마크 캐시 상한의 기본값이 5GiB 로, 파이의 전체 메모리보다 크다).
+
+#### ClickHouse 설정을 얹을 때 — 디렉터리로 덮지 말 것
+
+설정 파일은 **파일 하나씩** 마운트한다. 이것을 디렉터리로 하면 증상이
+`connection refused` 하나로만 나오는데, 설정을 얹은 것과 밖에서 안 보이는 것이
+머릿속에서 이어지지 않아 한참 헤맨다.
+
+```yaml
+# 안 된다 — 이미지가 config.d 에 넣어 둔 파일이 가려진다
+- ./clickhouse-conf:/etc/clickhouse-server/config.d:ro
+
+# 된다
+- ./clickhouse-conf/low-memory.xml:/etc/clickhouse-server/config.d/low-memory.xml:ro
+- ./clickhouse-users/low-memory.xml:/etc/clickhouse-server/users.d/low-memory.xml:ro
+```
+
+이미지의 `config.d` 에 있는 파일은 딱 하나이고, 그 파일이 하는 일이 전부다.
+
+```xml
+<!-- Listen wildcard address to allow accepting connections from other containers and host network. -->
+<listen_host>::</listen_host>
+<listen_host>0.0.0.0</listen_host>
+```
+
+가리면 ClickHouse 가 자기 안에서만 듣는다. 다른 컨테이너에서도, 호스트의
+게시된 포트에서도 안 보인다(도커의 포트 전달은 컨테이너 IP 로 붙기 때문이다).
+
+**파일이 둘로 나뉘는 이유**도 같은 종류의 함정이다. 서버 설정(캐시 크기, 전체
+메모리 비율, 동시 질의 수)은 `config.d` 에서 읽고, 프로필 설정
+(`max_memory_usage`·`max_threads` — 질의 하나의 상한)은 `users.d` 에서 읽는다.
+프로필을 `config.d` 에 적으면 **오류도 나지 않고 그냥 안 먹는다** — 재 보면
+`max_memory_usage` 가 0(무제한)인 채로 남아 있다.
+
+얹은 것이 실제로 먹었는지는 이렇게 본다.
+
+```bash
+docker compose -f docker/compose.test.yaml exec clickhouse   clickhouse-client --password rootpw123 --query   "SELECT name, value FROM system.server_settings WHERE name LIKE '%cache_size%' OR name LIKE '%ram_ratio%'"
+
+docker compose -f docker/compose.test.yaml exec clickhouse   clickhouse-client --password rootpw123 --query   "SELECT name, value FROM system.settings WHERE name IN ('max_memory_usage','max_threads')"
+```
+
+**뒷일 스레드 수(`background_pool_size`)는 건드리지 않는다.** 낮추면 서버가
+시작을 거부한다 — 병합 대기열에서 비워 둘 자리 수
+(`number_of_free_entries_in_pool_to_*`) 기본값이 풀 크기를 넘기기 때문이고, 그
+값이 셋이라 하나를 맞추면 다음 것이 걸린다. 맞춰 봐도 얻는 것이 없다(스레드
+풀은 할 일이 없으면 논다).
 
 호환 빌드에는 **버전이 고정되지 않는다**는 제약이 있다. ClickHouse 가 버전별로
 내지 않고 master 빌드 하나만 두기 때문에, 이미지의 24.8 과 정확히 같은 버전이
