@@ -487,7 +487,7 @@ func (p *parser) commentOn(start int) {
 // 우리 IR 로 옮길 곳이 없고, 옮길 수 있다 해도 다시 적어 내는 순간 사람이 적어 둔
 // 줄바꿈·별칭·주석이 사라진다 — 뷰에서 읽는 사람이 보는 것은 그 SQL 자체다.
 // 마이그레이션도 이 문자열을 그대로 CREATE OR REPLACE VIEW ... AS 뒤에 붙인다.
-func (p *parser) createView(start int) {
+func (p *parser) createView(start int, materialized bool) {
 	p.accept("IF", "NOT", "EXISTS")
 	ns, name, ok := p.qualifiedName()
 	if !ok {
@@ -495,9 +495,38 @@ func (p *parser) createView(start int) {
 		p.skipToStatementEnd()
 		return
 	}
+	p.acceptOnCluster(start)
+
+	// 구체화 뷰가 결과를 써 넣는 표(TO 절).
+	//
+	// 이 절을 모르면 AS 를 못 찾아 뷰가 통째로 안 읽힌다. 읽어도 대상 표를
+	// 버리면, 다시 만들 때 결과를 자기 안에 담는 뷰가 되어 원래 대상 표에는
+	// 행이 쌓이지 않는다.
+	target := ""
+	if p.accept("TO") {
+		tns, tname, tok := p.qualifiedName()
+		if tok {
+			target = tname
+			if tns != "" {
+				target = tns + "." + tname
+			}
+		}
+	}
+
 	// 컬럼 이름 목록: CREATE VIEW v (a, b) AS …
+	// 구체화 뷰는 TO 절 뒤에 대상 표의 컬럼을 다시 적어 두기도 한다.
 	if p.peek().isPunct("(") {
 		p.balanced()
+	}
+	// TO 없는 구체화 뷰는 자기 안에 담으므로 엔진 절이 붙는다.
+	if p.peek().isWord("ENGINE") {
+		for !p.done() && !p.peek().isWord("AS") && !p.peek().isPunct(";") {
+			if p.peek().isPunct("(") {
+				p.balanced()
+				continue
+			}
+			p.i++
+		}
 	}
 	// PostgreSQL 의 WITH (security_barrier) 같은 옵션.
 	if p.peek().isWord("WITH") {
@@ -522,7 +551,10 @@ func (p *parser) createView(start int) {
 		p.note(start, "뷰 정의가 비어 있습니다")
 		return
 	}
-	p.upsertView(&schema.View{Namespace: ns, Name: name, Definition: def})
+	p.upsertView(&schema.View{
+		Namespace: ns, Name: name, Definition: def,
+		Materialized: materialized, Target: target,
+	})
 }
 
 // dropView는 DROP VIEW 문을 읽는다.

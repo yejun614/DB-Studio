@@ -66,6 +66,8 @@ type parser struct {
 	dialect string
 	res     *Result
 	byKey   map[string]*schema.Table
+	// notedCluster는 ON CLUSTER 안내를 이미 적었는지다(스크립트당 한 번).
+	notedCluster bool
 }
 
 // ---------- 토큰 이동 ----------
@@ -195,19 +197,105 @@ func (p *parser) createStatement(start int) {
 	p.accept("UNLOGGED")
 
 	unique := p.accept("UNIQUE")
-	// MATERIALIZED VIEW 도 뷰로 읽는다. 우리 IR 에는 그 구분이 없으므로 담을 때는
-	// 같은 것이 되지만, 건너뛰는 것보다는 도면에 나타나는 편이 낫다.
-	p.accept("MATERIALIZED")
+	// 구체화 뷰라는 사실을 넘긴다. 평범한 뷰로 담으면 문장은 통과하고 **다른 것**이
+	// 만들어진다 — 구체화 뷰는 INSERT 때 대상 표에 써 넣고 평범한 뷰는 읽을 때
+	// 계산하므로, 그때부터 대상 표에 행이 쌓이지 않는다.
+	materialized := p.accept("MATERIALIZED")
 	switch {
 	case p.accept("TABLE"):
 		p.createTable(start)
 	case p.accept("INDEX"), p.accept("CLUSTERED", "INDEX"), p.accept("NONCLUSTERED", "INDEX"):
 		p.createIndex(start, unique)
 	case p.accept("VIEW"):
-		p.createView(start)
+		p.createView(start, materialized)
+	case p.accept("DICTIONARY"):
+		// 사전은 표도 뷰도 아니다(외부 원본을 메모리에 얹어 dictGet 으로 찾는 것).
+		// ERD 에 담을 자리가 없으므로 건너뛰되, 무엇을 건너뛰었는지는 적는다.
+		p.note(start, "사전(DICTIONARY)은 표나 뷰가 아니라 ERD 에 담지 않습니다. "+
+			"이 사전을 쓰는 뷰의 정의는 그대로 남습니다")
+		p.skipToStatementEnd()
 	default:
 		p.note(start, "")
 		p.skipToStatementEnd()
+	}
+}
+
+// tableFromLikeAs는 `CREATE TABLE b AS a` 형태에서 원본 표의 컬럼을 베낀다.
+//
+// ClickHouse 클러스터에서는 표가 둘씩 다닌다 — 데이터를 담는 로컬 표와, 그 앞에
+// 서서 샤드로 흩뿌리는 Distributed 표. 뒤쪽은 컬럼을 적지 않고 앞쪽의 것을
+// 그대로 쓴다.
+//
+//	CREATE TABLE listen_events AS listen_events_local
+//	ENGINE = Distributed(mupid, currentDatabase(), listen_events_local, cityHash64(user_id));
+//
+// 이것을 못 읽으면 도면에서 **표의 절반이 사라진다.** 그리고 사라진 쪽이 응용이
+// 실제로 읽고 쓰는 표다.
+//
+// 베끼는 것은 컬럼뿐이다. 엔진·정렬 키·파티션은 두 표가 서로 다르고(그쪽은 뒤에
+// 오는 절에서 읽는다), 기본키도 옮기지 않는다 — Distributed 표에는 정렬 키가 없다.
+//
+// AS 뒤가 SELECT 나 괄호면 이 형태가 아니다(그때는 nil 을 돌려준다).
+func (p *parser) tableFromLikeAs(start int, ns, name string) *schema.Table {
+	save := p.i
+	p.i++ // AS
+
+	if p.peek().isWord("SELECT") || p.peek().isWord("WITH") || p.peek().isPunct("(") {
+		p.i = save
+		return nil
+	}
+	srcNS, srcName, ok := p.qualifiedName()
+	if !ok {
+		p.i = save
+		return nil
+	}
+
+	tbl := &schema.Table{
+		Namespace: ns, Name: name,
+		Columns: []*schema.Column{}, Indexes: []*schema.Index{},
+		ForeignKeys: []*schema.ForeignKey{}, Checks: []*schema.Check{},
+	}
+	src := p.byKey[key(srcNS, srcName)]
+	if src == nil && srcNS == "" {
+		src = p.byKey[key(ns, srcName)]
+	}
+	if src == nil {
+		// 원본이 이 스크립트에 없다. 컬럼 없이라도 도면에 두는 편이 낫다 —
+		// 없는 표로 두면 그 표를 가리키는 다른 정의들이 허공을 가리킨다.
+		p.note(start, "원본 표 "+srcName+" 을 이 스크립트에서 찾지 못해 컬럼 없이 만들었습니다. "+
+			"원본을 함께 불러오면 컬럼이 채워집니다")
+		return tbl
+	}
+	for i, c := range src.Columns {
+		cp := *c
+		cp.Position = i + 1
+		tbl.Columns = append(tbl.Columns, &cp)
+	}
+	return tbl
+}
+
+// acceptOnCluster는 ClickHouse 의 ON CLUSTER 절을 지나간다.
+//
+// 이름 뒤에 붙어서, 이것을 모르면 그 뒤의 괄호도 AS 도 못 찾는다. 클러스터 DDL 은
+// 거의 모든 문장에 이 절을 달고 있으므로, 모르면 스크립트가 통째로 안 읽힌다.
+//
+// 클러스터 이름은 표마다 다른 것이 아니라 **어디에 적용하는가**라서, 표 설정으로
+// 담지 않는다. 이 앱에서는 커넥션 옵션 `cluster` 가 그 자리이고, 거기 적어 두면
+// 내보내는 DDL 에 ON CLUSTER 가 붙는다.
+func (p *parser) acceptOnCluster(start int) {
+	if !p.accept("ON", "CLUSTER") {
+		return
+	}
+	name := ""
+	if p.peek().isName() {
+		name = p.next().val
+	}
+	// 스크립트마다 한 번만 적는다. 문장마다 적으면 같은 줄이 열다섯 개 쌓인다.
+	if !p.notedCluster {
+		p.notedCluster = true
+		p.note(start, "ON CLUSTER "+name+" 는 지나갑니다. 클러스터 이름은 표가 아니라 "+
+			"커넥션의 설정이므로, 커넥션 옵션 '클러스터 이름'에 적어 두면 "+
+			"내보내는 DDL 에 다시 붙습니다")
 	}
 }
 
@@ -220,8 +308,21 @@ func (p *parser) createTable(start int) {
 		return
 	}
 
-	// CREATE TABLE x AS SELECT … 는 구조를 문장에서 알 수 없다.
+	p.acceptOnCluster(start)
+
+	// CREATE TABLE x AS … 는 두 가지다.
+	//
+	//   AS SELECT …   결과 구조를 문장에서 알 수 없다.
+	//   AS 다른표      그 표의 컬럼을 그대로 쓴다. Distributed 표를 만들 때 쓰는
+	//                  형태로, ClickHouse 클러스터에서는 표 절반이 이 모양이다.
 	if p.peek().isWord("AS") {
+		if tbl := p.tableFromLikeAs(start, ns, name); tbl != nil {
+			p.finishTable(tbl)
+			p.upsert(tbl)
+			p.tableTail(tbl)
+			p.skipToStatementEnd()
+			return
+		}
 		p.note(start, "CREATE TABLE … AS SELECT 는 결과 구조를 알 수 없어 건너뛰었습니다")
 		p.skipToStatementEnd()
 		return
@@ -638,12 +739,15 @@ var clickHouseTailClauses = []struct {
 //
 // 값은 원문을 그대로 잘라 담는다. 토큰을 다시 이어 붙이면 toYYYYMM(day) 같은
 // 식에서 공백이 어긋난다.
+// clickhouseMark는 꼬리에서 찾은 절 하나의 자리다.
+// from: 값이 시작하는 원문 위치, at: 절 이름이 시작하는 위치.
+type clickhouseMark struct {
+	key      string
+	from, at int
+}
+
 func (p *parser) clickhouseTail(tbl *schema.Table) {
-	type mark struct {
-		key      string
-		from, at int // from: 값이 시작하는 원문 위치, at: 절 이름이 시작하는 위치
-	}
-	var marks []mark
+	var marks []clickhouseMark
 	depth := 0
 	end := len(p.src)
 	// 주석은 절이 아니라 경계다. 절 하나의 값이 어디서 끝나는지를 정할 때
@@ -658,11 +762,15 @@ func (p *parser) clickhouseTail(tbl *schema.Table) {
 		case t.isPunct(")"):
 			depth--
 		case t.isPunct(";") && depth <= 0:
+			// 문장이 끝났다. **위치를 옮기지 않고** 멈춘다.
+			//
+			// 처음에 여기서 p.i 를 토큰 끝으로 밀어 버렸다. 이 절만 보면 맞는
+			// 것처럼 보이는데(더 읽을 꼬리가 없으니), 그러면 **그 뒤의 문장이
+			// 전부 사라진다.** 한 문장짜리 스크립트로만 시험해서 오래 몰랐다.
+			// 세미콜론은 부르는 쪽의 skipToStatementEnd 가 치운다.
 			end = t.pos
-			p.i = len(p.toks) // 아래에서 자르고 나면 더 볼 것이 없다.
-		}
-		if p.done() || end != len(p.src) {
-			break
+			p.finishClickhouseTail(tbl, marks, commentAt, end)
+			return
 		}
 		if depth == 0 && t.kind == tWord {
 			matched := false
@@ -680,7 +788,7 @@ func (p *parser) clickhouseTail(tbl *schema.Table) {
 				if !p.done() {
 					from = p.peek().pos
 				}
-				marks = append(marks, mark{key: c.key, from: from, at: at})
+				marks = append(marks, clickhouseMark{key: c.key, from: from, at: at})
 				matched = true
 				break
 			}
@@ -707,6 +815,11 @@ func (p *parser) clickhouseTail(tbl *schema.Table) {
 		p.i++
 	}
 
+	p.finishClickhouseTail(tbl, marks, commentAt, end)
+}
+
+// finishClickhouseTail은 표시해 둔 경계로 원문을 잘라 표 설정에 담는다.
+func (p *parser) finishClickhouseTail(tbl *schema.Table, marks []clickhouseMark, commentAt, end int) {
 	if tbl.Options == nil {
 		tbl.Options = map[string]string{}
 	}
