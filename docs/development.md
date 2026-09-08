@@ -81,6 +81,54 @@ docker compose -f docker/compose.test.yaml run --rm kafka-seed
 정의는 `docker/clickhouse-init/01-kafka-pipeline.sql` 에 있고, 컨테이너가 **처음**
 뜰 때만 실행된다. 고친 뒤에는 `down -v` 로 볼륨을 지워야 다시 돈다.
 
+#### ClickHouse 가 뜨지 않을 때 — CPU 명령어
+
+로그가 이렇게 끝나면 설정 문제가 아니다.
+
+```
+/entrypoint.sh: line 51: 23 Illegal instruction (core dumped) clickhouse
+  extract-from-config --config-file ... --key='storage_configuration.disks.*.path'
+```
+
+`extract-from-config` 는 entrypoint 가 **가장 먼저** 부르는 것이다. 설정을 읽기도
+전에 죽었다는 것은 **그 CPU 에 바이너리가 쓰는 명령어가 없다**는 뜻이다. 메시지에
+설정 파일 이야기가 나와서 설정을 의심하게 되는데, 그쪽에는 아무 문제가 없다.
+
+공식 빌드가 요구하는 것:
+
+| 아키텍처 | 요구 | 못 미치는 예 |
+|---|---|---|
+| x86_64 | SSE 4.2 | 오래된 CPU, 그리고 **가상 머신의 CPU 모델**(Proxmox·QEMU 의 기본값 `kvm64`·`qemu64` 는 SSE4.2 를 노출하지 않는다) |
+| aarch64 | ARMv8.2-A (LSE) | 라즈베리파이 4(Cortex-A72)·3(Cortex-A53) |
+
+어느 쪽인지는 이렇게 본다.
+
+```bash
+uname -m
+lscpu | grep -o -E 'sse4_2|popcnt' | sort -u   # x86_64 에서 비면 SSE4.2 가 없다
+```
+
+**가상 머신이면 CPU 모델을 고치는 것이 가장 깔끔하다** — Proxmox 는 프로세서
+종류를 `host`(또는 `x86-64-v2`)로, libvirt 는 `<cpu mode='host-passthrough'/>` 로.
+CPU 를 못 바꾸는 기계(라즈베리파이)에는 덮어쓰기 파일을 둔다.
+
+```bash
+docker compose -f docker/compose.test.yaml                -f docker/compose.test.armv8.yaml up -d clickhouse
+```
+
+ClickHouse 가 그런 CPU 용 호환 빌드를 따로 내므로 공식 이미지에 **바이너리만**
+갈아 끼운다(`docker/clickhouse-armv8.Dockerfile`). 함께 메모리 설정도 얹는다
+(`docker/clickhouse-conf/low-memory.xml`) — 파이에서는 DB Studio 가 같은 기계에서
+돌고, ClickHouse 의 기본값은 서버를 통째로 쓰는 것을 전제한다(마크 캐시 상한의
+기본값이 5GiB 로, 파이의 전체 메모리보다 크다).
+
+호환 빌드에는 **버전이 고정되지 않는다**는 제약이 있다. ClickHouse 가 버전별로
+내지 않고 master 빌드 하나만 두기 때문에, 이미지의 24.8 과 정확히 같은 버전이
+아니다. 시험용으로는 충분하지만 이 조합을 운영에 쓸 것이라면 알고 써야 한다.
+
+x86_64 인데 SSE4.2 가 없는 기계라면 Dockerfile 의 URL 에서 `aarch64v80compat` 을
+`amd64compat` 으로 바꾸면 같은 방법이 그대로 통한다.
+
 ### 통합 테스트
 
 컨테이너가 떠 있으면 introspect 정확성과 DDL 왕복을 실제 DB에 대해 검증한다.
