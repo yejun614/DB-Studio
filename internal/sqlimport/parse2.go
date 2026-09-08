@@ -149,7 +149,10 @@ func (p *parser) balanced() string {
 		} else if t.isPunct(")") {
 			depth--
 		}
-		if b.Len() > 0 && needsSpace(t) {
+		// 여는 괄호 바로 뒤에는 공백을 넣지 않는다. 넣으면
+		// LowCardinality( String) 처럼 되는데, 뜻은 같아도 원문과 다른 글자가
+		// 되어 "DB가 말한 그대로"라는 RawType 의 약속이 깨진다.
+		if b.Len() > 0 && needsSpace(t) && !endsWithOpenBracket(b.String()) {
 			b.WriteString(" ")
 		}
 		b.WriteString(t.text)
@@ -218,6 +221,11 @@ func (p *parser) acceptParenTail() {
 
 func needsSpace(t token) bool {
 	return t.kind == tWord || t.kind == tIdent || t.kind == tString
+}
+
+// endsWithOpenBracket은 지금까지 쓴 글이 여는 괄호로 끝나는지다.
+func endsWithOpenBracket(s string) bool {
+	return strings.HasSuffix(s, "(") || strings.HasSuffix(s, "[")
 }
 
 // ---------- ALTER / DROP / COMMENT ----------

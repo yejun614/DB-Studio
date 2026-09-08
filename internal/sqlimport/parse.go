@@ -509,6 +509,20 @@ func (p *parser) columnDef(tbl *schema.Table) bool {
 		}
 	}
 
+	// ClickHouse 는 널 허용이 타입 안에 있다. Nullable(...) 로 감싸지 않은 컬럼은
+	// NOT NULL 이 없어도 NULL 을 받지 않는다.
+	//
+	// 다른 방언의 규칙("NOT NULL 이 없으면 널 허용")을 그대로 쓰면 모든 컬럼이
+	// 널 허용으로 들어온다. 그러면 DDL 을 쓸 때 전부 Nullable 로 감싸지는데,
+	// ClickHouse 에서 그것은 값마다 널 표시를 따로 저장하는 다른 표다.
+	//
+	// 수식어를 다 읽은 뒤에 정한다. 타입과 NOT NULL 이 어긋나면(Nullable(Date)
+	// NOT NULL 같은 것) 타입이 이긴다 — 그것이 서버가 보는 방식이다.
+	if p.dialect == "clickhouse" {
+		_, nullable := schema.UnwrapClickHouseType(col.RawType)
+		col.Nullable = nullable
+	}
+
 	tbl.Columns = append(tbl.Columns, col)
 	return true
 }
@@ -595,9 +609,219 @@ func (p *parser) refAction() string {
 	return ""
 }
 
+// clickHouseTailClauses는 ClickHouse 표 정의의 꼬리에서 알아볼 절들이다.
+//
+// 낱말 수가 다르므로 함께 적어 둔다. ORDER BY 는 두 낱말, TTL 은 한 낱말이다.
+var clickHouseTailClauses = []struct {
+	words []string
+	key   string
+}{
+	{[]string{"ENGINE"}, "engine"},
+	{[]string{"ORDER", "BY"}, "order_by"},
+	{[]string{"PARTITION", "BY"}, "partition_by"},
+	{[]string{"PRIMARY", "KEY"}, "ch_primary_key"},
+	{[]string{"SAMPLE", "BY"}, "sample_by"},
+	{[]string{"TTL"}, "ttl"},
+	{[]string{"SETTINGS"}, "settings"},
+}
+
+// clickhouseTail은 컬럼 괄호 뒤의 절들을 표 설정으로 담는다.
+//
+// 왜 따로 두는가: 다른 DB 에서 꼬리에 붙는 것들(ENGINE=InnoDB, CHARSET)은
+// ERD 가 표현하지 않아도 표가 달라지지 않는다. ClickHouse 는 반대다. 엔진과
+// 정렬 키가 **표의 구조 그 자체**이고, 파티션과 TTL 이 데이터의 수명을 정한다.
+//
+// 담지 않으면 이렇게 된다. SummingMergeTree ORDER BY (tenant, metric, day)
+// PARTITION BY toYYYYMM(day) TTL day + 365일 로 적어 넣은 표가, 초안에서는
+// MergeTree ORDER BY tuple() 짜리 표가 된다 — 집계도 정렬 키도 보관 기간도
+// 없는 다른 물건인데, 경고 한 줄 나오지 않는다.
+//
+// 값은 원문을 그대로 잘라 담는다. 토큰을 다시 이어 붙이면 toYYYYMM(day) 같은
+// 식에서 공백이 어긋난다.
+func (p *parser) clickhouseTail(tbl *schema.Table) {
+	type mark struct {
+		key      string
+		from, at int // from: 값이 시작하는 원문 위치, at: 절 이름이 시작하는 위치
+	}
+	var marks []mark
+	depth := 0
+	end := len(p.src)
+	// 주석은 절이 아니라 경계다. 절 하나의 값이 어디서 끝나는지를 정할 때
+	// 다음 절의 자리와 함께 본다.
+	commentAt := -1
+
+	for !p.done() {
+		t := p.peek()
+		switch {
+		case t.isPunct("("):
+			depth++
+		case t.isPunct(")"):
+			depth--
+		case t.isPunct(";") && depth <= 0:
+			end = t.pos
+			p.i = len(p.toks) // 아래에서 자르고 나면 더 볼 것이 없다.
+		}
+		if p.done() || end != len(p.src) {
+			break
+		}
+		if depth == 0 && t.kind == tWord {
+			matched := false
+			for _, c := range clickHouseTailClauses {
+				if !p.matchWords(c.words) {
+					continue
+				}
+				at := t.pos
+				p.i += len(c.words)
+				p.acceptPunct("=")
+				if p.peek().kind == tOperator && p.peek().text == "=" {
+					p.i++
+				}
+				from := len(p.src)
+				if !p.done() {
+					from = p.peek().pos
+				}
+				marks = append(marks, mark{key: c.key, from: from, at: at})
+				matched = true
+				break
+			}
+			if matched {
+				continue
+			}
+			// COMMENT 는 문자열 하나라 원문을 자를 필요가 없다.
+			if t.isWord("COMMENT") {
+				p.i++
+				p.acceptPunct("=")
+				if p.peek().kind == tOperator && p.peek().text == "=" {
+					p.i++
+				}
+				if p.peek().kind == tString {
+					tbl.Comment = p.next().val
+					if commentAt < 0 {
+						commentAt = t.pos
+					}
+					continue
+				}
+				continue
+			}
+		}
+		p.i++
+	}
+
+	if tbl.Options == nil {
+		tbl.Options = map[string]string{}
+	}
+	for i, m := range marks {
+		stop := end
+		if i+1 < len(marks) {
+			stop = marks[i+1].at
+		}
+		// COMMENT 가 중간에 끼면 그 앞에서 끊긴다. 절 하나가 다음 절까지
+		// 삼키지 않게 하려면 두 경계를 따로 두어야 한다 — 처음에 주석 자리를
+		// 앞 절의 경계 칸에 덮어썼더니, 그 칸이 곧 그 앞 절의 끝이라서
+		// 파티션 절이 TTL 절을 통째로 삼켰다.
+		if commentAt > m.at && commentAt < stop {
+			stop = commentAt
+		}
+		if m.at < stop && m.from < stop {
+			if v := cleanClickHouseClause(p.src[m.from:stop]); v != "" {
+				tbl.Options[m.key] = v
+			}
+		}
+	}
+	// ClickHouse 의 PRIMARY KEY 는 정렬 키의 앞부분일 뿐 유일성을 뜻하지 않는다.
+	// 표 설정으로만 남기고, ERD 의 기본키는 정렬 키에서 만든다.
+	if pk := tbl.Options["ch_primary_key"]; pk != "" {
+		delete(tbl.Options, "ch_primary_key")
+		if tbl.PrimaryKey == nil {
+			tbl.PrimaryKey = &schema.PrimaryKey{Columns: splitClickHouseKey(pk)}
+		}
+	}
+	if tbl.PrimaryKey == nil {
+		if cols := splitClickHouseKey(tbl.Options["order_by"]); len(cols) > 0 {
+			tbl.PrimaryKey = &schema.PrimaryKey{Columns: cols}
+		}
+	}
+}
+
+// cleanClickHouseClause는 잘라 온 절에서 군더더기를 뗀다.
+func cleanClickHouseClause(s string) string {
+	v := strings.TrimSpace(s)
+	v = strings.TrimSuffix(v, ";")
+	v = strings.TrimSpace(v)
+	// 괄호 한 겹은 벗긴다. 정렬 키를 (a, b) 로 담아 두면 DDL 을 쓸 때 다시
+	// 감싸게 되고, 안쪽 괄호가 표현식인지 목록인지 구분이 흐려진다.
+	if strings.HasPrefix(v, "(") && strings.HasSuffix(v, ")") && balancedOnce(v) {
+		return strings.TrimSpace(v[1 : len(v)-1])
+	}
+	return v
+}
+
+// balancedOnce는 맨 앞 괄호가 맨 뒤 괄호와 짝인지 본다.
+// toYYYYMM(day) 처럼 짝이 아닌 것을 벗기면 식이 깨진다.
+func balancedOnce(s string) bool {
+	depth := 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return i == len(s)-1
+			}
+		}
+	}
+	return false
+}
+
+// splitClickHouseKey는 정렬 키 목록을 컬럼 이름으로 가른다.
+// 괄호 안의 쉼표는 함수 인자이므로 세지 않는다.
+func splitClickHouseKey(expr string) []string {
+	var out []string
+	depth, start := 0, 0
+	push := func(s string) {
+		v := strings.Trim(strings.TrimSpace(s), "`\"")
+		// 식은 컬럼 이름이 아니다. toYYYYMM(day) 같은 것은 기본키로 두지 않는다.
+		if v != "" && !strings.ContainsAny(v, "() +-*/") {
+			out = append(out, v)
+		}
+	}
+	for i := 0; i < len(expr); i++ {
+		switch expr[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		case ',':
+			if depth == 0 {
+				push(expr[start:i])
+				start = i + 1
+			}
+		}
+	}
+	push(expr[start:])
+	return out
+}
+
+// matchWords는 지금 위치부터 낱말들이 순서대로 오는지 본다(위치는 옮기지 않는다).
+func (p *parser) matchWords(words []string) bool {
+	for i, w := range words {
+		if !p.peekAt(i).isWord(w) {
+			return false
+		}
+	}
+	return true
+}
+
 // tableTail은 컬럼 정의 괄호 뒤의 테이블 옵션에서 주석만 건진다.
 // 나머지(ENGINE, CHARSET, TABLESPACE)는 ERD가 표현하지 않는다.
+//
+// ClickHouse 는 예외다. 그쪽은 꼬리에 붙는 것이 표의 구조 그 자체라 따로 읽는다.
 func (p *parser) tableTail(tbl *schema.Table) {
+	if p.dialect == "clickhouse" {
+		p.clickhouseTail(tbl)
+		return
+	}
 	depth := 0
 	for !p.done() {
 		t := p.peek()
