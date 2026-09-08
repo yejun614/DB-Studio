@@ -705,6 +705,29 @@ func (a *sqlAdapter) RunStatements(ctx context.Context, t Target, r StatementReq
 // 문장 실행은 커넥션 하나에 고정해야 세션 상태(USE 등)가 이어진다.
 type querier interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+// rowlessStatement는 결과 집합이 없는 문장인지 앞 단어로 판단한다.
+//
+// 왜 필요한가: 대부분의 드라이버는 INSERT 를 Query 로 실행해도 "결과 없음"을
+// 정상으로 돌려준다. ClickHouse 의 네이티브 프로토콜은 그렇지 않다 — 조회와
+// 삽입이 서로 다른 대화라서, 삽입을 조회로 보내면 **문장은 서버에서 실행되고**
+// 드라이버만 커넥션을 버린다(driver: bad connection).
+//
+// 그 조합이 가장 나쁘다. 화면에는 실패로 뜨는데 값은 이미 들어가 있어서, 사람이
+// 다시 누르면 두 번 들어간다.
+//
+// 모르는 문장은 **조회로 본다.** 조회를 Exec 으로 보내면 결과를 통째로 잃지만,
+// 반대는 이 DB 에서만 문제이고 그 목록은 짧다.
+func rowlessStatement(stmt string) bool {
+	switch firstWord(strings.ToUpper(strings.TrimSpace(stripLeadingComments(stmt)))) {
+	case "INSERT", "CREATE", "DROP", "ALTER", "RENAME", "TRUNCATE",
+		"ATTACH", "DETACH", "OPTIMIZE", "SET", "USE", "GRANT", "REVOKE",
+		"KILL", "SYSTEM", "DELETE", "UPDATE":
+		return true
+	}
+	return false
 }
 
 func (a *sqlAdapter) runOne(ctx context.Context, db querier, stmt string, maxRows int, readOnly bool) StatementResult {
@@ -720,9 +743,27 @@ func (a *sqlAdapter) runOne(ctx context.Context, db querier, stmt string, maxRow
 		return res
 	}
 
-	// 결과 집합이 있는지 미리 알 수 없으므로 항상 Query로 실행한다.
+	// 결과 집합이 있는지 미리 알 수 없으므로 기본은 Query다.
 	// Exec로 실행하면 SELECT의 결과를 버리게 되고, Query로 실행한 INSERT는
-	// 결과가 없는 정상 응답을 돌려준다(드라이버가 모두 이 동작을 지원한다).
+	// 대개 결과가 없는 정상 응답을 돌려준다.
+	//
+	// ClickHouse만 예외다(execWrites). 그쪽은 조회와 삽입이 프로토콜에서 다른
+	// 대화라, 쓰기를 Query로 보내면 문장은 실행되고 드라이버만 커넥션을 버린다 —
+	// 화면에는 실패로 뜨는데 값은 들어가 있는, 가장 나쁜 조합이 된다.
+	if a.execWrites && rowlessStatement(stmt) {
+		out, xerr := db.ExecContext(ctx, stmt)
+		if xerr != nil {
+			res.Error = xerr.Error()
+			return res
+		}
+		res.Kind = "ok"
+		res.Affected = -1
+		if n, nerr := out.RowsAffected(); nerr == nil && n >= 0 {
+			res.Affected = n
+		}
+		return res
+	}
+
 	rows, err := db.QueryContext(ctx, stmt)
 	if err != nil {
 		res.Error = err.Error()

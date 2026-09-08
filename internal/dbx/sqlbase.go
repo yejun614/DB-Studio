@@ -29,6 +29,10 @@ type sqlAdapter struct {
 	needsDatabase bool
 	// needsHost가 true면 host가 비어 있을 때 Validate가 실패한다.
 	needsHost bool
+	// execWrites가 true면 쓰기 문장을 Query가 아니라 Exec으로 보낸다.
+	//
+	// ClickHouse 하나를 위한 것이다. 자세한 이유는 rowlessStatement 의 주석에 있다.
+	execWrites bool
 	// introspect는 종류별 스키마 읽기 구현이다. nil이면 ErrNotImplemented를 반환한다.
 	introspect func(ctx context.Context, db *sql.DB, t Target, s *schema.Schema) error
 	// metrics는 종류별 지표 수집 구현이다. nil이면 ErrNotImplemented를 반환한다.

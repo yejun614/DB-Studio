@@ -295,6 +295,23 @@ func metricsClickHouse(ctx context.Context, db *sql.DB, t Target, set *metric.Se
 	async := scanClickHouseMetrics(ctx, db,
 		`SELECT metric, value FROM system.asynchronous_metrics`, set)
 
+	// 어느 표에 있든 찾는다.
+	//
+	// 두 표의 경계는 생각보다 흐리고 버전마다 옮겨 다닌다. 24.8 에서 재 보면
+	// MemoryTracking 은 system.metrics 에, MaxPartCountForPartition 과
+	// Uptime 은 system.asynchronous_metrics 에 있다 — 이름만 보고 짐작하면 틀린다.
+	//
+	// 실제로 틀렸었다. 파트 수를 system.metrics 에서 찾게 해 뒀는데 거기엔 없어서,
+	// ClickHouse 의 대표 지표가 조용히 빠진 채로 그래프가 그려졌다. 없는 이름은
+	// 그냥 없는 것으로 지나가므로 오류 하나 나지 않는다.
+	find := func(name string) (float64, bool) {
+		if v, ok := now[name]; ok {
+			return v, true
+		}
+		v, ok := async[name]
+		return v, ok
+	}
+
 	if v, ok := now["Query"]; ok {
 		set.Gauge(metric.NameConnActive, v, metric.UnitCount)
 	}
@@ -304,18 +321,18 @@ func metricsClickHouse(ctx context.Context, db *sql.DB, t Target, set *metric.Se
 		set.Gauge(metric.NameConnTotal,
 			now["TCPConnection"]+now["HTTPConnection"]+now["MySQLConnection"], metric.UnitCount)
 	}
-	if v, ok := now["MaxPartCountForPartition"]; ok {
+	if v, ok := find("MaxPartCountForPartition"); ok {
 		// 파티션 하나의 파트 수. 이 값이 300 근처로 오르면 병합이 쓰기를 따라오지
 		// 못한다는 뜻이고, 그대로 두면 INSERT 가 거절되기 시작한다.
 		set.Gauge(metric.NameClickHouseMaxParts, v, metric.UnitCount)
 	}
-	if v, ok := now["ReplicasMaxAbsoluteDelay"]; ok {
+	if v, ok := find("ReplicasMaxAbsoluteDelay"); ok {
 		set.Gauge(metric.NameReplicaLag, v, metric.UnitSeconds)
 	}
-	if v, ok := async["Uptime"]; ok {
+	if v, ok := find("Uptime"); ok {
 		set.Gauge(metric.NameUptime, v, metric.UnitSeconds)
 	}
-	if v, ok := async["MemoryTracking"]; ok {
+	if v, ok := find("MemoryTracking"); ok {
 		set.Gauge(metric.NameMemoryUsed, v, metric.UnitBytes)
 	}
 
@@ -473,14 +490,22 @@ func clickhouseQueryStats(ctx context.Context, db *sql.DB, f *dblog.Filter, res 
 
 func clickhouseRunningQueries(ctx context.Context, db *sql.DB, f *dblog.Filter, res *dblog.Result) {
 	label := dblog.Label(dblog.SourceCurrent)
+	// system.processes 에는 시작 시각 컬럼이 없다(그것은 query_log 의 것이다).
+	// 지금에서 흐른 시간을 빼서 만든다. 주소는 IPv6 타입이라 문자열로 바꿔 받는다 —
+	// 드라이버가 그대로는 못 읽는다.
 	rows, err := db.QueryContext(ctx, `
-		SELECT query_start_time, elapsed * 1000, query, user, address, read_rows, memory_usage
+		SELECT now64(3) - toIntervalMillisecond(toUInt64(elapsed * 1000)) AS started,
+		       elapsed * 1000 AS ms, query, user, toString(address) AS addr,
+		       read_rows, memory_usage
 		FROM system.processes
 		ORDER BY elapsed DESC
 		LIMIT 100`)
 	if err != nil {
+		// 사유를 지어내지 않는다. 예전에는 무조건 "권한 부족"이라고 적었는데,
+		// 정작 이 자리에서 났던 것은 없는 컬럼을 물은 SQL 오류였다 — 그 안내를
+		// 믿고 권한을 아무리 고쳐도 달라지지 않는다.
 		res.MarkSource(dblog.SourceCurrent, label, false, 0,
-			"system.processes 를 읽지 못했습니다 (권한 부족)")
+			"system.processes 를 읽지 못했습니다: "+err.Error())
 		return
 	}
 	defer rows.Close()

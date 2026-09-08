@@ -61,7 +61,8 @@ func init() {
 		kind: model.KindClickHouse, driver: "clickhouse", defaultPort: 9000,
 		caps:         clickhouseCaps,
 		versionQuery: "SELECT version()", needsHost: true, needsDatabase: true,
-		dsn: clickhouseDSN, introspect: introspectClickHouse,
+		execWrites: true,
+		dsn:        clickhouseDSN, introspect: introspectClickHouse,
 		metrics: metricsClickHouse, logs: logsClickHouse,
 	})
 	register(&sqlAdapter{
