@@ -179,7 +179,10 @@
   결과를 써 넣는 표, `LowCardinality` 와 정수 폭(손대지 않은 컬럼은 원래 타입 문자열을
   그대로 쓴다 — 논리 타입으로 다시 쓰면 `LowCardinality(String)` 이 `String` 이 되고
   `UInt32` 가 `UInt64` 가 된다). 정렬 키는 MergeTree 계열에만 붙인다(Kafka·Log·Memory 에
-  붙이면 서버가 거절한다)
+  붙이면 서버가 거절한다).
+  **클러스터 DDL** 도 불러온다 — `ON CLUSTER`(지나가고 커넥션 옵션 `cluster` 가 그 자리다),
+  `CREATE TABLE 분산표 AS 로컬표`(컬럼만 베낀다. 엔진·정렬 키는 두 표가 다르다),
+  `CREATE MATERIALIZED VIEW … TO 대상표`, `CREATE DICTIONARY`(건너뛰되 이유를 적는다)
 - **S3 호환 오브젝트 스토리지**: 규약 하나로 AWS·MinIO·Ceph RGW·Wasabi·R2를 모두 다룬다.
   SigV4 서명은 SDK 없이 손으로 쓰고 AWS 문서의 서명 예제로 확인한다. 스토리지 화면에서
   버킷·객체를 접두사 단위로 훑고, 버킷 크기는 눌렀을 때만 상한까지 훑어 어림잡는다
