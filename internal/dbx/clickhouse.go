@@ -62,6 +62,112 @@ func clickhouseDSN(t Target) (string, error) {
 // information_schema 가 있기는 하지만 쓰지 않는다. 그쪽은 호환을 위한 뷰라서
 // ClickHouse 고유의 것 — 엔진, 정렬 키, 파티션 키, 압축 후 크기 — 이 빠져 있고,
 // 그 넷이 이 DB 에서 표를 이해하는 데 가장 중요한 값이다.
+// clickhouseTableTTL은 CREATE 문에서 표의 TTL 절을 꺼낸다.
+//
+// 왜 이렇게까지 하는가: system.tables 에는 정렬 키도 파티션도 컬럼으로 있는데
+// **TTL 만 없다.** 그래서 CREATE 문을 다시 읽는 수밖에 없다.
+//
+// 안 하면 조용히 사라진다. 보관 90일이 걸린 표를 ERD 로 가져와 다시 만들면
+// TTL 없는 표가 되고, 그 사이 아무 경고도 나지 않는다. 데이터가 영원히
+// 쌓이기 시작하는데 화면에는 "같은 표"라고 적혀 있는 셈이다.
+//
+// 줄 단위로 자르면 안 된다. SHOW CREATE 는 여러 줄로 보여 주지만 드라이버가
+// 돌려주는 값은 **한 줄**이다 — 그 차이 때문에 한 번 틀렸다. 괄호 깊이와
+// 따옴표를 세면서 맨 바깥 낱말만 본다.
+func clickhouseTableTTL(createSQL string) string {
+	heads := topLevelWords(createSQL)
+
+	// 컬럼 목록 안(깊이 1)의 TTL 은 컬럼에 걸린 것이지 표의 것이 아니다.
+	// 맨 바깥만 보므로 애초에 걸리지 않지만, ENGINE 뒤부터 찾아 한 겹 더 둔다.
+	from := 0
+	for i, h := range heads {
+		if h.word == "ENGINE" {
+			from = i + 1
+			break
+		}
+	}
+	for i := from; i < len(heads); i++ {
+		if heads[i].word != "TTL" {
+			continue
+		}
+		start := heads[i].end
+		end := len(createSQL)
+		for j := i + 1; j < len(heads); j++ {
+			if clickhouseClauseHeads[heads[j].word] {
+				end = heads[j].start
+				break
+			}
+		}
+		return strings.TrimSpace(createSQL[start:end])
+	}
+	return ""
+}
+
+// clickhouseClauseHeads는 TTL 절을 끝내는 낱말들이다.
+//
+// TO·DELETE·GROUP·WHERE 는 넣지 않는다. 그것들은 TTL 절 **안에** 올 수 있어서
+// (TTL d + INTERVAL 1 DAY TO VOLUME 'cold'), 끝으로 보면 절이 잘린다.
+var clickhouseClauseHeads = map[string]bool{
+	"SETTINGS": true, "COMMENT": true, "SAMPLE": true,
+	"PRIMARY": true, "ORDER": true, "PARTITION": true, "AS": true, "ENGINE": true,
+}
+
+// topLevelWord는 괄호·따옴표 밖에 있는 낱말 하나다.
+type topLevelWord struct {
+	word       string
+	start, end int
+}
+
+// topLevelWords는 맨 바깥 깊이의 낱말만 훑는다.
+//
+// 괄호 안(컬럼 목록, 함수 인자)과 따옴표 안(주석 문구), 백틱 안(식별자)은 건너뛴다.
+// 주석에 "SETTINGS" 같은 낱말이 들어 있어도 절이 끊기지 않게 하려는 것이다.
+func topLevelWords(s string) []topLevelWord {
+	isWordByte := func(c byte) bool {
+		return c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_'
+	}
+	var out []topLevelWord
+	depth, i := 0, 0
+	for i < len(s) {
+		c := s[i]
+		switch {
+		case c == '(':
+			depth++
+			i++
+		case c == ')':
+			if depth > 0 {
+				depth--
+			}
+			i++
+		case c == '\'' || c == '`':
+			quote := c
+			i++
+			for i < len(s) {
+				if s[i] == '\\' && quote == '\'' {
+					i += 2
+					continue
+				}
+				if s[i] == quote {
+					i++
+					break
+				}
+				i++
+			}
+		case depth == 0 && isWordByte(c) && !(c >= '0' && c <= '9'):
+			start := i
+			for i < len(s) && isWordByte(s[i]) {
+				i++
+			}
+			out = append(out, topLevelWord{
+				word: strings.ToUpper(s[start:i]), start: start, end: i,
+			})
+		default:
+			i++
+		}
+	}
+	return out
+}
+
 func introspectClickHouse(ctx context.Context, db *sql.DB, t Target, s *schema.Schema) error {
 	dbName := strings.TrimSpace(t.Conn.DatabaseName)
 	if dbName == "" {
@@ -73,18 +179,19 @@ func introspectClickHouse(ctx context.Context, db *sql.DB, t Target, s *schema.S
 
 	tables := map[string]*schema.Table{}
 	rows, err := db.QueryContext(ctx, `
-		SELECT name, engine, sorting_key, partition_key, primary_key, comment, total_rows, total_bytes
+		SELECT name, engine, sorting_key, partition_key, primary_key, comment, total_rows, total_bytes,
+		       create_table_query
 		FROM system.tables
 		WHERE database = ? AND NOT is_temporary AND engine NOT LIKE '%View'`, dbName)
 	if err != nil {
 		return fmt.Errorf("테이블 목록 조회 실패: %w", err)
 	}
 	for rows.Next() {
-		var name, engine, sortKey, partKey, pk, comment string
+		var name, engine, sortKey, partKey, pk, comment, createSQL string
 		// total_rows·total_bytes 는 엔진에 따라 NULL 이다(Log·Memory 등).
 		var totalRows, totalBytes sql.NullInt64
 		if err := rows.Scan(&name, &engine, &sortKey, &partKey, &pk, &comment,
-			&totalRows, &totalBytes); err != nil {
+			&totalRows, &totalBytes, &createSQL); err != nil {
 			rows.Close()
 			return fmt.Errorf("테이블 정보 스캔 실패: %w", err)
 		}
@@ -103,6 +210,9 @@ func introspectClickHouse(ctx context.Context, db *sql.DB, t Target, s *schema.S
 		}
 		if partKey != "" {
 			tbl.Options["partition_by"] = partKey
+		}
+		if ttl := clickhouseTableTTL(createSQL); ttl != "" {
+			tbl.Options["ttl"] = ttl
 		}
 		// 정렬 키를 기본키로도 둔다. ClickHouse 의 기본키는 유일성을 강제하지
 		// 않지만, "이 표를 무엇으로 찾는가"라는 뜻은 다른 DB 의 기본키와 같다.
