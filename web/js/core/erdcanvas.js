@@ -126,6 +126,62 @@ export class ErdCanvas {
 
     this.bind();
     this.watchFonts();
+    this.watchSize();
+  }
+
+  // watchSize는 캔버스의 크기가 바뀔 때 viewBox 의 가로세로 비율을 다시 맞춘다.
+  //
+  // 왜 필요한가: viewBox 는 우리가 정하고 요소 크기는 브라우저가 정한다. 둘의
+  // 비율이 어긋나면 preserveAspectRatio="meet" 가 남는 쪽을 여백으로 남기는데,
+  // 그 순간부터 **화면에 그려지는 배율이 우리가 아는 값과 달라진다.**
+  //
+  // 재 보면 두 배까지 벌어졌다: 요소가 694x277 인데 viewBox 가 700x540 이면
+  // 실제 배율은 0.51 인데 폭 기준으로는 0.99 다. 그 값으로 이동 거리를 계산하고
+  // 글자 크기를 정하므로, 창을 한 번 줄인 뒤부터 끌기와 줌이 "이상해진다".
+  //
+  // 창만 바꿨을 때 **배율은 그대로 두고 보이는 범위만 넓힌다.** 창을 크게 하면
+  // 더 많이 보이는 것이 사람이 기대하는 일이고, 배율이 따라 바뀌면 창을 조금
+  // 건드릴 때마다 도면이 커졌다 작아진다.
+  watchSize() {
+    if (typeof ResizeObserver !== 'function') return;
+    const el = this.svg;
+    this.sizeObserver = new ResizeObserver(() => this.syncViewport());
+    this.sizeObserver.observe(el);
+  }
+
+  syncViewport() {
+    const width = this.svg.clientWidth;
+    const height = this.svg.clientHeight;
+    if (!width || !height) return;
+    // **바뀌기 전**의 크기로 배율을 잰다.
+    //
+    // 이 순서가 중요하다: 옵저버는 요소가 이미 새 크기가 된 뒤에 불린다. 그때의
+    // 크기로 재면 여백이 생긴 상태의 배율(= 이미 달라진 값)을 지키게 되어, 창을
+    // 줄일 때마다 도면이 확 작아진다. 지난 크기로 재야 "배율은 그대로, 보이는
+    // 범위만 달라진다"가 된다.
+    const prev = this.viewportPx;
+    this.viewportPx = { w: width, h: height };
+    if (!this.view?.w || !this.view?.h) return;
+
+    const base = prev && prev.w && prev.h ? prev : { w: width, h: height };
+    const upp = Math.max(this.view.w / base.w, this.view.h / base.h);
+
+    // 이미 맞아 있으면 건드리지 않는다. viewBox 를 매번 다시 쓰면 확대·축소가
+    // 소수점에서 조금씩 흘러간다.
+    const want = width / height;
+    const have = this.view.w / this.view.h;
+    if (base === prev && Math.abs(want - have) < 0.001
+      && Math.abs(base.w - width) < 0.5 && Math.abs(base.h - height) < 0.5) {
+      return;
+    }
+
+    const cx = this.view.x + this.view.w / 2;
+    const cy = this.view.y + this.view.h / 2;
+    this.view.w = width * upp;
+    this.view.h = height * upp;
+    this.view.x = cx - this.view.w / 2;
+    this.view.y = cy - this.view.h / 2;
+    this.applyViewBox();
   }
 
   // watchFonts는 글꼴이 늦게 도착했을 때 다시 재고 다시 그린다.
@@ -269,6 +325,8 @@ export class ErdCanvas {
 
   destroy() {
     this.unbind?.();
+    this.sizeObserver?.disconnect();
+    this.sizeObserver = null;
     // 화면을 떠나는 순간에도 예약된 프레임이 남아 있을 수 있다.
     // 그 콜백은 이미 버려진 레이어를 만진다.
     if (this.linkFrame) cancelAnimationFrame(this.linkFrame);
@@ -1230,7 +1288,9 @@ export class ErdCanvas {
         return;
       }
       if (this.drag.mode === 'pan') {
-        const scale = this.view.w / svg.clientWidth;
+        // 배율 계산은 viewScale 한 곳에만 둔다. 여기서 폭만 보고 다시 계산했더니,
+        // 세로가 한계축인 창 모양에서 끌린 거리가 실제의 두 배가 됐다.
+        const scale = this.viewScale();
         this.view.x = this.drag.view.x - (e.clientX - this.drag.startClient.x) * scale;
         this.view.y = this.drag.view.y - (e.clientY - this.drag.startClient.y) * scale;
         this.applyViewBox();
@@ -1960,10 +2020,19 @@ export class ErdCanvas {
   //
   // 화면에서 12.5px 로 보이려면 도면 좌표에서는 12.5 * viewScale 이어야 한다.
   // 폭을 못 재는 순간(화면에 붙기 전)에는 1로 둔다 — 그때 그린 것은 곧 다시 그려진다.
+  //
+  // **두 축 중 큰 쪽**을 쓴다. preserveAspectRatio 가 "meet" 이라 브라우저는 두
+  // 축의 배율 중 **작은** 쪽으로 그리고, 그 역수가 곧 좌표 한 칸의 픽셀 수다.
+  //
+  // 폭만 보면 안 되는 이유: 창을 옆으로 좁히면(또는 사이드바를 펴면) 세로가
+  // 한계축이 되는데, 그때 폭 기준값은 실제와 두 배까지 벌어진다. 이 값으로
+  // 화면 이동 거리를 계산하므로, 그 어긋남은 곧 "끌었는데 두 배로 움직인다"가 된다.
   viewScale() {
     const width = this.svg?.clientWidth || this.wrap?.clientWidth || 0;
+    const height = this.svg?.clientHeight || this.wrap?.clientHeight || 0;
     if (!width || !this.view?.w) return 1;
-    return this.view.w / width;
+    if (!height || !this.view?.h) return this.view.w / width;
+    return Math.max(this.view.w / width, this.view.h / height);
   }
 
   // scaleChanged는 마지막으로 글자 크기를 맞춘 뒤 배율이 달라졌는지다.
