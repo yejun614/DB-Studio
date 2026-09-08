@@ -80,3 +80,43 @@ func TestClickHouseViewKindChangeIsSeen(t *testing.T) {
 		t.Errorf("대상 표가 바뀐 것을 알아채지 못했습니다 (변경 %d건)", n)
 	}
 }
+
+// 정렬 키를 받지 않는 엔진에 ORDER BY 를 붙이면 서버가 문장을 거절한다.
+// Kafka 표에는 브로커 주소와 토픽 이름(SETTINGS)이 표를 표이게 하는 전부다.
+func TestClickHouseNonMergeTreeEngine(t *testing.T) {
+	sc := &Schema{Dialect: "clickhouse", Shape: ShapeRelational, Tables: []*Table{{
+		Name: "events_queue",
+		Columns: []*Column{
+			{Name: "id", Type: LogicalType{Base: TypeBigInt, Unsigned: true}, RawType: "UInt64"},
+		},
+		Options: map[string]string{
+			"engine": "Kafka",
+			"settings": "kafka_broker_list = 'kafka:9092', kafka_topic_list = 'events', " +
+				"kafka_group_name = 'clickhouse-events', kafka_format = 'JSONEachRow'",
+		},
+	}}}
+	up := BuildPlan("clickhouse", Diff(
+		&Schema{Dialect: "clickhouse", Shape: ShapeRelational}, sc)).UpSQL()
+
+	if strings.Contains(up, "ORDER BY") {
+		t.Errorf("Kafka 엔진에 정렬 키가 붙었습니다 — 서버가 거절합니다:\n%s", up)
+	}
+	if !strings.Contains(up, "kafka_broker_list") {
+		t.Errorf("Kafka 설정이 빠졌습니다 — 이대로는 표가 만들어지지 않습니다:\n%s", up)
+	}
+}
+
+// MergeTree 는 그대로 정렬 키를 받는다. 위의 수정이 이쪽을 건드리면 안 된다.
+func TestClickHouseMergeTreeStillOrders(t *testing.T) {
+	sc := &Schema{Dialect: "clickhouse", Shape: ShapeRelational, Tables: []*Table{{
+		Name:       "t",
+		Columns:    []*Column{{Name: "id", Type: LogicalType{Base: TypeBigInt}, RawType: "Int64"}},
+		Options:    map[string]string{"engine": "ReplacingMergeTree", "order_by": "id"},
+		PrimaryKey: &PrimaryKey{Columns: []string{"id"}},
+	}}}
+	up := BuildPlan("clickhouse", Diff(
+		&Schema{Dialect: "clickhouse", Shape: ShapeRelational}, sc)).UpSQL()
+	if !strings.Contains(up, "ORDER BY (id)") {
+		t.Errorf("MergeTree 계열에서 정렬 키가 사라졌습니다:\n%s", up)
+	}
+}

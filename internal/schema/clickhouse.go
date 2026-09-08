@@ -264,6 +264,17 @@ func ClickHouseEngineClause(t *Table, ident func(string) string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, " ENGINE = %s", engine)
 
+	// 정렬 키를 받지 않는 엔진이 있다. Kafka·Log·Memory 처럼 병합할 파트가
+	// 없는 것들이다. 거기에 ORDER BY 를 붙이면 서버가 문장을 거절한다 —
+	// 실제로 Kafka 표에 ORDER BY tuple() 이 나가고 있었다.
+	if !clickHouseEngineTakesOrder(engine) {
+		if part := strings.TrimSpace(t.Options["partition_by"]); part != "" {
+			fmt.Fprintf(&b, " PARTITION BY %s", part)
+		}
+		writeClickHouseTail(&b, t)
+		return b.String()
+	}
+
 	order := strings.TrimSpace(t.Options["order_by"])
 	if order == "" && t.PrimaryKey != nil && len(t.PrimaryKey.Columns) > 0 {
 		cols := make([]string, 0, len(t.PrimaryKey.Columns))
@@ -284,13 +295,36 @@ func ClickHouseEngineClause(t *Table, ident func(string) string) string {
 	if part := strings.TrimSpace(t.Options["partition_by"]); part != "" {
 		fmt.Fprintf(&b, " PARTITION BY %s", part)
 	}
+	writeClickHouseTail(&b, t)
+	return b.String()
+}
+
+// writeClickHouseTail은 어느 엔진에나 같은 모양으로 붙는 뒷부분을 쓴다.
+//
+// SETTINGS 는 엔진에 따라 표를 표이게 하는 전부다. Kafka 엔진은 브로커 주소와
+// 토픽 이름이 거기 있어서, 빼고 만들면 서버가 문장을 거절한다.
+func writeClickHouseTail(b *strings.Builder, t *Table) {
 	if ttl := strings.TrimSpace(t.Options["ttl"]); ttl != "" {
-		fmt.Fprintf(&b, " TTL %s", ttl)
+		fmt.Fprintf(b, " TTL %s", ttl)
+	}
+	if st := strings.TrimSpace(t.Options["settings"]); st != "" {
+		fmt.Fprintf(b, " SETTINGS %s", st)
 	}
 	if t.Comment != "" {
-		fmt.Fprintf(&b, " COMMENT %s", quoteLiteral(t.Comment))
+		fmt.Fprintf(b, " COMMENT %s", quoteLiteral(t.Comment))
 	}
-	return b.String()
+}
+
+// clickHouseEngineTakesOrder는 그 엔진이 정렬 키를 받는지다.
+//
+// 정렬 키는 MergeTree 계열의 것이다. 병합할 파트가 없는 엔진(Kafka·Log·
+// Memory·Distributed 등)에 붙이면 문법 오류가 난다.
+func clickHouseEngineTakesOrder(engine string) bool {
+	name := engine
+	if open := strings.Index(name, "("); open >= 0 {
+		name = name[:open]
+	}
+	return strings.Contains(strings.ToLower(strings.TrimSpace(name)), "mergetree")
 }
 
 // UnwrapClickHouseType은 감싼 타입을 벗겨 알맹이와 널 허용 여부를 돌려준다.

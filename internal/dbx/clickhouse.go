@@ -214,6 +214,9 @@ func introspectClickHouse(ctx context.Context, db *sql.DB, t Target, s *schema.S
 		if ttl := clickhouseTableTTL(createSQL); ttl != "" {
 			tbl.Options["ttl"] = ttl
 		}
+		if st := clickhouseTableSettings(createSQL); st != "" {
+			tbl.Options["settings"] = st
+		}
 		// 정렬 키를 기본키로도 둔다. ClickHouse 의 기본키는 유일성을 강제하지
 		// 않지만, "이 표를 무엇으로 찾는가"라는 뜻은 다른 DB 의 기본키와 같다.
 		// 이렇게 두면 ERD 가 그것을 열쇠로 그리고, 그 그림이 실제 쓰임에 맞는다.
@@ -288,6 +291,30 @@ func clickhouseColumns(ctx context.Context, db *sql.DB, dbName string, tables ma
 		tbl.Columns = append(tbl.Columns, col)
 	}
 	return rows.Err()
+}
+
+// clickhouseTableSettings는 CREATE 문에서 SETTINGS 절을 꺼낸다.
+//
+// 엔진에 따라 이 절이 표를 표이게 하는 전부다. Kafka 엔진은 브로커 주소와
+// 토픽 이름이 여기 있어서, 빼고 만들면 서버가 문장을 거절한다. MergeTree 는
+// 대개 기본값(index_granularity = 8192)뿐이라 있으나 없으나 같지만, 있는
+// 그대로 옮기는 편이 "이 표를 다시 만든다"는 말에 맞는다.
+func clickhouseTableSettings(createSQL string) string {
+	words := topLevelWords(createSQL)
+	for i, w := range words {
+		if w.word != "SETTINGS" {
+			continue
+		}
+		end := len(createSQL)
+		for _, nx := range words[i+1:] {
+			if nx.word == "COMMENT" || nx.word == "AS" {
+				end = nx.start
+				break
+			}
+		}
+		return strings.TrimSpace(createSQL[w.end:end])
+	}
+	return ""
 }
 
 // clickhouseViewTarget은 구체화 뷰가 결과를 써 넣는 표(TO 절)를 꺼낸다.
