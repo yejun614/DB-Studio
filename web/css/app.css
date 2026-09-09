@@ -1579,6 +1579,9 @@ option { background: var(--surface); color: var(--text); }
   text-align: center;
 }
 .empty p { margin: 0; }
+/* 여러 줄짜리 설명이 붙는 빈 상태. 폭을 재지 않으면 넓은 화면에서 한 줄이
+ * 끝에서 끝까지 늘어나, 눈이 다음 줄의 시작을 못 찾는다. */
+.empty-note { max-width: 62ch; line-height: 1.55; }
 
 .loading { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 48px; color: var(--text-mute); }
 .spinner {

@@ -292,6 +292,9 @@ export async function renderData(outlet, params, query) {
       h('span.object-name', {}, o.name),
       h('span.object-meta', {},
         o.kind === 'view' ? badge('뷰', 'neutral') : null,
+        // 큐는 표처럼 보이지만 조회하면 메시지가 사라진다(ClickHouse 의 Kafka
+        // 엔진 등). 목록에서 표와 같아 보이면 눌러 보고서야 알게 된다.
+        o.kind === 'queue' ? badge('큐', 'warn') : null,
         o.rowCount >= 0 ? h('span.muted.small', {}, `~${o.rowCount.toLocaleString()}`) : null,
       ),
     );
@@ -299,6 +302,21 @@ export async function renderData(outlet, params, query) {
       btn.classList.add('is-on');
     }
     return btn;
+  }
+
+  // queueNotice는 큐를 골랐을 때 표 대신 보여 주는 설명이다.
+  //
+  // 오류로 알리지 않는 이유: 오류는 사람이 무언가 잘못했다는 뜻으로 읽힌다.
+  // 잘못한 것이 없고, 그 표는 원래 이 화면에서 열지 않는 물건이다.
+  function queueNotice(o) {
+    return h('div.empty', {}, icon('workflow', 28),
+      h('p', {}, `${o.name} 는 큐입니다 (Kafka·RabbitMQ 같은 스트림 엔진)`),
+      h('p.muted.small.empty-note', {},
+        '표처럼 보이지만 조회하면 읽은 메시지가 큐에서 사라지므로, 이 화면에서는 '
+        + '열지 않습니다. 쌓인 값은 구체화 뷰가 넣어 주는 대상 표에 있습니다 — '
+        + '구조 화면에서 이 표를 읽는 구체화 뷰와 그 대상 표를 볼 수 있습니다.'),
+      h('p.muted.small.empty-note', {},
+        '큐 자체의 상태(랙·컨슈머 그룹)는 메시지 브로커 화면에서 봅니다.'));
   }
 
   async function selectObject(o) {
@@ -334,6 +352,15 @@ export async function renderData(outlet, params, query) {
 
   async function loadRows(withTotal = false) {
     if (!view.object) return;
+    // 큐는 아예 묻지 않는다.
+    //
+    // 서버도 막지만(그쪽이 최후의 방어다), 여기서 멈추는 편이 낫다 — 오류로
+    // 알려 주면 사람은 무언가 잘못한 것으로 읽는다. 잘못한 것이 없고, 그 표는
+    // 원래 이 화면에서 열지 않는 물건이다.
+    if (view.object.kind === 'queue') {
+      mount(tableBox, queueNotice(view.object));
+      return;
+    }
     mount(tableBox, spinner(`${view.object.name} 조회 중…`));
     try {
       const res = await api.post(`/connections/${conn.id}/data/query`, {
