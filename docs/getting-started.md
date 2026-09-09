@@ -57,6 +57,9 @@ $env:CGO_ENABLED="0"; go build -o bin/dbstudio.exe ./cmd/dbstudio
 | `-log-max-mb` | `DBSTUDIO_LOG_MAX_MB` | `20` | 이 크기를 넘으면 `.1`로 밀어내고 새로 시작 |
 | `-backup-cmd` | `DBSTUDIO_BACKUP_CMD` | (없음) | 운영 DB 마이그레이션 전 실행할 외부 명령 |
 | `-allow-shell` | `DBSTUDIO_ALLOW_SHELL` | `false` | 매크로의 셸 노드 활성화 (사용자에게 `script.run` 권한도 있어야 한다) |
+| `-allow-docker` | `DBSTUDIO_ALLOW_DOCKER` | `false` | 도커로 DB 컨테이너 관리 (사용자에게 `docker.manage` 권한도 있어야 한다) |
+| `-docker-socket` | `DBSTUDIO_DOCKER_SOCKET` | `/var/run/docker.sock` | 도커 데몬 소켓 경로 |
+| `-docker-timeout` | `DBSTUDIO_DOCKER_TIMEOUT` | `30s` | 도커 제어 호출 하나의 시간 상한 (로그 따라가기에는 걸지 않는다) |
 | `-shell-timeout` | `DBSTUDIO_SHELL_TIMEOUT` | `2m` | 셸 노드 하나의 실행 시간 상한 |
 | `-macro-timeout` | `DBSTUDIO_MACRO_TIMEOUT` | `15m` | 매크로 한 번의 실행 시간 상한 |
 | `-macro-lua-timeout` | `DBSTUDIO_MACRO_LUA_TIMEOUT` | `1m` | Lua 노드 하나의 실행 시간 상한 (무한 루프 방어) |
@@ -95,6 +98,29 @@ $env:CGO_ENABLED="0"; go build -o bin/dbstudio.exe ./cmd/dbstudio
 > 도커로 띄운다면 **`-alpine` 태그**를 써야 한다. 기본 이미지(distroless)에는 셸이 아예 없어서
 > 플래그만 켜도 실행 시점에 실패한다. alpine 변종에는 `bash` 가 함께 들어 있으므로
 > `DBSTUDIO_ALLOW_SHELL=true` 하나만 주면 된다.
+
+> **`-allow-docker` 는 같은 종류의 스위치이고, 더 무겁다.** 도커 소켓에 닿는다는 것은
+> 그 기계에서 **무엇이든 할 수 있다**는 뜻이다 — 특권 컨테이너를 띄워 호스트의 파일
+> 계통을 마운트하면 그것으로 끝이고, 그 사이에 아무 경고도 나지 않는다. 셸 스위치와
+> 같은 이유로 프로세스를 띄우는 사람이 정한다.
+>
+> 켠 뒤에 소켓을 넣어야 한다. 그리고 이 앱은 **nonroot(uid 65532)로 돌고 도커 소켓은
+> 보통 `root:docker`** 이므로, 마운트만으로는 열 수 없다.
+>
+> ```yaml
+> services:
+>   dbstudio:
+>     environment:
+>       DBSTUDIO_ALLOW_DOCKER: "true"
+>     volumes:
+>       - /var/run/docker.sock:/var/run/docker.sock
+>     # 호스트의 docker 그룹 gid 를 준다: getent group docker
+>     group_add: ["988"]
+> ```
+>
+> 소켓을 그대로 주는 것이 부담스러우면 소켓 프록시를 앞에 두고 필요한 경로만 열고,
+> `-docker-socket` 으로 그 프록시의 소켓을 가리킨다. 이 앱이 무엇을 부르는지는
+> **DB 컨테이너** 화면이 상태와 함께 알려 준다.
 
 ## 로그인
 
