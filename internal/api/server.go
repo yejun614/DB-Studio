@@ -9,6 +9,7 @@ import (
 	"os"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gofiber/contrib/websocket"
@@ -30,6 +31,7 @@ import (
 	"dbstudio/internal/model"
 	"dbstudio/internal/monitor"
 	"dbstudio/internal/notify"
+	"dbstudio/internal/provision"
 	"dbstudio/internal/store"
 )
 
@@ -50,6 +52,9 @@ type Server struct {
 	migrator *migrate.Runner
 	macros   *macro.Engine
 	backups  *backup.Service
+	// prov는 DB 컨테이너 러너다. 도커 기능을 처음 쓸 때 만든다(provisioner).
+	prov     *provision.Runner
+	provOnce sync.Once
 	web      fs.FS
 	app      *fiber.App
 }
@@ -542,6 +547,13 @@ func (s *Server) routes() {
 	// 이중 게이트(-allow-docker × docker.manage)는 requireDocker 안에 있다.
 	dockers := authed.Group("/docker", s.requireDocker)
 	dockers.Get("/status", s.handleDockerStatus)
+	dockers.Get("/catalog", s.handleDockerCatalog)
+	// 미리보기는 POST 다. 몸통에 설정값이 실리고 그중에 비밀번호가 있다 —
+	// 질의 문자열로 받으면 그 값이 접근 로그에 남는다.
+	dockers.Post("/plan", s.handleDockerPlan)
+	dockers.Get("/instances", s.handleListDBInstances)
+	dockers.Post("/instances", s.handleCreateDBInstance)
+	dockers.Get("/instances/:id", s.handleGetDBInstance)
 
 	// 매크로. 메뉴 접근 자체가 권한이므로 그룹 전체에 미들웨어를 건다.
 	//

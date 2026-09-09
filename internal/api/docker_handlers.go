@@ -7,6 +7,7 @@ import (
 
 	"dbstudio/internal/docker"
 	"dbstudio/internal/model"
+	"dbstudio/internal/provision"
 )
 
 // DB 컨테이너 관리.
@@ -37,6 +38,22 @@ import (
 // 있으면 소켓이 사라졌다가 돌아온 뒤(데몬 재시작) 죽은 커넥션을 물고 있게 된다.
 func (s *Server) dockerClient() *docker.Client {
 	return docker.New(s.cfg.DockerSocket)
+}
+
+// provisioner는 만들기·실행·중단을 맡는 러너다. 하나만 있다.
+//
+// 클라이언트와 달리 하나를 들고 있는 이유: 러너는 **지금 무엇을 만들고 있는가**를
+// 기억해야 한다. 요청마다 새로 만들면 그 기억이 사라지고, 두 번 누른 것을 막을
+// 수 없다(그러면 두 번째가 이름 충돌로 실패하면서 잘 되고 있는 첫 번째를
+// 실패로 덮는다).
+//
+// 늦게 만드는 이유: -allow-docker 가 꺼진 서버에서는 아예 필요하지 않고,
+// 이 서버를 만드는 검사들 대부분이 도커와 아무 상관이 없다.
+func (s *Server) provisioner() *provision.Runner {
+	s.provOnce.Do(func() {
+		s.prov = provision.NewRunner(s.dockerClient(), s.st, s.cfg.DockerTimeout)
+	})
+	return s.prov
 }
 
 // requireDocker는 도커 기능의 이중 게이트다.

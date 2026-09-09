@@ -43,6 +43,15 @@ const (
 	ActionTOTPRecoveryUsed  = "auth.totp.recovery.used"
 	ActionTOTPRecoveryReset = "auth.totp.recovery.regenerated"
 	ActionSecurityUpdated   = "security.policy.updated"
+
+	// DB 컨테이너. 만들기·지우기만이 아니라 실행·중단까지 남긴다 —
+	// "누가 그 DB 를 멈췄나"는 반드시 물어질 질문이고, 그때 볼 곳이 없으면
+	// 도커 로그를 뒤져도 사람 이름은 나오지 않는다.
+	ActionDBInstanceCreated   = "dbinstance.created"
+	ActionDBInstanceStarted   = "dbinstance.started"
+	ActionDBInstanceStopped   = "dbinstance.stopped"
+	ActionDBInstanceRestarted = "dbinstance.restarted"
+	ActionDBInstanceRemoved   = "dbinstance.removed"
 )
 
 // AuditParams는 감사 로그 한 줄의 입력이다.

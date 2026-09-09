@@ -69,7 +69,14 @@ var ErrBusy = errors.New("이 DB 에 이미 작업이 돌고 있습니다")
 // Create는 컨테이너를 만들고 시작한다. **바로 돌아온다.**
 //
 // 진행 상황은 인스턴스의 progress·status 에 적힌다. 화면은 그것을 되풀어 읽는다.
-func (r *Runner) Create(instanceID string, plan *Plan) error {
+//
+// onReady 는 DB 가 떠서 쓸 수 있게 된 뒤에 부른다(nil 이면 아무 일도 없다).
+// 뜬 DB 를 커넥션으로 등록하는 자리다. 이 꾸러미가 직접 등록하지 않는 이유:
+// 등록은 프로젝트·서버·접근 등급을 아는 쪽(api)의 몫이고, 여기서 하면 도커와
+// 커넥션이 한 덩어리가 된다. 그리고 **뜬 뒤에** 해야 한다 — 포트는 뜨고 나서야
+// 정해지고, 아직 안 뜬 DB 를 등록하면 접속 확인이 실패해서 사람이 자기 설정을
+// 잘못한 것으로 읽는다.
+func (r *Runner) Create(instanceID string, plan *Plan, onReady func(string)) error {
 	r.mu.Lock()
 	if _, busy := r.running[instanceID]; busy {
 		r.mu.Unlock()
@@ -93,6 +100,12 @@ func (r *Runner) Create(instanceID string, plan *Plan) error {
 		}()
 		if err := r.create(ctx, instanceID, plan); err != nil {
 			r.fail(instanceID, err)
+			return
+		}
+		// 등록이 실패해도 만든 것은 만든 것이다. 여기서 상태를 failed 로
+		// 돌리면 잘 돌고 있는 DB 가 실패로 보이고, 사람은 그것을 지운다.
+		if onReady != nil {
+			onReady(instanceID)
 		}
 	}()
 	return nil

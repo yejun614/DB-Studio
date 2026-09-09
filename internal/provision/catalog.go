@@ -122,6 +122,15 @@ type Recipe struct {
 	Fields []Field `json:"fields"`
 	// Health는 헬스체크 명령이다. %s 자리에 비밀번호가 들어간다면 Secret 을 쓴다.
 	Health []string `json:"-"`
+
+	// AdminUser·UserField는 만든 DB 에 붙을 계정이다.
+	//
+	// 뜬 컨테이너를 커넥션으로 등록할 때 쓴다. 둘로 나뉘는 이유: 사람이 정하는
+	// 것(PostgreSQL·MongoDB)과 이미지가 정해 둔 것(MySQL 의 root, ClickHouse 의
+	// default, MS-SQL 의 sa)이 있다. 하나로 합치면 어느 쪽인지를 등록하는 쪽이
+	// 다시 판단해야 하고, 그 판단이 여기와 어긋나면 붙을 수 없는 커넥션이 된다.
+	AdminUser string `json:"-"`
+	UserField string `json:"-"`
 	// Notes는 이 DB 를 띄울 때 사람이 알아야 하는 것이다.
 	Notes []string `json:"notes,omitempty"`
 }
@@ -195,6 +204,23 @@ func (r *Recipe) Field(key string) *Field {
 	return nil
 }
 
+// AdminAccount는 이 DB 에 붙을 계정 이름이다.
+//
+// 빈 문자열은 "계정이 없다"는 뜻이다(Redis 는 비밀번호만 받는다). 그때 아무
+// 이름을 만들어 넣으면 접속이 실패하고, 실패 이유가 "계정이 틀렸다"로 보인다.
+func (r *Recipe) AdminAccount(values map[string]string) string {
+	if r.UserField != "" {
+		if v := strings.TrimSpace(values[r.UserField]); v != "" {
+			return v
+		}
+		// 사람이 비워 두면 필드의 기본값이 곧 이미지의 기본값이다.
+		if f := r.Field(r.UserField); f != nil {
+			return f.Default
+		}
+	}
+	return r.AdminUser
+}
+
 // DefaultVersion은 기본 태그다.
 func (r *Recipe) DefaultVersion() string {
 	if len(r.Versions) == 0 {
@@ -207,8 +233,9 @@ func (r *Recipe) DefaultVersion() string {
 
 func postgres() *Recipe {
 	return &Recipe{
-		ID:   "postgres",
-		Kind: model.KindPostgres, Label: "PostgreSQL",
+		ID:        "postgres",
+		UserField: "username",
+		Kind:      model.KindPostgres, Label: "PostgreSQL",
 		Blurb:    "표준에 가깝고 확장이 많습니다. 특별한 이유가 없으면 이것.",
 		Image:    "postgres",
 		Versions: []string{"17-alpine", "16-alpine", "15-alpine", "17", "16"},
@@ -256,8 +283,9 @@ func postgres() *Recipe {
 
 func mysql() *Recipe {
 	return &Recipe{
-		ID:   "mysql",
-		Kind: model.KindMySQL, Label: "MySQL",
+		ID:        "mysql",
+		AdminUser: "root",
+		Kind:      model.KindMySQL, Label: "MySQL",
 		Blurb:    "가장 널리 쓰입니다. 기존 시스템과 맞춰야 할 때.",
 		Image:    "mysql",
 		Versions: []string{"8.4", "8.0", "8.4-oracle"},
@@ -313,8 +341,9 @@ func mysql() *Recipe {
 
 func mariadb() *Recipe {
 	return &Recipe{
-		ID:   "mariadb",
-		Kind: model.KindMySQL, Label: "MariaDB",
+		ID:        "mariadb",
+		AdminUser: "root",
+		Kind:      model.KindMySQL, Label: "MariaDB",
 		Blurb:    "MySQL 과 프로토콜이 같습니다. 라즈베리파이처럼 작은 기계에서 더 가볍습니다.",
 		Image:    "mariadb",
 		Versions: []string{"11.4", "11.8", "10.11"},
@@ -353,8 +382,9 @@ func mariadb() *Recipe {
 
 func mongo() *Recipe {
 	return &Recipe{
-		ID:   "mongodb",
-		Kind: model.KindMongoDB, Label: "MongoDB",
+		ID:        "mongodb",
+		UserField: "username",
+		Kind:      model.KindMongoDB, Label: "MongoDB",
 		Blurb:    "문서를 그대로 담습니다. 스키마가 자주 바뀌는 것.",
 		Image:    "mongo",
 		Versions: []string{"8", "7", "6"},
@@ -445,8 +475,9 @@ func redis() *Recipe {
 
 func clickhouse() *Recipe {
 	return &Recipe{
-		ID:   "clickhouse",
-		Kind: model.KindClickHouse, Label: "ClickHouse",
+		ID:        "clickhouse",
+		AdminUser: "default",
+		Kind:      model.KindClickHouse, Label: "ClickHouse",
 		Blurb:    "열 지향. 로그·이벤트를 쌓아 집계하는 것.",
 		Image:    "clickhouse/clickhouse-server",
 		Versions: []string{"24.8", "25.3", "latest"},
@@ -501,8 +532,9 @@ func clickhouse() *Recipe {
 
 func mssql() *Recipe {
 	return &Recipe{
-		ID:   "mssql",
-		Kind: model.KindMSSQL, Label: "MS-SQL Server",
+		ID:        "mssql",
+		AdminUser: "sa",
+		Kind:      model.KindMSSQL, Label: "MS-SQL Server",
 		Blurb:    "윈도 쪽 시스템과 맞춰야 할 때.",
 		Image:    "mcr.microsoft.com/mssql/server",
 		Versions: []string{"2022-latest", "2019-latest"},
@@ -561,6 +593,19 @@ var notInCatalog = map[string]string{
 // NotInCatalog는 왜 그 종류가 목록에 없는지다(있으면 빈 문자열).
 func NotInCatalog(kind string) string {
 	return notInCatalog[strings.ToLower(strings.TrimSpace(kind))]
+}
+
+// NotInCatalogAll은 못 만드는 것들과 그 이유다.
+//
+// 화면에 함께 내려보낸다. 목록에 없는 것을 사람이 찾다 못 찾으면 "지원하지
+// 않는다"와 "아직 안 만들었다"를 구분할 수 없고, 그 구분이 없으면 같은 질문이
+// 계속 들어온다.
+func NotInCatalogAll() map[string]string {
+	out := make(map[string]string, len(notInCatalog))
+	for k, v := range notInCatalog {
+		out[k] = v
+	}
+	return out
 }
 
 // CatalogKinds는 목록에 있는 종류를 정렬해 돌려준다(검사·문서용).
