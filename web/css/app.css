@@ -747,7 +747,17 @@ select.input { cursor: pointer; appearance: none; padding-right: 30px;
   background-size: 4px 4px, 4px 4px;
   background-repeat: no-repeat;
 }
-option { background: var(--surface); color: var(--text); }
+/* 드롭다운의 색은 **빠짐없이** 적어야 한다.
+ *
+ * 펼친 목록은 브라우저가 그리는 것이라, 우리가 색을 적지 않은 부분은 플랫폼
+ * 기본값으로 칠해진다. option 에만 적어 뒀더니 <optgroup> 의 이름 줄이 흰 바탕에
+ * 흰 글자로 나와 아예 보이지 않았다 — ERD 의 "대상 DB" 고르개처럼 커넥션을
+ * 종류로 묶는 자리에서만 드러나서 오래 남아 있었다. */
+option, optgroup { background: var(--surface); color: var(--text); }
+/* 그룹 이름은 고를 수 없는 줄이다. 항목과 똑같이 보이면 눌러 보고서야 알게 된다.
+ * 자식 항목은 되돌린다 — color 는 물려받으므로 그냥 두면 항목까지 흐려진다. */
+optgroup { color: var(--text-dim); font-weight: 600; }
+optgroup option { color: var(--text); font-weight: 400; }
 
 .checkbox { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13.5px; }
 .checkbox input { width: 16px; height: 16px; accent-color: hsl(var(--h-primary)); cursor: pointer; }
