@@ -5871,3 +5871,45 @@ tr.is-clickable:focus-visible { outline: 2px solid var(--primary); outline-offse
 /* ---------- 오브젝트 스토리지 ---------- */
 .s3-objects { margin-top: 14px; }
 .s3-prefix td:first-child { font-weight: 600; }
+
+/* ---------- DB 컨테이너 만들기 ---------- */
+
+/* 상태 표. 잘 되고 있을 때는 접어 둔다 — 확인이 끝난 정보가 화면 위쪽을
+ * 차지하면 정작 할 일이 아래로 밀린다. */
+.dbsetup-strip > summary {
+  display: flex; align-items: center; gap: 10px;
+  cursor: pointer; font-size: 13px; color: var(--text-dim);
+  list-style: none;
+}
+.dbsetup-strip > summary::-webkit-details-marker { display: none; }
+.dbsetup-strip[open] > summary { margin-bottom: 14px; }
+
+/* DB 종류 타일. 버튼이지만 카드처럼 보인다 — 고르는 것이 곧 만들기의 시작이라
+ * 누를 수 있다는 것이 한눈에 보여야 한다. */
+.dbsetup-tile {
+  display: flex; flex-direction: column; gap: 4px; text-align: left;
+  padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--text); cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
+}
+.dbsetup-tile:hover { border-color: var(--primary); background: var(--bg-alt); }
+.dbsetup-tile-name { font-size: 14px; font-weight: 600; }
+.dbsetup-tile-blurb { font-size: 12.5px; color: var(--text-dim); line-height: 1.5; }
+.dbsetup-tile-meta { font-size: 11.5px; color: var(--text-mute); font-family: var(--mono); }
+
+.dbsetup-advanced { margin: 14px 0; }
+.dbsetup-advanced > summary { cursor: pointer; font-size: 13px; color: var(--text-dim); }
+.dbsetup-advanced[open] > summary { margin-bottom: 10px; }
+.dbsetup-bool { margin-bottom: 12px; display: flex; flex-direction: column; gap: 3px; }
+.dbsetup-register {
+  margin: 14px 0; padding-top: 12px; border-top: 1px solid var(--border-soft);
+}
+
+.dbsetup-name { display: flex; flex-direction: column; gap: 1px; }
+.dbsetup-status { display: flex; flex-direction: column; gap: 3px; align-items: flex-start; }
+/* 실패 사유는 길다(도커 로그가 붙는다). 한 칸 안에서 접어 두면 표가 무너지지
+ * 않고, 그래도 읽을 수는 있다. */
+.dbsetup-error {
+  max-width: 320px; white-space: pre-wrap; word-break: break-word;
+  max-height: 3.6em; overflow: hidden; color: var(--danger);
+}
