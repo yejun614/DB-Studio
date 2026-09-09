@@ -56,6 +56,30 @@ type Config struct {
 	// 인자에는 {name} {kind} {host} {port} {database} {env} {id} 를 쓸 수 있다.
 	BackupCmd string
 
+	// 도커
+	//
+	// AllowDocker는 DB 컨테이너를 만들고 다루는 기능을 켠다.
+	//
+	// 사용자 권한(docker.manage)과 별개로 이 플래그를 둔 이유는 -allow-shell 과
+	// 같다. 도커 소켓에 닿는다는 것은 **그 기계에서 무엇이든 할 수 있다**는
+	// 뜻이다 — 특권 컨테이너를 띄워 호스트의 파일 계통을 마운트하면 그것으로
+	// 끝이고, 그 사이에 아무 경고도 나지 않는다. 그런 성격의 변경은 권한 화면의
+	// 클릭이 아니라 프로세스를 띄우는 사람이 정해야 한다.
+	//
+	// 소켓을 넣어 주지 않으면 켜도 아무 일도 일어나지 않는다(닿지 못한다).
+	// 그래서 이 플래그는 "쓸 수 있게 한다"가 아니라 "쓰겠다고 말한다"에 가깝다.
+	AllowDocker bool
+	// DockerSocket은 도커 데몬의 유닉스 소켓 경로다.
+	//
+	// 플래그로만 받는다(-backup-cmd 와 같은 이유). API 로 바꿀 수 있게 하면
+	// 이 앱이 임의의 소켓에 붙는 통로가 되고, 그것은 곧 소켓 프록시로 좁혀 둔
+	// 배치를 화면에서 우회할 수 있다는 뜻이다.
+	DockerSocket string
+	// DockerTimeout은 도커 제어 호출 하나의 시간 상한이다.
+	//
+	// 로그 따라가기에는 걸지 않는다 — 그쪽은 끝나지 않는 것이 정상이다.
+	DockerTimeout time.Duration
+
 	// 매크로
 	//
 	// AllowShell은 매크로의 셸 노드를 사용할 수 있게 한다.
@@ -176,6 +200,12 @@ func Load(args []string) (*Config, error) {
 	fs.IntVar(&c.LogMaxMB, "log-max-mb", envInt("DBSTUDIO_LOG_MAX_MB", 20), "rotate the log file when it exceeds this size")
 	fs.StringVar(&c.BackupCmd, "backup-cmd", env("DBSTUDIO_BACKUP_CMD", ""),
 		"command to run before production migrations (placeholders: {name} {kind} {host} {port} {database} {env} {id})")
+	fs.BoolVar(&c.AllowDocker, "allow-docker", envBool("DBSTUDIO_ALLOW_DOCKER", false),
+		"allow managing DB containers through the Docker socket (users still need the docker.manage permission)")
+	fs.StringVar(&c.DockerSocket, "docker-socket", env("DBSTUDIO_DOCKER_SOCKET", "/var/run/docker.sock"),
+		"path to the Docker daemon socket")
+	fs.DurationVar(&c.DockerTimeout, "docker-timeout", envDur("DBSTUDIO_DOCKER_TIMEOUT", 30*time.Second),
+		"time limit for a single Docker control call (log streaming is not limited)")
 	fs.BoolVar(&c.AllowShell, "allow-shell", envBool("DBSTUDIO_ALLOW_SHELL", false),
 		"allow macros to run bash/powershell scripts (users still need the script.run permission)")
 	fs.DurationVar(&c.ShellTimeout, "shell-timeout", envDur("DBSTUDIO_SHELL_TIMEOUT", 2*time.Minute),

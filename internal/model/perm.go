@@ -65,16 +65,27 @@ const (
 	// 주소로 보낼 수 있다. 조회 권한과 결합하면 데이터 반출 통로가 되므로,
 	// "매크로를 쓸 수 있다"와 "외부로 내보낼 수 있다"는 따로 판단해야 한다.
 	PermHTTPCall Perm = "http.call"
+	// PermDockerManage는 도커로 DB 컨테이너를 만들고 다룰 권한이다.
+	//
+	// 서버가 -allow-docker 로 켜져 있을 때만 의미가 있다(셸과 같은 이중 게이트).
+	// 그 이중 게이트가 필요한 이유는 셸과 같다 — 도커 소켓에 닿는다는 것은 그
+	// 기계에서 무엇이든 할 수 있다는 뜻이다(특권 컨테이너를 띄우고 호스트의
+	// 파일 계통을 마운트하면 그것으로 끝이다). 권한 화면의 클릭 몇 번으로
+	// 켜질 일이 아니라, 프로세스를 띄우는 사람이 정해야 하는 종류다.
+	PermDockerManage Perm = "docker.manage"
 )
 
-func AllPerms() []Perm { return []Perm{PermMacro, PermScriptRun, PermHTTPCall} }
+func AllPerms() []Perm {
+	return []Perm{PermMacro, PermScriptRun, PermHTTPCall, PermDockerManage}
+}
 
 func (p Perm) Valid() bool { return slices.Contains(AllPerms(), p) }
 
 var PermLabels = map[Perm]string{
-	PermMacro:     "매크로 사용",
-	PermScriptRun: "셸 스크립트 실행",
-	PermHTTPCall:  "외부 API 호출",
+	PermMacro:        "매크로 사용",
+	PermScriptRun:    "셸 스크립트 실행",
+	PermHTTPCall:     "외부 API 호출",
+	PermDockerManage: "DB 컨테이너 관리",
 }
 
 func (p Perm) Label() string {
