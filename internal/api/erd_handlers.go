@@ -604,6 +604,37 @@ func (s *Server) handleERDChat(c *fiber.Ctx) error {
 //
 // ERD 화면에서 "지금 이 초안을 적용하면 무엇이 바뀌는가"를 보여준다. P7의
 // 마이그레이션 계획이 같은 diff를 쓰므로, 여기서 보이는 것과 실제 적용 결과가 같다.
+// handleERDValidate는 초안에서 찾을 수 있는 문제를 돌려준다.
+//
+// 대상 DB를 보지 않는다. 여기서 잡는 것들은 대상이 없어도 이미 틀린 것들이라
+// (없는 표를 가리키는 외래키는 어느 DB에 붙여도 틀렸다), 독립 초안에서도
+// 똑같이 쓸 수 있어야 한다. 대상 DB와 견주는 일은 /diff 가 한다.
+func (s *Server) handleERDValidate(c *fiber.Ctx) error {
+	doc, _, _, err := s.resolveERDDocument(c, c.Params("docId"), model.LevelMonitor)
+	if err != nil {
+		return err
+	}
+	issues := schema.Validate(doc.Schema)
+
+	errors, warnings := 0, 0
+	for _, is := range issues {
+		if is.Severity == schema.SeverityError {
+			errors++
+			continue
+		}
+		warnings++
+	}
+
+	// 감사 로그에 남기지 않는다. 읽기만 하고 아무것도 바꾸지 않으며, 화면이
+	// 편집하는 동안 되풀이해 부르는 길이라 남기면 로그가 이것으로만 찬다.
+	return c.JSON(fiber.Map{
+		"issues":   issues,
+		"errors":   errors,
+		"warnings": warnings,
+		"dialect":  doc.Schema.Dialect,
+	})
+}
+
 func (s *Server) handleERDDiff(c *fiber.Ctx) error {
 	doc, conn, _, err := s.resolveERDDocument(c, c.Params("docId"), model.LevelMonitor)
 	if err != nil {

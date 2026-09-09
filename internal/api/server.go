@@ -421,6 +421,8 @@ func (s *Server) routes() {
 	docs.Get("/:docId/ai/sessions", s.handleListERDAISessions)
 	docs.Post("/:docId/ai/sessions", s.handleCreateERDAISession)
 	docs.Post("/:docId/diff", s.handleERDDiff)
+	// 설계 검증. 대상 DB를 보지 않으므로 독립 초안에서도 쓴다.
+	docs.Get("/:docId/validate", s.handleERDValidate)
 	// 초안을 SQL로 받는다. 대상 DB가 없는 초안에서는 이것이 유일한 산출물이다.
 	docs.Get("/:docId/ddl", s.handleERDDDL)
 	// 계획을 만들기 전에 SQL이 실제로 실행되는지 확인한다. 그림자 DB를 만들어
