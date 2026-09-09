@@ -274,6 +274,33 @@ export class ErdCanvas {
     this.svg.classList.toggle('is-pan', this.tool === 'pan');
   }
 
+  // setIssues는 "여기가 문제다"라는 표시를 받는다.
+  //
+  // 선택과 따로 두는 이유: 선택은 사람이 지금 무엇을 보고 있는가이고, 이것은
+  // 설계에 무엇이 틀렸는가다. 둘은 함께 켜져 있어야 한다 — 문제를 짚은 카드를
+  // 골라 고치는 것이 사람이 하는 일이므로, 고르는 순간 표시가 사라지면
+  // 고치는 동안 어디가 문제였는지를 잃는다.
+  //
+  // 문제 탭을 닫으면 화면이 빈 값을 밀어 넣어 표시가 사라진다. 늘 켜 두지 않는
+  // 이유는 색이 뜻을 잃기 때문이다 — 도면이 언제나 빨간 상태면 빨강은 아무 말도
+  // 하지 않는다.
+  //
+  //   tables  Map<표키, 'error'|'warning'>
+  //   columns Map<표키, Map<컬럼이름(소문자), 'error'|'warning'>>
+  //   links   Map<외래키 id, 'error'|'warning'>
+  setIssues(marks) {
+    this.issueTables = marks?.tables ?? null;
+    this.issueCols = marks?.columns ?? null;
+    this.issueLinks = marks?.links ?? null;
+  }
+
+  // issueClass는 무게를 클래스 조각으로 바꾼다(없으면 빈 문자열).
+  issueClass(severity) {
+    if (severity === 'error') return ' is-issue-error';
+    if (severity === 'warning') return ' is-issue-warn';
+    return '';
+  }
+
   // setMarks는 화면 쪽이 들고 있는 선택 목록을 그대로 받는다.
   //
   // 선택의 주인이 화면인 이유: 다시 그릴 때마다 화면이 자기 상태를 캔버스에 밀어
@@ -613,7 +640,8 @@ export class ErdCanvas {
     this.linkSpots = new Map();
     for (const [fkID, r] of routed) {
       const selected = this.isSelected('link', fkID);
-      const fkClass = `erd-link${selected ? ' is-selected' : ''}`;
+      const fkClass = `erd-link${selected ? ' is-selected' : ''}`
+        + this.issueClass(this.issueLinks?.get(fkID));
 
       // 선을 누를 수 있게 만든다. 보이는 선은 1.4px이라 마우스로 맞히기 어려우므로,
       // 같은 경로를 투명한 굵은 선으로 한 겹 더 깔아 그것으로 받는다.
@@ -667,12 +695,15 @@ export class ErdCanvas {
         // 고른 선의 **끝**이 어느 카드에 닿는지가 여전히 흐릿하다 — 정작 관계를
         // 읽을 때 보는 것은 그 끝이다.
         const on = selected ? ' is-selected' : '';
+        // 문제가 있는 관계는 표식까지 물들인다. 같은 이유다 — 선만 빨갛고
+        // 까마귀발이 회색이면 그 관계의 끝이 어느 카드에 닿는지가 흐릿하다.
+        const bad = this.issueClass(this.issueLinks?.get(fkID));
         this.layers.links.appendChild(svgEl('path', {
-          class: `erd-link-mark${muted}${on}`, 'data-fk': fkID, d: mark.d,
+          class: `erd-link-mark${muted}${on}${bad}`, 'data-fk': fkID, d: mark.d,
         }));
         if (!mark.ring) continue;
         this.layers.links.appendChild(svgEl('circle', {
-          class: `erd-link-ring${muted}${on}`, 'data-fk': fkID, ...mark.ring,
+          class: `erd-link-ring${muted}${on}${bad}`, 'data-fk': fkID, ...mark.ring,
         }));
       }
       this.linkSpots.set(fkID, r);
@@ -690,6 +721,9 @@ export class ErdCanvas {
       // 고른 카드에 붙은 선도 함께 올린다. 표 하나를 눌러 "이 표가 무엇과
       // 엮여 있나"를 보는 것이 관계선을 보는 가장 흔한 이유다.
       if (this.isSelected('table', r.fromKey) || this.isSelected('table', r.toKey)) out.add(fkID);
+      // 문제가 있는 선도 올린다. 카드 밑에 깔린 선은 색을 바꿔도 보이지 않아서,
+      // 목록에는 "이 관계가 틀렸다"고 적혀 있는데 도면에서는 아무 표시가 없다.
+      if (this.issueLinks?.has(fkID)) out.add(fkID);
     }
     return out;
   }
@@ -716,7 +750,8 @@ export class ErdCanvas {
       const picked = this.isSelected('link', fkID);
       layer.appendChild(svgEl('path', {
         class: `erd-link is-lifted${r.blocked ? ' is-over' : ''}`
-          + `${picked ? ' is-selected' : ''}${temp}`,
+          + `${picked ? ' is-selected' : ''}${temp}`
+          + this.issueClass(this.issueLinks?.get(fkID)),
         d: r.d, 'data-fk': fkID,
       }));
       // 고른 선은 표식도 이 층에 다시 그린다.
@@ -804,7 +839,8 @@ export class ErdCanvas {
     const g = svgEl('g', {
       class: `erd-card-g${selected ? ' is-selected' : ''}`
         + `${this.isPrimary('table', key) ? ' is-primary' : ''}`
-        + `${resizing ? ' is-resizing' : ''}${gripHover ? ' is-grip-hover' : ''}`,
+        + `${resizing ? ' is-resizing' : ''}${gripHover ? ' is-grip-hover' : ''}`
+        + this.issueClass(this.issueTables?.get(key)),
       transform: `translate(${geom.x},${geom.y})`,
       'data-key': key,
       // 색은 **묶음(g)**에 싣는다. 안쪽 사각형에 실으면 그 사각형 자신에게만
@@ -888,6 +924,7 @@ export class ErdCanvas {
       const cols = tbl.columns ?? [];
       const hotHere = this.hotCols?.get(key);
       const warmHere = this.warmCols?.get(key);
+      const badHere = this.issueCols?.get(key);
       cols.forEach((col, i) => {
         const y = HEAD_H + i * ROW_H + 14;
         // 고른 관계선이 쓰는 컬럼이면 줄을 칠한다. 겹쳐 있는 다른 관계의 컬럼은
@@ -898,11 +935,20 @@ export class ErdCanvas {
         // 고른 관계에 이미 든 컬럼은 진한 쪽만 그린다. 두 겹을 겹쳐 칠하면
         // 그 줄만 더 진해져서 "이건 또 뭔가"가 된다.
         const warm = !hot && Boolean(warmHere?.has(lower));
+        // 문제가 있는 컬럼. 관계 하이라이트와 겹칠 수 있으므로 **위에** 그린다 —
+        // 지금 고른 관계가 무엇인지보다 무엇이 틀렸는지가 먼저다.
+        const bad = badHere?.get(lower);
         if (hot || warm) {
           // 이 줄의 글자보다 먼저 넣어야 뒤에 깔린다(같은 g 안에서는 나중에 넣은
           // 것이 위다). 테두리(erd-card-outline)를 덮지 않게 1px 씩 들여 그린다.
           g.appendChild(svgEl('rect', {
             class: hot ? 'erd-col-hot' : 'erd-col-warm',
+            x: 1, y: y - ROW_H + 5, width: geom.w - 2, height: ROW_H,
+          }));
+        }
+        if (bad) {
+          g.appendChild(svgEl('rect', {
+            class: `erd-col-issue${this.issueClass(bad)}`,
             x: 1, y: y - ROW_H + 5, width: geom.w - 2, height: ROW_H,
           }));
         }

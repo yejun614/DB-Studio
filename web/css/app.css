@@ -2251,8 +2251,15 @@ option { background: var(--surface); color: var(--text); }
 /* 지날 데가 없어 카드를 덮고 지나가는 선. 조금 진하게 — 덮고 지나가는 것이
  * 실수가 아니라 그렇게 그린 것으로 보여야 한다. */
 .erd-link.is-over { stroke: var(--text-dim); }
-/* 마우스를 올린 선. 어디서 어디로 가는지 끝까지 따라가는 순간이다. */
-.erd-link.is-lifted:not(.is-over):not(.is-selected) { stroke: var(--text); }
+/* 마우스를 올린 선. 어디서 어디로 가는지 끝까지 따라가는 순간이다.
+ *
+ * 문제 색(is-issue-*)은 예외로 둔다. :not() 은 그 안의 특이도를 함께 가져오므로
+ * 이 규칙은 클래스 넷만큼 무겁고, 뒤에 오는 두 클래스짜리 규칙이 이기지 못한다.
+ * 그래서 아래 관계선 색을 정해 놓고도 들어 올린 선만 흰색으로 그려졌다 —
+ * 목록에는 빨갛게 적혀 있는데 도면의 선은 하얀 상태가 됐다. */
+.erd-link.is-lifted:not(.is-over):not(.is-selected):not(.is-issue-error):not(.is-issue-warn) {
+  stroke: var(--text);
+}
 /* 누르기용 투명 선. 보이는 선은 1.4px이라 마우스로 맞히기 어렵다 —
  * 보이는 선을 굵게 하는 대신 잡는 면적만 넓힌다. */
 .erd-link-hit {
@@ -2268,6 +2275,12 @@ option { background: var(--surface); color: var(--text); }
  * 선만 파랗고 까마귀발이 회색이면 강조가 선 중간에서 끊긴다. */
 .erd-link-mark.is-selected,
 .erd-link-ring.is-selected { stroke: var(--info); stroke-width: 2.2; }
+
+/* 문제가 있는 관계의 표식. 고른 선의 표식과 같은 규칙이다. */
+.erd-link-mark.is-issue-error,
+.erd-link-ring.is-issue-error { stroke: var(--danger); stroke-width: 2.2; }
+.erd-link-mark.is-issue-warn,
+.erd-link-ring.is-issue-warn { stroke: var(--warn); stroke-width: 2; }
 
 /* 고른 관계선이 붙은 표에서는 다른 선의 표식을 감춘다(erdcanvas.links).
  *
@@ -2400,6 +2413,29 @@ option { background: var(--surface); color: var(--text); }
 .erd-col.is-linked { fill: var(--text); }
 .erd-col-type.is-linked { fill: var(--text-dim); }
 
+/* 문제 표시. 문제 탭이 켜져 있는 동안만 붙는다.
+ *
+ * 왜 늘 켜 두지 않는가: 도면이 언제나 빨간 상태면 빨강은 아무 말도 하지 않는다.
+ * 목록을 보고 있는 동안에만 켜면, 그 색은 "지금 읽고 있는 그 줄이 여기다"라는
+ * 뜻을 갖는다.
+ *
+ * 색은 --danger(오류)와 --warn(경고)다. 고른 것(--chart-1)·관계선(--info)과
+ * 겹치지 않아서, 문제가 있는 카드를 골라도 두 표시가 함께 읽힌다 —
+ * 고치는 동안 어디가 문제였는지를 잃지 않아야 한다. */
+.erd-card-g.is-issue-error .erd-card-bg { stroke: var(--danger); stroke-width: 2; }
+.erd-card-g.is-issue-warn .erd-card-bg { stroke: var(--warn); stroke-width: 2; }
+/* 머리띠에도 옅게 깔아 준다. 테두리만으로는 카드가 촘촘한 도면에서 눈에 안 든다. */
+.erd-card-g.is-issue-error .erd-card-head { fill: hsl(var(--h-danger) / 0.20); }
+.erd-card-g.is-issue-warn .erd-card-head { fill: hsl(var(--h-warning) / 0.18); }
+/* 문제가 있는 컬럼 줄. 관계 하이라이트(--info) 위에 그려지므로 둘이 겹쳐도
+ * 무엇이 틀렸는지가 먼저 읽힌다. */
+.erd-col-issue.is-issue-error { fill: hsl(var(--h-danger) / 0.24); }
+.erd-col-issue.is-issue-warn { fill: hsl(var(--h-warning) / 0.22); }
+/* 문제가 있는 관계선. 굵기는 고른 선과 같게 두고 색으로만 가른다 — 더 굵게
+ * 하면 고른 선보다 눈에 먼저 들어와서, 무엇을 고르고 있는지가 흐려진다. */
+.erd-link.is-issue-error { stroke: var(--danger); stroke-width: 2.4; }
+.erd-link.is-issue-warn { stroke: var(--warn); stroke-width: 2; }
+
 .erd-card-icon { color: var(--text-dim); }
 /* 컬럼 아이콘. 이름보다 옅게 두어 표식으로 읽히게 한다 — 같은 굵기면 줄마다
  * 아이콘이 먼저 눈에 들어와 이름을 훑기 어려워진다. 키만 색으로 구분한다. */
@@ -2490,6 +2526,35 @@ option { background: var(--surface); color: var(--text); }
   color: var(--text-mute); margin: 18px 0 8px;
 }
 .erd-panel-danger { margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--border-soft); }
+
+/* 문제 목록. 줄 하나가 단추다 — 누르면 그 자리로 화면이 옮겨 간다.
+ *
+ * 왼쪽에 색 띠를 세우는 이유: 오류와 경고가 섞여 스무 줄이 되면, 글자색만으로는
+ * 훑을 때 무게가 읽히지 않는다. 띠는 목록을 위에서 아래로 흘려 볼 때 그 자리에
+ * 그대로 있어서, 어디까지가 오류인지 눈이 한 번에 잡는다. */
+.erd-issue-group { display: flex; flex-direction: column; gap: 6px; }
+.erd-issue {
+  display: flex; align-items: flex-start; gap: 8px; width: 100%;
+  padding: 8px 10px; text-align: left; cursor: pointer;
+  background: var(--surface-2); border: 1px solid var(--border-soft);
+  border-left-width: 3px; border-radius: 6px; color: var(--text);
+  font: inherit;
+}
+.erd-issue:hover { background: var(--bg-alt); border-color: var(--border); }
+.erd-issue.is-error { border-left-color: var(--danger); }
+.erd-issue.is-warn { border-left-color: var(--warn); }
+.erd-issue-icon { display: flex; margin-top: 1px; }
+.erd-issue.is-error .erd-issue-icon { color: var(--danger); }
+.erd-issue.is-warn .erd-issue-icon { color: var(--warn); }
+.erd-issue-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.erd-issue-msg { font-size: 12.5px; line-height: 1.45; word-break: break-word; }
+/* 어느 표·컬럼·관계의 이야기인가. 설명보다 작고 옅게 두어, 훑을 때는 설명이
+ * 먼저 읽히고 자리는 필요할 때만 눈에 들어오게 한다. */
+.erd-issue-where {
+  font-size: 11px; color: var(--text-mute);
+  font-family: var(--mono); word-break: break-all;
+}
+.erd-issue-hint { font-size: 11.5px; color: var(--text-dim); line-height: 1.4; }
 .erd-panel-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
 /* 복제 창의 "함께 베낄 것" 목록. 세로로 두어 각 줄의 개수가 눈에 들어오게 한다. */
 .erd-dup-list { display: flex; flex-direction: column; gap: 6px; }

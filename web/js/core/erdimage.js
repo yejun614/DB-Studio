@@ -53,6 +53,9 @@ const CHROME_ONLY = [
   // 이유는 하나도 다르지 않다 — 하나만 떼면 진한 띠는 사라지고 옅은 띠만 남은,
   // 아무도 설명할 수 없는 그림이 나간다.
   'erd-col-hot', 'erd-col-warm',
+  // 문제 탭이 켜져 있을 때 칠하는 컬럼 띠. 같은 이유로 뗀다 — 그 표시는 "지금
+  // 문제 목록을 보고 있다"는 뜻이고, 그림을 받은 사람에게는 아무 뜻이 없다.
+  'erd-col-issue',
 ];
 
 // 내보낼 범위. 도면 하나를 다 담는 것만이 답이 아니다 — 표 쉰 개짜리 설계에서
@@ -223,7 +226,11 @@ function buildSVG(canvas, box, background, scope = null) {
   // 다른 그림이 나오고, 받은 사람에게는 "이 표는 왜 다른가"가 된다.
   // is-linked 는 고른 관계선의 컬럼 글자다(erd-col-hot 과 짝이다). 띠만 떼고
   // 글자를 두면 그 두 줄만 색이 밝은 그림이 나간다.
-  const MARKS = ['is-selected', 'is-primary', 'is-grip-hover', 'is-resizing', 'is-linked'];
+  // is-issue-* 는 문제 탭이 켜져 있을 때만 붙는다. 남기면 도면 절반이 빨간
+  // 그림이 나가고, 받은 사람은 그것이 설계의 상태인지 보낸 사람의 화면 상태인지
+  // 알 수 없다. 문제를 함께 보여 주려면 목록을 함께 보내는 것이 맞다.
+  const MARKS = ['is-selected', 'is-primary', 'is-grip-hover', 'is-resizing', 'is-linked',
+    'is-issue-error', 'is-issue-warn'];
   const marked = [];
   for (const el of source.querySelectorAll(MARKS.map((c) => `.${c}`).join(', '))) {
     const had = MARKS.filter((c) => el.classList.contains(c));
