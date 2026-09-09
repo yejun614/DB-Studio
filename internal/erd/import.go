@@ -157,7 +157,7 @@ func mergeTable(doc *Document, tbl *schema.Table) {
 	}
 	doc.Schema.Tables = append(doc.Schema.Tables, tbl)
 	if _, ok := doc.Layout[key]; !ok {
-		x, y := doc.nextFreeSlot()
+		x, y := doc.nextFreeSlot(len(tbl.Columns))
 		doc.Layout[key] = &Box{X: x, Y: y}
 	}
 }
@@ -323,7 +323,9 @@ func mergeView(doc *Document, in *schema.View) error {
 	}
 	doc.Schema.Views = append(doc.Schema.Views, in)
 	if _, ok := doc.Layout[key]; !ok {
-		x, y := doc.nextFreeSlot()
+		// 뷰 카드의 높이는 정의문이 몇 줄로 접히는지에 달려 있어 서버가 모른다.
+		// 격자 한 칸만큼을 컬럼 수로 환산해 넉넉히 잡는다.
+		x, y := doc.nextFreeSlot(int(layoutStepY / cardRowH))
 		doc.Layout[key] = &Box{X: x, Y: y}
 	}
 	return nil

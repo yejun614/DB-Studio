@@ -318,7 +318,7 @@ func applyTableAdd(doc *Document, op *Op) error {
 
 	applyTableDefaults(doc, tbl)
 	doc.Schema.Tables = append(doc.Schema.Tables, tbl)
-	x, y := doc.nextFreeSlot()
+	x, y := doc.nextFreeSlot(len(tbl.Columns))
 	if p.X != nil {
 		x = *p.X
 	}
@@ -448,7 +448,7 @@ func applyTableDuplicate(doc *Document, op *Op) error {
 	// 자리: 원본 옆에 조금 비껴 놓는다. 정확히 겹치면 사본이 만들어졌는지 화면만
 	// 보고 알 수 없고, 끌어서 옮기려 해도 어느 쪽을 잡았는지 알 수 없다.
 	box := doc.Layout[src.Key()]
-	x, y := doc.nextFreeSlot()
+	x, y := doc.nextFreeSlot(len(dst.Columns))
 	if box != nil {
 		x, y = box.X+40, box.Y+40
 	}

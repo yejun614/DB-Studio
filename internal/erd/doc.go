@@ -230,11 +230,21 @@ const (
 	// 두 벌로 두는 것이 마음에 걸리지만, 서버가 좌표를 정하려면 카드가 얼마나
 	// 높은지 알아야 하고 그 값은 그리는 쪽에 있다. 어긋나면 초기 배치에서 카드가
 	// 겹치므로, 한쪽을 고칠 때 다른 쪽도 고쳐야 한다는 것을 여기 적어 둔다.
-	cardHeadH = 30.0
+	cardHeadH = 34.0
 	cardRowH  = 20.0
 	cardPadH  = 8.0
+	// cardDefW는 폭을 정하지 않은 카드의 폭이다(erdcanvas.js 의 CARD_W).
+	cardDefW = 260.0
 	// 카드 사이에 남기는 세로 여백.
 	cardGapY = 40.0
+
+	// 메모의 기본 크기. 폭은 erdcanvas.js 의 NOTE_W 와 같고, 높이는 글의 양에
+	// 따라 달라지므로 서버는 넉넉한 값으로 잡는다.
+	noteDefW = 200.0
+	noteDefH = 120.0
+
+	// 새 카드를 놓을 때 다른 것과 남길 최소 간격.
+	slotMargin = 24.0
 )
 
 // clampCardWidth는 카드 폭을 읽을 수 있는 범위로 자른다.
@@ -467,17 +477,115 @@ func sortTablesByParentRow(list []*schema.Table, refs map[string][]string, rowOf
 	})
 }
 
-// nextFreeSlot은 새 테이블을 놓을 빈 자리를 찾는다.
-// 이미 쓰인 격자점을 피해 배치하므로 여러 사람이 동시에 테이블을 추가해도 겹치지 않는다.
-func (d *Document) nextFreeSlot() (float64, float64) {
-	used := make(map[[2]float64]bool, len(d.Layout))
-	for _, b := range d.Layout {
-		used[[2]float64{b.X, b.Y}] = true
+// cardRect는 캔버스 위의 한 물건이 차지하는 사각형이다.
+type cardRect struct {
+	x, y, w, h float64
+}
+
+func (r cardRect) overlaps(o cardRect) bool {
+	return r.x < o.x+o.w && o.x < r.x+r.w &&
+		r.y < o.y+o.h && o.y < r.y+r.h
+}
+
+// occupiedRects는 지금 캔버스에 놓여 있는 것들의 사각형이다.
+//
+// 표·뷰뿐 아니라 메모와 그룹까지 센다. 그룹은 카드를 담는 상자라, 그 안에 새
+// 카드를 놓으면 아무도 넣지 않은 카드가 그 묶음에 들어가 있게 된다.
+//
+// 크기를 모르는 것은 **넉넉하게** 잡는다. 좁게 잡아 겹치는 것보다 넓게 잡아
+// 조금 멀리 놓는 편이 낫다 — 멀리 놓인 것은 눈에 보이고 끌어오면 되지만,
+// 겹친 것은 잡을 수가 없다.
+func (d *Document) occupiedRects() []cardRect {
+	out := make([]cardRect, 0, len(d.Layout)+len(d.Notes)+len(d.Groups))
+
+	cols := make(map[string]int, len(d.Schema.Tables))
+	for _, t := range d.Schema.Tables {
+		cols[t.Key()] = len(t.Columns)
 	}
-	for i := 0; i < 1024; i++ {
+	views := make(map[string]bool, len(d.Schema.Views))
+	for _, v := range d.Schema.Views {
+		views[v.Key()] = true
+	}
+
+	for key, b := range d.Layout {
+		if b == nil {
+			continue
+		}
+		w := b.W
+		if w <= 0 {
+			w = cardDefW
+		}
+		var h float64
+		switch {
+		case b.Collapsed:
+			h = cardHeadH
+		case views[key]:
+			// 뷰 카드의 높이는 정의문이 몇 줄로 접히는지에 달려 있고, 그것은
+			// 폭을 아는 그리는 쪽만 안다. 격자 한 칸으로 넉넉히 잡는다.
+			h = layoutStepY
+		default:
+			n, ok := cols[key]
+			if !ok {
+				// 스키마에 없는 키다(지워진 표의 좌표가 남은 것). 격자 한 칸으로 둔다.
+				h = layoutStepY
+			} else {
+				h = CardHeight(n)
+			}
+		}
+		out = append(out, cardRect{x: b.X, y: b.Y, w: w, h: h})
+	}
+
+	for _, n := range d.Notes {
+		w, h := n.W, n.H
+		if w <= 0 {
+			w = noteDefW
+		}
+		if h <= 0 {
+			h = noteDefH
+		}
+		out = append(out, cardRect{x: n.X, y: n.Y, w: w, h: h})
+	}
+	for _, g := range d.Groups {
+		if g.W <= 0 || g.H <= 0 {
+			continue
+		}
+		out = append(out, cardRect{x: g.X, y: g.Y, w: g.W, h: g.H})
+	}
+	return out
+}
+
+// nextFreeSlot은 컬럼 columns개짜리 새 카드가 **아무것도 덮지 않는** 자리를 찾는다.
+//
+// 예전에는 격자점이 정확히 같은지만 봤다. 그래서 사람이 카드를 한 번이라도
+// 옮긴 문서에서는 — 즉 거의 모든 문서에서 — 새 카드가 기존 카드 위에 겹쳐
+// 놓였다. 겹친 카드는 끌어서 옮길 수도 없다(위에 있는 것을 잡게 된다).
+//
+// SQL 을 불러올 때 특히 아팠다. 표 열 개를 한 번에 넣으면 그 열 개가 남의
+// 도면 위에 그대로 쌓였다.
+//
+// 이제 카드의 **크기**까지 보고 겹치지 않는 첫 격자점을 쓴다. 여백을 두고
+// 견주므로 빈틈에 억지로 끼워 넣지도 않는다. 격자는 아래로 무한히 자라니
+// 자리는 반드시 있다 — 다 차 있으면 결국 모든 것 아래에 놓인다.
+func (d *Document) nextFreeSlot(columns int) (float64, float64) {
+	taken := d.occupiedRects()
+	w, h := cardDefW, CardHeight(columns)
+
+	for i := 0; i < 4096; i++ {
 		x := layoutOriginX + float64(i%layoutColumns)*layoutStepX
 		y := layoutOriginY + float64(i/layoutColumns)*layoutStepY
-		if !used[[2]float64{x, y}] {
+		// 여백을 붙여 견준다. 딱 붙는 자리는 비어 있어도 읽기 어렵다.
+		probe := cardRect{
+			x: x - slotMargin, y: y - slotMargin,
+			w: w + 2*slotMargin, h: h + 2*slotMargin,
+		}
+		free := true
+		for _, r := range taken {
+			if probe.overlaps(r) {
+				free = false
+				break
+			}
+		}
+		if free {
 			return x, y
 		}
 	}

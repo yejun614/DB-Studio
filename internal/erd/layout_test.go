@@ -154,13 +154,22 @@ func TestAutoLayoutSurvivesCycle(t *testing.T) {
 	}
 }
 
-// CardHeight는 그리는 쪽과 같은 값을 내야 한다(erdcanvas.js: 30 + 20n + 8).
-func TestCardHeightMatchesCanvas(t *testing.T) {
-	cases := map[int]float64{0: 38, 1: 58, 14: 318, 40: 838}
-	for n, want := range cases {
+// CardHeight는 컬럼 하나에 정확히 한 줄만큼 자란다.
+//
+// 값 자체가 그리는 쪽과 같은지는 여기서 보지 않는다. 그것은 erdcanvas.js 를 읽어야
+// 알 수 있는 일이라 저장소 뿌리의 card_geometry_test.go 에 있다 — 예전에는 이
+// 검사가 그 값을 손으로 적어 두었고, 그래서 JS 가 30에서 34로 바뀐 뒤에도
+// 통과했다. 지키려던 것을 베껴 두면 검사가 아니라 사본이 된다.
+func TestCardHeightGrowsByOneRow(t *testing.T) {
+	base := CardHeight(0)
+	for n := 1; n <= 40; n++ {
+		want := base + float64(n)*cardRowH
 		if got := CardHeight(n); got != want {
 			t.Errorf("CardHeight(%d) = %.0f, 기대 %.0f", n, got, want)
 		}
+	}
+	if CardHeight(-1) != base {
+		t.Errorf("컬럼 수가 음수일 때 %.0f 를 냈습니다", CardHeight(-1))
 	}
 }
 
