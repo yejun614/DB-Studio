@@ -101,6 +101,13 @@ func (a *sqlAdapter) describeColumns(ctx context.Context, db *sql.DB, ref TableR
 	probe := "SELECT * FROM " + qualify(a.kind, ref) + " WHERE 1 = 0"
 	rows, err := db.QueryContext(ctx, probe)
 	if err != nil {
+		// ClickHouse 의 큐 엔진(Kafka 등)은 직접 조회가 막혀 있다. 그 오류 문장이
+		// 설정을 켜라고 알려 주는데, 그대로 따르면 화면을 열 때마다 파이프라인의
+		// 메시지를 먹는다. 목록에서도 'queue' 로 갈라 두지만, 우리가 모르는 큐
+		// 엔진이 생겼을 때를 위해 여기서 한 번 더 잡는다.
+		if a.kind == model.KindClickHouse && clickhouseDirectSelectBlocked(err) {
+			return nil, errClickHouseQueueSelect(ref)
+		}
 		return nil, fmt.Errorf("컬럼 정보를 읽지 못했습니다: %w", err)
 	}
 	defer rows.Close()

@@ -231,8 +231,14 @@ func listObjectsSQL(kind model.DBKind, database, owner string) (string, []any) {
 	case model.KindClickHouse:
 		// system.tables 하나로 표와 뷰가 함께 나온다. 엔진 이름이 뷰인지를 말한다
 		// (View·MaterializedView·LiveView). total_rows 는 엔진에 따라 NULL 이다.
+		//
+		// 큐 엔진은 'queue' 로 갈라 둔다. 표처럼 보이지만 **조회하면 메시지가
+		// 큐에서 사라지는** 물건이라, 목록에서 표와 같아 보이면 안 된다.
+		// 자세한 이유는 clickhouseStreamEngines 의 주석에 있다.
 		return `SELECT database, name,
-			CASE WHEN engine LIKE '%View' THEN 'view' ELSE 'table' END,
+			multiIf(engine LIKE '%View', 'view',
+			        engine IN (` + clickhouseStreamEngineList + `), 'queue',
+			        'table'),
 			COALESCE(toInt64(total_rows), -1), comment
 			FROM system.tables
 			WHERE database = coalesce(nullIf(?, ''), currentDatabase())
