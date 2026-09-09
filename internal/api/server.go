@@ -538,6 +538,11 @@ func (s *Server) routes() {
 	assistant.Post("/sessions/:id/chat", s.handleAIChat)
 	assistant.Post("/sessions/:id/actions/:actionId", s.handleDecidePendingAction)
 
+	// DB 컨테이너. 메뉴 접근 자체가 권한이므로 그룹 전체에 문을 건다.
+	// 이중 게이트(-allow-docker × docker.manage)는 requireDocker 안에 있다.
+	dockers := authed.Group("/docker", s.requireDocker)
+	dockers.Get("/status", s.handleDockerStatus)
+
 	// 매크로. 메뉴 접근 자체가 권한이므로 그룹 전체에 미들웨어를 건다.
 	//
 	// 정적 경로(runs, nodes, meta)를 :id 보다 먼저 등록한다. Fiber는 등록 순서대로
@@ -830,8 +835,13 @@ func (s *Server) handleMeta(c *fiber.Ctx) error {
 				"help": "매크로에서 bash/powershell 스크립트를 실행합니다 (서버가 -allow-shell로 켜져 있어야 합니다)"},
 			{"value": model.PermHTTPCall, "label": model.PermHTTPCall.Label(),
 				"help": "매크로에서 외부 HTTP API를 호출합니다. DB에서 읽은 값을 외부로 보낼 수 있습니다"},
+			{"value": model.PermDockerManage, "label": model.PermDockerManage.Label(),
+				"help": "도커로 DB 컨테이너를 만들고 실행·중단합니다 (서버가 -allow-docker로 켜져 있어야 합니다)"},
 		},
 		"shellEnabled": s.cfg.AllowShell,
+		// 도커가 꺼져 있으면 docker.manage 권한을 줘도 아무것도 되지 않는다.
+		// 화면이 그 사실을 미리 알려야 "권한을 받았는데 안 된다"를 막는다.
+		"dockerEnabled": s.cfg.AllowDocker,
 		// 모니터링이 꺼져 있으면 이벤트가 생기지 않는다 — 즉 조건 트리거는 영원히
 		// 발화하지 않는다. 화면이 그 사실을 미리 알려야 "만들었는데 안 돈다"를 막는다.
 		"monitorEnabled": s.cfg.MonitorEnabled,

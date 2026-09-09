@@ -116,6 +116,11 @@ func (s *Server) handleMe(c *fiber.Ctx) error {
 			"macro":        u.HasPerm(model.PermMacro),
 			"scriptRun":    u.HasPerm(model.PermScriptRun),
 			"shellEnabled": s.cfg.AllowShell,
+			// 도커 메뉴는 **둘 다** 있어야 보인다. 스위치가 꺼진 서버에서 메뉴를
+			// 보여 주면 들어가서 할 수 있는 일이 없고, 권한이 없는 사람에게
+			// 보여 주면 눌러 봐야 403 이다. 그 둘을 여기서 합쳐 둔다.
+			"dockerManage":  u.HasPerm(model.PermDockerManage) && s.cfg.AllowDocker,
+			"dockerEnabled": s.cfg.AllowDocker,
 			// totpRequired는 화면이 "해제" 버튼을 감추고 등록을 안내하는 데 쓴다.
 			// 실제 강제는 서버 미들웨어가 하므로, 이 값을 고쳐도 권한이 늘지 않는다.
 			"totpRequired": security.TOTPRequired,
