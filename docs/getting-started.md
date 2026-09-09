@@ -28,6 +28,8 @@ $env:CGO_ENABLED="0"; go build -o bin/dbstudio.exe ./cmd/dbstudio
 ```
 
 최초 실행 시 슈퍼 어드민 계정과 랜덤 비밀번호가 터미널에 출력된다. 이 값은 다시 표시되지 않는다.
+잃었다면 `dbstudio reset-password` 로 새 랜덤 값을 받는다(같은 기계에서, 데이터 디렉터리를
+읽을 수 있어야 한다 — [운영: 관리자 비밀번호를 잊었을 때](operations.md#관리자-비밀번호를-잊었을-때)).
 
 > 참고: Windows 콘솔이 UTF-8이 아니면 한글 출력이 깨질 수 있다. `chcp 65001` 후 실행하거나
 > Windows Terminal을 사용하면 정상 표시된다.
