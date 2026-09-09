@@ -34,6 +34,7 @@ import { renderGlossary } from './pages/glossary.js';
 import { renderVCS } from './pages/vcs.js';
 import { renderNoSQL } from './pages/nosql.js';
 import { renderData } from './pages/data.js';
+import { renderDBSetup } from './pages/dbsetup.js';
 import { renderSQLConsole } from './pages/sqlconsole.js';
 import { renderBackups } from './pages/backups.js';
 import { renderMacros, renderMacroRuns } from './pages/macros.js';
@@ -63,6 +64,7 @@ router.define('/connections', renderConnections);
 router.define('/schema', renderSchema);
 router.define('/nosql', renderNoSQL);
 router.define('/data', renderData);
+router.define('/dbsetup', renderDBSetup);
 router.define('/sql', renderSQLConsole);
 router.define('/backups', renderBackups);
 router.define('/macros', renderMacros);
@@ -123,6 +125,13 @@ const NAV = [
       { path: '/', label: '대시보드', icon: 'shield' },
       { path: '/projects', label: '프로젝트', icon: 'box' },
       { path: '/connections', label: 'DB 커넥션', icon: 'database' },
+      // DB 컨테이너는 커넥션 **바로 앞**의 이야기다("붙을 DB 를 어디서 얻는가").
+      // 관측이나 설계 절에 두면 이미 있는 DB 를 다루는 화면들과 섞인다.
+      //
+      // 메뉴가 보이려면 서버 스위치와 권한이 둘 다 있어야 한다(dockerManage 가
+      // 그 둘을 합친 값이다). 스위치가 꺼진 서버에서 메뉴를 보여 주면 들어가서
+      // 할 수 있는 일이 없다.
+      { path: '/dbsetup', label: 'DB 컨테이너', icon: 'box', requires: 'dockerManage' },
     ],
   },
   {

@@ -78,14 +78,22 @@ export async function renderAccess(outlet, params) {
   // 전역 권한 토글. 등급·데이터 능력과 달리 DB 목록에 영향을 주지 않으므로
   // rebuild()를 걸지 않는다(요약 칩은 DB 기준 집계다).
   const permBoxes = permDefs.map((p) => {
-    // 서버가 -allow-shell 없이 떠 있으면 권한만 켤 수 있어도 실행되지 않는다.
-    // 이유를 체크박스 옆에 적어 관리자가 서버 설정을 찾아가게 한다.
-    const shellOff = p.value === 'script.run' && !state.meta?.shellEnabled;
+    // 서버 스위치가 꺼져 있으면 권한만 켤 수 있어도 실행되지 않는다.
+    // 이유를 체크박스 옆에 적어 관리자가 서버 설정을 찾아가게 한다 — 이것이
+    // 없으면 권한을 주고 나서 "왜 안 되지"를 둘이 함께 헤매게 된다.
+    //
+    // 두 권한이 같은 모양이라 표로 둔다. 셋째가 생길 때 또 조건을 늘리지 않게.
+    const SWITCHED = {
+      'script.run': { on: state.meta?.shellEnabled, flag: '-allow-shell' },
+      'docker.manage': { on: state.meta?.dockerEnabled, flag: '-allow-docker' },
+    };
+    const gate = SWITCHED[p.value];
+    const off = Boolean(gate) && !gate.on;
     return h('label.cap-toggle', {},
       h('input', {
         type: 'checkbox',
         checked: draft.perms.has(p.value),
-        disabled: shellOff || isSuperadmin,
+        disabled: off || isSuperadmin,
         onchange: (e) => {
           if (e.target.checked) draft.perms.add(p.value);
           else draft.perms.delete(p.value);
@@ -93,7 +101,7 @@ export async function renderAccess(outlet, params) {
       }),
       h('span', {}, p.label),
       h('span.field-help', {},
-        shellOff ? '서버가 -allow-shell 없이 실행 중이라 사용할 수 없습니다' : (p.help ?? '')),
+        off ? `서버가 ${gate.flag} 없이 실행 중이라 사용할 수 없습니다` : (p.help ?? '')),
     );
   });
 
