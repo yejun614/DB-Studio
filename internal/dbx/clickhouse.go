@@ -551,6 +551,11 @@ func scanClickHouseMetrics(ctx context.Context, db *sql.DB, query string, set *m
 			out[name] = v
 		}
 	}
+	// 도중에 끊겼으면 적어 둔다. 지표는 없으면 없는 대로 그려지므로, 여기서
+	// 말하지 않으면 그래프에 빈 자리가 왜 생겼는지 알 길이 없다.
+	if err := rows.Err(); err != nil {
+		set.Notes = append(set.Notes, "지표를 끝까지 읽지 못했습니다: "+err.Error())
+	}
 	return out
 }
 
@@ -618,6 +623,13 @@ func clickhouseQueryLog(ctx context.Context, db *sql.DB, f *dblog.Filter, res *d
 		res.Entries = append(res.Entries, entry)
 		count++
 	}
+	// 도중에 끊겼으면 "다 읽었다"고 말하지 않는다. 여기서 err 을 안 보면 부분만
+	// 담긴 목록이 완전한 것처럼 화면에 뜨고, 사람은 그만큼이 전부라고 읽는다.
+	if err := rows.Err(); err != nil {
+		res.MarkSource(dblog.SourceSlowQuery, label, false, count,
+			"목록을 끝까지 읽지 못했습니다: "+err.Error())
+		return
+	}
 	res.MarkSource(dblog.SourceSlowQuery, label, true, count, "")
 }
 
@@ -669,6 +681,13 @@ func clickhouseQueryStats(ctx context.Context, db *sql.DB, f *dblog.Filter, res 
 		res.Stats = append(res.Stats, stat)
 		count++
 	}
+	// 도중에 끊겼으면 "다 읽었다"고 말하지 않는다. 여기서 err 을 안 보면 부분만
+	// 담긴 목록이 완전한 것처럼 화면에 뜨고, 사람은 그만큼이 전부라고 읽는다.
+	if err := rows.Err(); err != nil {
+		res.MarkSource(dblog.SourceStatements, label, false, count,
+			"목록을 끝까지 읽지 못했습니다: "+err.Error())
+		return
+	}
 	res.MarkSource(dblog.SourceStatements, label, true, count, "")
 }
 
@@ -714,6 +733,13 @@ func clickhouseRunningQueries(ctx context.Context, db *sql.DB, f *dblog.Filter, 
 			Extra:        map[string]string{"메모리": strconv.FormatUint(memory, 10)},
 		})
 		count++
+	}
+	// 도중에 끊겼으면 "다 읽었다"고 말하지 않는다. 여기서 err 을 안 보면 부분만
+	// 담긴 목록이 완전한 것처럼 화면에 뜨고, 사람은 그만큼이 전부라고 읽는다.
+	if err := rows.Err(); err != nil {
+		res.MarkSource(dblog.SourceCurrent, label, false, count,
+			"목록을 끝까지 읽지 못했습니다: "+err.Error())
+		return
 	}
 	res.MarkSource(dblog.SourceCurrent, label, true, count, "")
 }
