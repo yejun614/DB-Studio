@@ -143,6 +143,13 @@ type Config struct {
 	// AvatarAllowPrivateURI는 사설망 주소에서도 프로필 이미지를 내려받을지 여부다.
 	// 기본값 false — 아바타 가져오기가 내부망 포트 스캐너로 쓰이면 안 된다.
 	AvatarAllowPrivateURI bool
+
+	// Args는 플래그가 아닌 나머지 인자다.
+	//
+	// 하위 명령이 쓴다(`dbstudio reset-password -data ./data superadmin` 의
+	// 마지막 값). 여기 담아 두는 이유: 그 명령만을 위한 플래그를 서버 설정에
+	// 더하면, 서버를 띄우는 사람에게 아무 뜻도 없는 플래그가 `-h` 목록에 남는다.
+	Args []string
 }
 
 func (c *Config) MetaDBPath() string  { return filepath.Join(c.DataDir, "dbstudio.db") }
@@ -250,6 +257,7 @@ func Load(args []string) (*Config, error) {
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
+	c.Args = fs.Args()
 	c.MasterKey = os.Getenv("DBSTUDIO_MASTER_KEY")
 	// 클러스터 비밀은 플래그로 받지 않는다. 명령줄은 프로세스 목록(ps)에 그대로 보이고,
 	// 이 값 하나면 클러스터의 모든 데이터를 받아 갈 수 있다.
