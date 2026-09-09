@@ -211,7 +211,15 @@ class Editor {
     // renamedSel은 이름 미리보기 때문에 선택 키를 옮겨 둔 기록이다({from, to}).
     // 이름이 거부되면 from으로 되돌린다(previewTableName의 주석 참고).
     this.renamedSel = null;
-    this.tab = 'table'; // table | domain | chat
+    this.tab = 'table'; // table | domain | chat | issues
+    // 검증 결과. null 은 "아직 안 물어봤다"이고 빈 배열은 "물어봤고 없다"다.
+    // 둘을 같은 값으로 두면 탭을 여는 순간 "문제 없음"이라고 적혔다가 잠시 뒤
+    // 목록이 나타난다 — 그 한 번의 깜빡임이 "고쳐졌나?"로 읽힌다.
+    this.issues = null;
+    this.issuesError = null;
+    this.issuesBusy = false;
+    this.issuesAgain = false;
+    this.issuesTimer = null;
     this.chat = [];
     this.remoteCursors = new Map(); // clientId → {x,y,color,name}
     this.participants = [];
@@ -533,6 +541,9 @@ class Editor {
     this.pruneSelection();
     this.renderCanvas();
     this.renderPanelIfIdle();
+    // 스키마가 바뀌었으니 문제 목록도 바뀐다. 탭이 닫혀 있으면 아무 일도
+    // 일어나지 않는다(scheduleIssues 가 먼저 돌아간다).
+    this.scheduleIssues();
   }
 
   onOp(op, mine, hasDoc) {
@@ -654,10 +665,9 @@ class Editor {
       title: '대화 열기',
       onclick: () => {
         card.remove();
-        this.tab = 'chat';
+        // 방 대화로 열어야 하므로 모드를 먼저 정한다(setTab 이 패널을 그린다).
         this.chatMode = 'room';
-        this.renderToolbar();
-        this.renderPanel();
+        this.setTab('chat');
       },
     },
       h('div.erd-chat-toast-head', {},
@@ -767,30 +777,31 @@ class Editor {
         h('button.btn.btn-small', {
           type: 'button',
           class: this.tab === 'table' ? 'btn btn-small btn-active' : 'btn btn-small',
-          onclick: () => { this.tab = 'table'; this.renderToolbar(); this.renderPanel(); },
+          onclick: () => this.setTab('table'),
         }, '속성'),
         // 도메인은 특정 테이블에 매이지 않는다. 그래서 선택과 무관하게 언제나
         // 열 수 있는 탭이어야 하고, 컬럼을 고치다가 바로 건너갈 수 있어야 한다.
         h('button.btn.btn-small', {
           type: 'button',
           class: this.tab === 'domain' ? 'btn btn-small btn-active' : 'btn btn-small',
-          onclick: () => {
-            this.tab = 'domain';
-            this.renderToolbar();
-            this.renderPanel();
-            this.ensureTypeCatalog();
-          },
+          onclick: () => this.setTab('domain'),
         }, '도메인'),
         h('button.btn.btn-small', {
           type: 'button',
           class: this.tab === 'chat' ? 'btn btn-small btn-active' : 'btn btn-small',
-          onclick: () => {
-            this.tab = 'chat';
-            this.renderToolbar();
-            this.renderPanel();
-            this.loadAISessions();
-          },
+          onclick: () => this.setTab('chat'),
         }, '대화'),
+        // 문제 탭. 단추에 건수를 달아 두는 이유: 탭을 열어 보기 전에는 문제가
+        // 있는지 알 수 없다면, 아무도 열지 않는다.
+        //
+        // 건수는 탭을 한 번 연 뒤부터 보인다(그때 처음 검사한다). 열지 않은
+        // 사람에게 서버를 두드려 배지를 채워 주지는 않는다 — 편집하는 동안
+        // 계속 물어야 하고, 그 비용을 안 보는 사람에게 물릴 이유가 없다.
+        h('button.btn.btn-small', {
+          type: 'button',
+          class: this.tab === 'issues' ? 'btn btn-small btn-active' : 'btn btn-small',
+          onclick: () => this.setTab('issues'),
+        }, '문제', this.issueBadge()),
         // 사이드바를 접으면 캔버스가 340px 넓어진다. 테이블이 스무 개를 넘어가면
         // 그 폭이 "한 화면에 다 보이는가"를 가른다.
         // 발표 모드. 오른쪽 끝, 사이드바 접기 옆에 둔다 — 둘 다 "화면을 어떻게
@@ -1421,6 +1432,7 @@ class Editor {
     this.canvas.setShowDomain(this.showDomain);
     this.canvas.setDoc(this.doc);
     this.canvas.setMarks(this.marks);
+    this.canvas.setIssues(this.issueMarks());
     this.canvas.setParticipants(this.participants, this.you?.clientId);
     this.canvas.render();
   }
@@ -1618,10 +1630,7 @@ class Editor {
     } else {
       // 도메인은 도면 위에 자리가 없다. 대신 도메인 탭을 열어 준다 — 찾았는데
       // 아무 일도 일어나지 않으면 못 찾은 것과 구별되지 않는다.
-      this.tab = 'domain';
-      this.renderToolbar();
-      this.renderPanel();
-      this.ensureTypeCatalog();
+      this.setTab('domain');
     }
     if (!keepFocus) this.findInput.focus();
   }
@@ -1679,6 +1688,224 @@ class Editor {
     return fk ? { table, fk } : null;
   }
 
+  // setTab은 오른쪽 사이드바의 탭을 바꾼다.
+  //
+  // 한곳에 모아 두는 이유: 탭을 바꿀 때 **캔버스도 다시 그려야** 한다. 문제 탭은
+  // 도면에 강조를 얹는데 그 강조는 탭이 열려 있는 동안만 있어야 하고, 패널만
+  // 다시 그리면 탭을 떠난 뒤에도 빨간 카드가 남는다. 네 단추가 저마다
+  // `tab = …; renderToolbar(); renderPanel()` 을 적어 두던 동안 그것을
+  // 빠뜨렸다 — 같은 세 줄이 네 곳에 있으면 넷째 줄이 필요해질 때 한 곳은 빠진다.
+  setTab(tab) {
+    const was = this.tab;
+    this.tab = tab;
+    this.renderToolbar();
+    this.renderPanel();
+    // 강조가 켜지거나 꺼지는 전환에서만 캔버스를 건드린다. 탭을 옮길 때마다
+    // 도면을 다시 그리면 표 쉰 개짜리 문서에서 그것이 눈에 보인다.
+    if (was === 'issues' || tab === 'issues') this.renderCanvas();
+    if (tab === 'domain') this.ensureTypeCatalog();
+    if (tab === 'chat') this.loadAISessions();
+    if (tab === 'issues') this.loadIssues();
+  }
+
+  // ---------- 문제 목록 ----------
+
+  // scheduleIssues는 검증을 다시 부른다(잠깐 모아서 한 번만).
+  //
+  // 왜 서버에 묻는가: 규칙이 방언마다 다르고(ClickHouse 에는 외래키가 없다),
+  // 타입이 같은지 견주는 일은 논리 타입의 정규화를 알아야 한다. 그 판단은 이미
+  // 서버(internal/schema)에 있다. 화면에 규칙을 한 벌 더 두면 두 벌이 갈리고,
+  // 갈린 뒤에는 어느 쪽이 맞는지 아무도 모른다.
+  //
+  // 왜 모아서 부르는가: 컬럼 이름을 한 글자 칠 때마다 op 가 오간다. 그때마다
+  // 부르면 검증이 편집을 따라다니며 서버를 두드린다.
+  scheduleIssues() {
+    if (this.tab !== 'issues') return;
+    clearTimeout(this.issuesTimer);
+    this.issuesTimer = setTimeout(() => this.loadIssues(), 250);
+  }
+
+  async loadIssues({ quiet = true } = {}) {
+    if (this.tab !== 'issues') return;
+    // 부르는 중에 또 부르지 않는다. 답이 오면 그때 한 번 더 본다.
+    if (this.issuesBusy) {
+      this.issuesAgain = true;
+      return;
+    }
+    this.issuesBusy = true;
+    try {
+      const res = await api.get(
+        `/erd/documents/${encodeURIComponent(this.docID)}/validate`);
+      this.issues = res?.issues ?? [];
+      this.issuesError = null;
+    } catch (err) {
+      // 목록을 비우지 않는다. 한 번 실패했다고 방금 보고 있던 문제들이
+      // 사라지면, 사람은 그것을 "고쳐졌다"로 읽는다.
+      this.issuesError = err?.message ?? '검증에 실패했습니다';
+      if (!quiet) toast(this.issuesError, 'error');
+    } finally {
+      this.issuesBusy = false;
+    }
+    if (this.issuesAgain) {
+      this.issuesAgain = false;
+      this.loadIssues();
+      return;
+    }
+    this.renderToolbar();
+    this.renderCanvas();
+    this.renderPanelIfIdle();
+  }
+
+  // issueBadge는 탭 단추에 붙는 건수다(없으면 아무것도 붙이지 않는다).
+  //
+  // 오류가 하나라도 있으면 오류 건수만 보여준다. 둘을 나란히 붙이면 단추가
+  // 넓어져서 도구 막대가 줄바꿈되고, 정작 급한 것(오류)이 경고 옆에 묻힌다.
+  issueBadge() {
+    if (!this.issues?.length) return null;
+    const { errors, warnings } = this.issueCounts();
+    if (errors > 0) return h('span.badge.badge-danger', {}, String(errors));
+    return h('span.badge.badge-warn', {}, String(warnings));
+  }
+
+  // issueCounts는 오류·경고의 건수다.
+  issueCounts() {
+    let errors = 0;
+    let warnings = 0;
+    for (const is of this.issues ?? []) {
+      if (is.severity === 'error') errors += 1;
+      else warnings += 1;
+    }
+    return { errors, warnings };
+  }
+
+  // issueMarks는 캔버스가 강조할 것들이다.
+  //
+  // 탭이 닫혀 있으면 빈 값을 준다. 늘 칠해 두면 색이 뜻을 잃는다 — 도면이
+  // 언제나 빨간 상태면 빨강은 아무 말도 하지 않는다.
+  //
+  // 한 자리에 오류와 경고가 겹치면 오류가 이긴다. 더 무거운 쪽을 보여주지
+  // 않으면, 경고 색을 보고 "고치지 않아도 되는 것"으로 읽는다.
+  issueMarks() {
+    if (this.tab !== 'issues' || !this.issues?.length) {
+      return { tables: null, columns: null, links: null };
+    }
+    const tables = new Map();
+    const columns = new Map();
+    const links = new Map();
+    const worse = (a, b) => (a === 'error' || b === 'error' ? 'error' : 'warning');
+
+    for (const is of this.issues) {
+      const sev = is.severity === 'error' ? 'error' : 'warning';
+      // 뷰의 문제는 뷰 키로 온다. 카드 강조는 표와 같은 자리를 쓴다.
+      const key = is.table || is.view;
+      if (key) tables.set(key, worse(tables.get(key) ?? sev, sev));
+      if (is.table && is.column) {
+        if (!columns.has(is.table)) columns.set(is.table, new Map());
+        const inner = columns.get(is.table);
+        inner.set(is.column, worse(inner.get(is.column) ?? sev, sev));
+      }
+      // 관계선의 id 는 `표키.외래키이름`이다(findFK 와 같은 규칙).
+      if (is.table && is.fk) {
+        const id = `${is.table}.${is.fk}`;
+        links.set(id, worse(links.get(id) ?? sev, sev));
+      }
+    }
+    return { tables, columns, links };
+  }
+
+  // gotoIssue는 그 문제가 있는 자리로 화면을 옮기고 고른다.
+  //
+  // 목록의 줄을 누르면 아무 일도 일어나지 않는 목록은 읽히지 않는다. 관계의
+  // 문제면 그 관계를, 표·컬럼의 문제면 그 표를 고른다 — 컬럼은 표의 속성 창
+  // 안에 있고, 거기로 가는 것이 사람이 다음에 하려는 일이다.
+  gotoIssue(is) {
+    const linkID = is.table && is.fk ? `${is.table}.${is.fk}` : null;
+    // 그릴 수 있는 관계만 고른다.
+    //
+    // 없는 표를 가리키는 관계에는 도면에 선이 없다(그릴 대상이 없으므로).
+    // 그것을 고르면 선택은 되지만 화면에서는 아무 일도 일어나지 않아서,
+    // 누른 사람에게는 목록이 고장 난 것으로 보인다. 그때는 관계가 나가는
+    // 표를 고른다 — 고쳐야 하는 자리가 거기다.
+    if (linkID && this.canvas.linkSpots?.has(linkID)) {
+      const at = hitCenter(this.doc, { kind: 'table', key: is.table, tableKey: is.table });
+      if (at) this.canvas.centerOn(at.x, at.y);
+      this.select({ kind: 'link', id: linkID });
+      return;
+    }
+    const key = is.table || is.view;
+    if (!key) return;
+    const at = hitCenter(this.doc, { kind: 'table', key, tableKey: key });
+    if (at) this.canvas.centerOn(at.x, at.y);
+    if (this.findTable(key)) {
+      this.select({ kind: 'table', id: key });
+      return;
+    }
+    // 뷰다. 카드는 있으므로 옮겨는 갔다.
+    this.select({ kind: 'view', id: key });
+  }
+
+  // issuesView는 문제 탭의 몸통이다.
+  issuesView() {
+    const list = this.issues ?? [];
+    const { errors, warnings } = this.issueCounts();
+    const errs = list.filter((is) => is.severity === 'error');
+    const warns = list.filter((is) => is.severity !== 'error');
+
+    return [
+      h('div.erd-panel-head', {},
+        h('h2', {}, '문제'),
+        h('button.btn.btn-small', {
+          type: 'button', title: '다시 검사',
+          onclick: () => this.loadIssues({ quiet: false }),
+        }, icon('refresh')),
+      ),
+      h('div.erd-panel-body', {},
+        this.issuesError
+          ? h('p.erd-panel-danger', {}, this.issuesError)
+          : null,
+        this.issues === null
+          ? h('p.muted', {}, '검사하고 있습니다…')
+          : null,
+        this.issues !== null && list.length === 0
+          ? h('div.erd-panel-empty', {},
+            icon('check', 28),
+            h('p', {}, '찾은 문제가 없습니다.'),
+            h('p.field-help', {},
+              '외래키가 가리키는 표와 컬럼, 타입, 유일성, 기본키, 인덱스, '
+              + '그리고 NOT NULL 로만 이어진 참조의 고리를 봅니다.'))
+          : null,
+        list.length === 0 ? null : h('p.field-help', {},
+          `오류 ${errors}건, 경고 ${warnings}건. `
+          + '오류는 이대로는 만들 수 없거나 뜻이 깨진 것이고, 경고는 만들어져 '
+          + '돌아가지만 나중에 아플 것입니다. 줄을 누르면 그 자리로 갑니다.'),
+        errs.length === 0 ? null : h('div.erd-issue-group', {},
+          h('h3.erd-sub', {}, '오류', h('span.badge.badge-danger', {}, String(errors))),
+          ...errs.map((is) => this.issueRow(is))),
+        warns.length === 0 ? null : h('div.erd-issue-group', {},
+          h('h3.erd-sub', {}, '경고', h('span.badge.badge-warn', {}, String(warnings))),
+          ...warns.map((is) => this.issueRow(is))),
+      ),
+    ];
+  }
+
+  issueRow(is) {
+    const bad = is.severity === 'error';
+    // 어디의 문제인지를 줄 위에 적는다. 설명만 있으면 표가 스무 개인 도면에서
+    // "어느 표 이야기인가"를 문장에서 찾아 읽어야 한다.
+    const where = [is.table || is.view, is.column, is.fk && `관계 ${is.fk}`]
+      .filter(Boolean).join(' · ');
+    return h('button.erd-issue', {
+      type: 'button',
+      class: `erd-issue${bad ? ' is-error' : ' is-warn'}`,
+      onclick: () => this.gotoIssue(is),
+    },
+    h('span.erd-issue-icon', {}, icon('alert', 14)),
+    h('span.erd-issue-text', {},
+      h('span.erd-issue-msg', {}, is.message),
+      where ? h('span.erd-issue-where', {}, where) : null,
+      is.hint ? h('span.erd-issue-hint', {}, is.hint) : null));
+  }
+
   renderPanel() {
     this.panelDirty = false;
     if (this.present) {
@@ -1687,6 +1914,10 @@ class Editor {
     }
     if (this.tab === 'domain') {
       mount(this.ui.panel, this.domainView());
+      return;
+    }
+    if (this.tab === 'issues') {
+      mount(this.ui.panel, this.issuesView());
       return;
     }
     if (this.tab === 'chat') {
