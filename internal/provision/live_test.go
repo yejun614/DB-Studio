@@ -5,6 +5,7 @@ package provision
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -102,5 +103,106 @@ func dumpLogs(t *testing.T, c *docker.Client, id string) {
 	defer logs.Close()
 	for line := range logs.Lines() {
 		t.Logf("  [%s] %s", line.Stream, line.Text)
+	}
+}
+
+// ClickHouse 의 설정 파일이 **실제로 먹는가.**
+//
+// 이것을 따로 확인하는 이유: 파일을 넣는 것과 DB 가 그것을 읽는 것은 다른
+// 일이다. 경로가 하나 틀리면 파일은 잘 들어가고 DB 는 기본값으로 뜬다 —
+// 오류도 없고, 우리는 설정했다고 믿는다. 이 세션에 그 함정을 두 번 만났다.
+func TestLiveClickHouseConfigTakesEffect(t *testing.T) {
+	c := docker.New(docker.DefaultSocket)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+	if st := c.Status(ctx); !st.Reachable {
+		t.Skipf("도커에 닿지 못했습니다: %s", st.Reason)
+	}
+	if err := c.EnsureNetwork(ctx, NetworkName, nil); err != nil {
+		t.Fatalf("네트워크: %v", err)
+	}
+
+	name := fmt.Sprintf("live-ch-%d", time.Now().UnixNano()%1000000)
+	p, err := Build(Spec{Kind: "clickhouse", Name: name, Values: map[string]string{
+		"password": "Pw1234!aB", "database": "appdb", "persist": "false",
+		"hostPort": "0", "memoryMB": "1024",
+		"markCacheMB": "256", "maxQueryMemoryMB": "900", "maxMemoryRatio": "0.5",
+	}})
+	if err != nil {
+		t.Fatalf("계획: %v", err)
+	}
+	// 파일은 둘이어야 한다. 서버 설정과 프로필 설정이 다른 디렉터리로 간다.
+	if p.Files[ClickHouseServerConfig] == "" || p.Files[ClickHouseUserConfig] == "" {
+		got := []string{}
+		for path := range p.Files {
+			got = append(got, path)
+		}
+		t.Fatalf("설정 파일 자리가 어긋났습니다: %v", got)
+	}
+
+	if err := c.PullImage(ctx, p.Image, nil); err != nil {
+		t.Fatalf("내려받기: %v", err)
+	}
+	res, err := c.CreateContainer(ctx, p.Container, p.CreateRequest("live"))
+	if err != nil {
+		t.Fatalf("만들기: %v", err)
+	}
+	defer func() { _ = c.RemoveContainer(context.Background(), res.ID, true) }()
+
+	// 시작하기 **전에** 넣는다.
+	for path, body := range p.Files {
+		if err := c.PutFile(ctx, res.ID, path, body); err != nil {
+			t.Fatalf("파일 넣기(%s): %v", path, err)
+		}
+		t.Logf("넣었다: %s (%d바이트)", path, len(body))
+	}
+	if err := c.StartContainer(ctx, res.ID); err != nil {
+		t.Fatalf("시작: %v", err)
+	}
+
+	deadline := time.Now().Add(120 * time.Second)
+	for time.Now().Before(deadline) {
+		ins, err := c.InspectContainer(ctx, res.ID)
+		if err != nil {
+			t.Fatalf("살펴보기: %v", err)
+		}
+		if !ins.State.Running {
+			dumpLogs(t, c, res.ID)
+			t.Fatalf("죽었습니다: 종료코드=%d", ins.State.ExitCode)
+		}
+		if ins.HealthStatus() == "healthy" {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+
+	// 넣은 값이 실제로 먹었는지 서버에 물어본다. 파일이 있는 것과 읽힌 것은
+	// 다르고, 그 차이가 이 검사의 이유다.
+	out, err := c.Exec(ctx, res.ID, []string{
+		"clickhouse-client", "--password", "Pw1234!aB", "--query",
+		"SELECT value FROM system.server_settings WHERE name = 'mark_cache_size'",
+	})
+	if err != nil {
+		dumpLogs(t, c, res.ID)
+		t.Fatalf("물어보기: %v", err)
+	}
+	if got := strings.TrimSpace(out); got != "268435456" {
+		t.Errorf("마크 캐시 = %q, 기대 268435456 (설정 파일이 먹지 않았습니다)", got)
+	} else {
+		t.Logf("마크 캐시 = %s — 설정 파일이 먹었다", got)
+	}
+
+	// 프로필 설정도 확인한다. 이것이 config.d 에 잘못 적히면 오류 없이 안 먹는다.
+	out, err = c.Exec(ctx, res.ID, []string{
+		"clickhouse-client", "--password", "Pw1234!aB", "--query",
+		"SELECT value FROM system.settings WHERE name = 'max_memory_usage'",
+	})
+	if err != nil {
+		t.Fatalf("물어보기: %v", err)
+	}
+	if got := strings.TrimSpace(out); got != "943718400" {
+		t.Errorf("질의 메모리 상한 = %q, 기대 943718400 (프로필 설정이 먹지 않았습니다)", got)
+	} else {
+		t.Logf("질의 메모리 상한 = %s — 프로필 설정이 먹었다", got)
 	}
 }

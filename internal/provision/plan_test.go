@@ -182,30 +182,38 @@ func TestBuildClickHouseConfigFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(p.Files) != 1 {
+	if len(p.Files) != 2 {
 		t.Fatalf("파일이 %d개입니다: %v", len(p.Files), p.Files)
 	}
-	var body string
-	for path, b := range p.Files {
-		if !strings.Contains(path, "config.d") {
-			t.Errorf("경로가 config.d 가 아닙니다: %s", path)
-		}
-		body = b
+	server, user := p.Files[ClickHouseServerConfig], p.Files[ClickHouseUserConfig]
+	if server == "" || user == "" {
+		t.Fatalf("설정 파일 자리가 어긋났습니다: %v", p.Files)
 	}
+
 	// 마크 캐시는 MB → 바이트로 바뀌어야 한다. ClickHouse 는 단위 없는 숫자를
 	// 바이트로 읽는다.
-	if !strings.Contains(body, "<mark_cache_size>268435456</mark_cache_size>") {
-		t.Errorf("마크 캐시가 바이트로 적히지 않았습니다:\n%s", body)
+	if !strings.Contains(server, "<mark_cache_size>268435456</mark_cache_size>") {
+		t.Errorf("마크 캐시가 바이트로 적히지 않았습니다:\n%s", server)
 	}
-	// 질의 상한은 프로필 쪽이다.
-	if !strings.Contains(body, "<profiles>") || !strings.Contains(body, "max_memory_usage") {
-		t.Errorf("프로필 설정이 profiles 안에 없습니다:\n%s", body)
+	// 질의 상한도 바이트다. 이름에 단위가 없어서 한 번 빠졌던 자리다 —
+	// 1000MB 를 1000바이트로 적으면 모든 질의가 실패한다.
+	if !strings.Contains(user, "<max_memory_usage>1048576000</max_memory_usage>") {
+		t.Errorf("질의 상한이 바이트로 적히지 않았습니다:\n%s", user)
 	}
-	// 서버 설정은 profiles 밖이어야 한다.
-	ratioAt := strings.Index(body, "max_server_memory_usage_to_ram_ratio")
-	profAt := strings.Index(body, "<profiles>")
-	if ratioAt < 0 || (profAt >= 0 && ratioAt > profAt) {
-		t.Errorf("서버 설정이 profiles 안으로 들어갔습니다:\n%s", body)
+
+	// 프로필 설정은 users.d 로 가야 한다. config.d 에 적으면 오류도 경고도 없이
+	// 안 먹는다(살아 있는 서버에서 확인했다).
+	if !strings.Contains(user, "<profiles>") {
+		t.Errorf("프로필 설정이 profiles 안에 없습니다:\n%s", user)
+	}
+	if strings.Contains(server, "max_memory_usage") {
+		t.Errorf("프로필 설정이 config.d 로 갔습니다:\n%s", server)
+	}
+	if strings.Contains(user, "max_server_memory_usage_to_ram_ratio") {
+		t.Errorf("서버 설정이 users.d 로 갔습니다:\n%s", user)
+	}
+	if !strings.Contains(server, "max_server_memory_usage_to_ram_ratio") {
+		t.Errorf("서버 설정이 config.d 에 없습니다:\n%s", server)
 	}
 }
 

@@ -154,7 +154,7 @@ func Build(spec Spec) (*Plan, error) {
 		case TargetArg:
 			p.Args = append(p.Args, argFor(r, f, raw)...)
 		case TargetFile:
-			fileVals[f.Name] = raw
+			fileVals[f.Name] = fileValue(f, raw)
 		case TargetMeta:
 			if err := applyMeta(p, f, raw); err != nil {
 				return nil, err
@@ -163,8 +163,7 @@ func Build(spec Spec) (*Plan, error) {
 	}
 
 	if len(fileVals) > 0 {
-		path, body := renderConfigFile(r, fileVals)
-		if path != "" {
+		for path, body := range renderConfigFiles(r, fileVals) {
 			p.Files[path] = body
 		}
 	}
@@ -337,49 +336,93 @@ func withUnit(f *Field, raw, unit string) string {
 	return raw + unit
 }
 
-// renderConfigFile은 파일로 가는 값들을 그 DB 의 설정 파일로 만든다.
+// fileValue는 파일로 가는 값을 그 파일이 기대하는 단위로 바꾼다.
 //
-// 지금은 ClickHouse 하나다. 그쪽은 서버 설정과 프로필 설정이 다른 디렉터리에
-// 있어서(config.d 와 users.d), 어느 값이 어디로 가는지를 알아야 한다 —
-// 프로필 값을 config.d 에 적으면 오류도 없이 그냥 안 먹는다.
-func renderConfigFile(r *Recipe, vals map[string]string) (string, string) {
+// MB 로 물어보고 바이트로 적는다. ClickHouse 의 설정은 단위 없는 숫자를
+// 바이트로 읽으므로, 화면에서 적은 900 을 그대로 넘기면 900**바이트**가 된다 —
+// 오류도 경고도 없고, 상한만 우습게 작아져서 모든 질의가 실패한다.
+//
+// 판단 기준을 키 이름(MB 로 끝나는가)에 두는 것은 인자 쪽의 withUnit 과 같다.
+// 설정 이름(`_size` 로 끝나는가)으로 재면 max_memory_usage 처럼 이름에 단위가
+// 없는 것이 조용히 빠진다 — 실제로 그렇게 빠져 있었다.
+func fileValue(f *Field, raw string) string {
+	shift := 0
+	switch {
+	case strings.HasSuffix(f.Key, "MB"):
+		shift = 20
+	case strings.HasSuffix(f.Key, "GB"):
+		shift = 30
+	default:
+		return raw
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return raw // 사람이 단위를 직접 적었다
+	}
+	return strconv.Itoa(n << shift)
+}
+
+// renderConfigFiles은 파일로 가는 값들을 그 DB 의 설정 파일로 만든다.
+//
+// 지금은 ClickHouse 하나다. 그쪽은 **서버 설정과 프로필 설정이 다른 디렉터리에
+// 있다** — config.d 와 users.d. 프로필 값을 config.d 에 적으면 오류도 경고도
+// 없이 그냥 안 먹는다. 이 함수가 파일을 둘로 가르는 이유가 그것이다.
+//
+// 짐작으로 가른 것이 아니다. 처음에는 프로필 값도 config.d 에 <profiles> 로
+// 적었는데, 살아 있는 서버에 물어보니 max_memory_usage 가 0 이었다
+// (live_test.go 의 TestLiveClickHouseConfigTakesEffect). 그 검사가 이 갈라짐을
+// 지킨다.
+func renderConfigFiles(r *Recipe, vals map[string]string) map[string]string {
 	if r.Kind != "clickhouse" {
-		return "", ""
+		return nil
 	}
 	// 프로필 설정(질의 하나의 몫)과 서버 설정(캐시·전체 몫)을 가른다.
 	profile := map[string]bool{"max_memory_usage": true, "max_threads": true}
 
 	var server, prof []string
 	for _, k := range sortedKeys(vals) {
-		v := vals[k]
-		if strings.HasSuffix(k, "_size") || k == "mark_cache_size" {
-			// MB 로 받아 바이트로 적는다. ClickHouse 는 단위 없는 숫자를
-			// 바이트로 읽는다.
-			if n, err := strconv.Atoi(v); err == nil {
-				v = strconv.Itoa(n << 20)
-			}
-		}
-		line := fmt.Sprintf("    <%s>%s</%s>", k, v, k)
 		if profile[k] {
-			prof = append(prof, line)
+			prof = append(prof, k)
 		} else {
-			server = append(server, line)
+			server = append(server, k)
 		}
 	}
 
-	var b strings.Builder
-	b.WriteString("<!-- DB Studio 가 만든 설정입니다. -->\n<clickhouse>\n")
-	b.WriteString(strings.Join(server, "\n"))
-	if len(prof) > 0 {
-		b.WriteString("\n    <profiles>\n        <default>\n")
-		for _, l := range prof {
-			b.WriteString("    " + strings.TrimPrefix(l, "    ") + "\n")
+	out := map[string]string{}
+	if len(server) > 0 {
+		var b strings.Builder
+		b.WriteString("<!-- DB Studio 가 만든 서버 설정입니다. -->\n<clickhouse>\n")
+		for _, k := range server {
+			fmt.Fprintf(&b, "    <%s>%s</%s>\n", k, vals[k], k)
 		}
-		b.WriteString("        </default>\n    </profiles>")
+		b.WriteString("</clickhouse>\n")
+		out[ClickHouseServerConfig] = b.String()
 	}
-	b.WriteString("\n</clickhouse>\n")
-	return "/etc/clickhouse-server/config.d/dbstudio.xml", b.String()
+	if len(prof) > 0 {
+		// users.d 다. 여기 적어야 default 프로필에 붙는다.
+		var b strings.Builder
+		b.WriteString("<!-- DB Studio 가 만든 프로필 설정입니다. -->\n")
+		b.WriteString("<clickhouse>\n    <profiles>\n        <default>\n")
+		for _, k := range prof {
+			fmt.Fprintf(&b, "            <%s>%s</%s>\n", k, vals[k], k)
+		}
+		b.WriteString("        </default>\n    </profiles>\n</clickhouse>\n")
+		out[ClickHouseUserConfig] = b.String()
+	}
+	return out
 }
+
+// ClickHouse 의 설정 파일 자리. 이미지가 만들어 둔 디렉터리라 우리가 만들지
+// 않는다 — PutFile 은 없는 디렉터리를 만들지 않으므로 오타는 바로 걸린다.
+//
+// 디렉터리째로 마운트하지 않는 이유: config.d 에는 이미지가 넣어 둔
+// docker_related_config.xml(listen_host 0.0.0.0)이 있고, users.d 에는
+// 엔트리포인트가 만드는 default-user.xml(비밀번호)이 있다. 디렉터리를 덮으면
+// 둘 다 사라지고, 서버는 붙을 수 없거나 비밀번호 없이 뜬다.
+const (
+	ClickHouseServerConfig = "/etc/clickhouse-server/config.d/dbstudio.xml"
+	ClickHouseUserConfig   = "/etc/clickhouse-server/users.d/dbstudio.xml"
+)
 
 // ---------- 검사 ----------
 
