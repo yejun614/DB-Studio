@@ -554,6 +554,11 @@ func (s *Server) routes() {
 	dockers.Get("/instances", s.handleListDBInstances)
 	dockers.Post("/instances", s.handleCreateDBInstance)
 	dockers.Get("/instances/:id", s.handleGetDBInstance)
+	// 설정 고치기. 미리보기(changes)를 따로 둔 이유: 무엇이 일어나는지 —
+	// 재시작인지, 다시 만드는 것인지, 고쳐도 소용없는 것인지 — 를 누르기 전에
+	// 보여줘야 한다.
+	dockers.Post("/instances/:id/changes", s.handleDBInstanceChanges)
+	dockers.Patch("/instances/:id", s.handleUpdateDBInstance)
 	dockers.Post("/instances/:id/start", s.handleStartDBInstance)
 	dockers.Post("/instances/:id/stop", s.handleStopDBInstance)
 	dockers.Post("/instances/:id/restart", s.handleRestartDBInstance)

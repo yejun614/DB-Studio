@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -333,5 +334,115 @@ func TestProjectComposeSaysWhenEmpty(t *testing.T) {
 	status, body := c.do("GET", "/api/v1/docker/compose?project="+e.project.ID, nil)
 	if status != 404 || body["error"] != "empty" {
 		t.Errorf("= %d %v (기대 404 empty)", status, body["error"])
+	}
+}
+
+// 미리보기는 아무것도 바꾸지 않는다.
+//
+// 이 응답을 보고 사람이 결정한다. 여기서 이미 바뀌어 있으면 "취소"가 취소가
+// 아니게 된다.
+func TestChangesPreviewTouchesNothing(t *testing.T) {
+	e, c := dockerEnv(t)
+	ctx := context.Background()
+	in, err := e.st.CreateDBInstance(ctx, store.CreateDBInstanceParams{
+		ProjectID: e.project.ID, Name: "ed1", Kind: "postgres",
+		Image: "postgres:17-alpine", Version: "17-alpine",
+		ContainerName: "dbstudio-ed1", Port: 5432,
+		Values:  map[string]string{"database": "appdb", "memoryMB": "512"},
+		Secrets: map[string]string{"password": "pw1234!"},
+	})
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+
+	status, body := c.do("POST", "/api/v1/docker/instances/"+in.ID+"/changes",
+		map[string]any{"values": map[string]string{"memoryMB": "1024"}})
+	if status != 200 {
+		t.Fatalf("= %d %v", status, body)
+	}
+	if body["needed"] != "live" {
+		t.Errorf("needed = %v (기대 live)", body["needed"])
+	}
+	got, _ := e.st.GetDBInstance(ctx, in.ID)
+	if got.Values["memoryMB"] != "512" {
+		t.Errorf("미리보기가 값을 바꿨습니다: %v", got.Values)
+	}
+}
+
+// 고쳐도 지금 DB 에 적용되지 않는 값은 그렇게 말해야 한다.
+//
+// PostgreSQL 은 비밀번호를 첫 실행에서만 쓴다(살아 있는 컨테이너로 쟀다).
+// "저장했습니다"라고만 하면 사람은 바뀐 줄 알고 새 비밀번호로 접속하다 막힌다.
+func TestChangesFlagsInitOnlyValues(t *testing.T) {
+	e, c := dockerEnv(t)
+	ctx := context.Background()
+	in, err := e.st.CreateDBInstance(ctx, store.CreateDBInstanceParams{
+		ProjectID: e.project.ID, Name: "ed2", Kind: "postgres",
+		Image: "postgres:17-alpine", Version: "17-alpine",
+		ContainerName: "dbstudio-ed2", Port: 5432,
+		Values:  map[string]string{"database": "appdb"},
+		Secrets: map[string]string{"password": "pw1234!"},
+	})
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+
+	status, body := c.do("POST", "/api/v1/docker/instances/"+in.ID+"/changes",
+		map[string]any{"values": map[string]string{"password": "새-비밀번호"}})
+	if status != 200 {
+		t.Fatalf("= %d %v", status, body)
+	}
+	if body["needed"] != "init" {
+		t.Errorf("needed = %v (기대 init)", body["needed"])
+	}
+	only, _ := body["initOnly"].([]any)
+	if len(only) != 1 {
+		t.Fatalf("적용 안 되는 것이 %d개: %v", len(only), body["initOnly"])
+	}
+	// 비밀번호가 응답에 실려서는 안 된다. 이 응답은 화면에 그대로 그려진다.
+	blob, _ := json.Marshal(body)
+	if strings.Contains(string(blob), "새-비밀번호") {
+		t.Errorf("비밀번호가 응답에 실렸습니다: %s", blob)
+	}
+}
+
+// 지운 DB 는 고칠 수 없다.
+//
+// 고칠 컨테이너가 없는데 "고쳤습니다"라고 답하면, 사람은 다음에 만들 때 그 값이
+// 쓰일 것으로 기대한다. 그런데 그 줄은 기록일 뿐이라 다시 만들 길이 없다.
+func TestUpdateRefusesRemovedInstance(t *testing.T) {
+	e, c := dockerEnv(t)
+	ctx := context.Background()
+	in := newRow(t, e, store.CreateDBInstanceParams{
+		Name: "ed3", Kind: "postgres", Image: "postgres:17-alpine", Version: "17-alpine",
+		ContainerName: "dbstudio-ed3", Port: 5432,
+		Secrets: map[string]string{"password": "pw1234!"},
+	})
+	removed := store.InstanceRemoved
+	if err := e.st.UpdateDBInstance(ctx, in.ID,
+		store.UpdateDBInstanceParams{Status: &removed}); err != nil {
+		t.Fatalf("%v", err)
+	}
+
+	status, body := c.do("PATCH", "/api/v1/docker/instances/"+in.ID,
+		map[string]any{"values": map[string]string{"memoryMB": "1024"}})
+	if status != 409 || body["error"] != "removed" {
+		t.Errorf("= %d %v (기대 409 removed)", status, body["error"])
+	}
+}
+
+// 바꾼 것이 없으면 아무 일도 없어야 한다.
+func TestUpdateWithNoChangesDoesNothing(t *testing.T) {
+	e, c := dockerEnv(t)
+	in := newRow(t, e, store.CreateDBInstanceParams{
+		Name: "ed4", Kind: "postgres", Image: "postgres:17-alpine", Version: "17-alpine",
+		ContainerName: "dbstudio-ed4", Port: 5432,
+		Values:  map[string]string{"database": "appdb", "memoryMB": "512"},
+		Secrets: map[string]string{"password": "pw1234!"},
+	})
+	status, body := c.do("PATCH", "/api/v1/docker/instances/"+in.ID,
+		map[string]any{"values": map[string]string{"memoryMB": "512"}})
+	if status != 200 || body["needed"] != "none" {
+		t.Errorf("= %d %v", status, body["needed"])
 	}
 }
