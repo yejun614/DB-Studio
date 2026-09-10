@@ -20,7 +20,7 @@ import { h, mount, icon } from '../core/dom.js';
 import { api } from '../core/api.js';
 import {
   pageHeader, spinner, badge, emptyState, field, input, select, checkbox,
-  openModal, confirmDialog, toast, toastError, relativeTime,
+  openModal, confirmDialog, toast, toastError, relativeTime, copyToClipboard,
 } from '../core/ui.js';
 import { state } from '../core/store.js';
 import { setScreenDetail } from '../core/screen.js';
@@ -299,7 +299,11 @@ function instancesCard(root, instances) {
   }
   return h('div.card', {},
     h('h2.card-title', {}, icon('database'), '만든 DB',
-      badge(`${instances.length}개`, 'neutral')),
+      badge(`${instances.length}개`, 'neutral'),
+      h('button.btn.btn-small.notice-link', {
+        type: 'button',
+        onclick: () => openCompose(withProject('/docker/compose'), '프로젝트 — compose.yml'),
+      }, icon('save'), 'compose.yml 로 내보내기')),
     h('div.table-wrap', {},
       h('table.table', {},
         h('thead', {}, h('tr', {},
@@ -442,6 +446,11 @@ async function openDetail(root, summary) {
           onclick: () => act('다시 시작했습니다', () => api.post(`/docker/instances/${in_.id}/restart`)),
         }, icon('refresh'), '다시 시작')
         : null,
+      h('button.btn', {
+        type: 'button',
+        onclick: () => openCompose(`/docker/instances/${in_.id}/compose`,
+          `${in_.name} — compose.yml`),
+      }, icon('save'), 'compose.yml'),
       h('button.btn.btn-danger', {
         type: 'button', onclick: () => removeInstance(in_, act),
       }, icon('trash'), gone && !in_.containerId ? '기록 지우기' : '지우기'),
@@ -543,6 +552,107 @@ async function removeInstance(in_, act) {
     keep ? '컨테이너를 지웠습니다 (데이터는 남겼습니다)' : '컨테이너와 데이터를 지웠습니다',
     () => api.del(`/docker/instances/${in_.id}?keepData=${keep}`),
   );
+}
+
+// ---------- compose.yml 내보내기 ----------
+
+// openCompose는 만든 것을 compose.yml 로 보여 준다.
+//
+// ── 왜 이 기능이 필요한가 ───────────────────────────────────────────
+// 화면에서 정한 것을 **가져갈 수 있어야** 한다. 이 앱 없이도 같은 DB 를 띄울 수
+// 있어야 하고, 그 파일을 저장소에 넣어 검토할 수 있어야 한다. 그렇지 않으면
+// 여기서 만든 DB 는 이 앱 안에서만 존재하는 것이 되고, 그것은 사람을 묶어 두는
+// 종류의 편리함이다.
+async function openCompose(path, title) {
+  let res;
+  try {
+    res = await api.get(path);
+  } catch (err) {
+    toastError(err);
+    return;
+  }
+
+  const files = Object.entries(res.files ?? {});
+  const yamlBox = h('pre.code-block.dbsetup-compose', {}, res.yaml);
+
+  const close = openModal({
+    title, width: 780,
+    body: h('div', {},
+      h('p.field-help', {}, `서비스 ${res.services}개.`),
+      (res.notes ?? []).length
+        ? h('div.notice.notice-warn', {}, icon('alert'),
+          h('div', {}, ...res.notes.map((n) => h('p', {}, n))))
+        : null,
+      (res.skipped ?? []).length
+        ? h('div.notice.notice-danger', {}, icon('alert'),
+          h('div', {},
+            h('strong', {}, '빠진 것'),
+            ...res.skipped.map((n) => h('p', {}, n))))
+        : null,
+      yamlBox,
+      res.envExample
+        ? h('div', {},
+          h('h3.erd-sub', {}, '.env'),
+          // 비밀번호는 서버가 파일에 넣지 않는다. 그 사실을 여기서 말해야
+          // 받아 간 사람이 "왜 안 뜨지"로 시간을 쓰지 않는다.
+          h('p.field-help', {}, '비밀번호는 파일에 넣지 않았습니다. '
+            + '만들 때 정한 값을 여기 채워 넣으세요.'),
+          h('pre.code-block.dbsetup-compose', {}, res.envExample))
+        : null,
+      files.length
+        ? h('div', {},
+          h('h3.erd-sub', {}, '함께 저장할 설정 파일'),
+          h('p.field-help', {}, 'compose.yml 옆에 같은 경로로 두어야 합니다. '
+            + '없으면 도커가 그 자리에 빈 디렉터리를 만들고, DB 는 설정 없이 뜹니다.'),
+          ...files.map(([p]) => h('div.field-help', {}, h('code', {}, p))))
+        : null),
+    footer: (closeFn) => [
+      h('button.btn', {
+        type: 'button',
+        onclick: () => {
+          copyToClipboard(res.yaml);
+          toast('compose.yml 을 복사했습니다', 'success');
+        },
+      }, icon('copy'), '복사'),
+      h('button.btn.btn-primary', {
+        type: 'button', onclick: () => saveComposeBundle(res),
+      }, icon('save'), '파일로 저장'),
+      h('span.dbsetup-actions-gap'),
+      h('button.btn', { type: 'button', onclick: closeFn }, '닫기'),
+    ],
+  });
+  void close;
+}
+
+// saveComposeBundle은 파일들을 하나씩 내려받게 한다.
+//
+// 압축해서 하나로 주지 않는 이유: 그러려면 압축 라이브러리를 화면에 들여야
+// 하는데, 파일은 많아야 서너 개다. 대신 경로를 이름에 담아 어디에 두어야
+// 하는지가 파일 이름만 봐도 보이게 한다.
+function saveComposeBundle(res) {
+    downloadText('compose.yaml', res.yaml);
+  if (res.envExample) downloadText('.env', res.envExample);
+  for (const [path, body] of Object.entries(res.files ?? {})) {
+    downloadText(path.replace(/\//g, '__'), body);
+  }
+  const extra = Object.keys(res.files ?? {}).length;
+  toast(extra
+    ? `내려받았습니다. 설정 파일 ${extra}개는 이름의 __ 를 / 로 되돌려 두세요`
+    : '내려받았습니다', 'info');
+}
+
+// downloadText는 만든 문자열을 파일로 내려받게 한다.
+// 서버를 거치지 않는다 — 내용이 이미 브라우저에 있고, 왕복하면 같은 것을 두 번 만든다.
+function downloadText(filename, text) {
+  const url = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // 즉시 해제하면 브라우저가 저장을 시작하기 전에 사라질 수 있다.
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
 // ---------- 상태 ----------

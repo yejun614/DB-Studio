@@ -5956,3 +5956,11 @@ tr.is-clickable:focus-visible { outline: 2px solid var(--primary); outline-offse
  * 흔해서(ClickHouse·PostgreSQL), 칠하면 잘 뜬 DB 가 온통 오류처럼 보인다.
  * 어느 쪽에서 왔는지만 흐리게 구분한다. */
 .dbsetup-log-err { color: var(--text-dim); }
+
+/* 내보낸 compose 파일. 길어서 상자 안에서 스크롤한다. */
+.dbsetup-compose {
+  max-height: 320px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.55;
+}
