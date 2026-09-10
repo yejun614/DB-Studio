@@ -5964,3 +5964,11 @@ tr.is-clickable:focus-visible { outline: 2px solid var(--primary); outline-offse
   font-size: 12px;
   line-height: 1.55;
 }
+
+/* 내보내기 형식 고르개. 둘은 같은 것을 말하는 다른 표기다. */
+.dbsetup-format {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 14px; padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.dbsetup-format .field-help { margin-left: auto; }

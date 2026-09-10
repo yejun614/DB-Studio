@@ -556,29 +556,58 @@ async function removeInstance(in_, act) {
 
 // ---------- compose.yml 내보내기 ----------
 
-// openCompose는 만든 것을 compose.yml 로 보여 준다.
+// openCompose는 만든 것을 compose.yml 또는 스웜 스택 파일로 보여 준다.
 //
 // ── 왜 이 기능이 필요한가 ───────────────────────────────────────────
 // 화면에서 정한 것을 **가져갈 수 있어야** 한다. 이 앱 없이도 같은 DB 를 띄울 수
 // 있어야 하고, 그 파일을 저장소에 넣어 검토할 수 있어야 한다. 그렇지 않으면
 // 여기서 만든 DB 는 이 앱 안에서만 존재하는 것이 되고, 그것은 사람을 묶어 두는
 // 종류의 편리함이다.
+//
+// 두 형식을 한 창에서 바꿔 보게 한 이유: 둘은 같은 것을 말하는 다른 표기다.
+// 창을 갈라 두면 어느 것이 지금 것인지 헷갈리고, 스웜 파일을 compose 로
+// 돌리거나 그 반대를 하게 된다 — 둘 다 오류 없이 다르게 동작한다.
 async function openCompose(path, title) {
-  let res;
-  try {
-    res = await api.get(path);
-  } catch (err) {
-    toastError(err);
-    return;
+  let format = 'compose';
+  const body = h('div.dbsetup-detail');
+  const foot = h('div.dbsetup-actions');
+  let current = null;
+
+  const close = openModal({ title, width: 780, body, footer: () => foot });
+
+  const load = async () => {
+    mount(body, spinner('만드는 중…'));
+    try {
+      current = await api.get(path + (path.includes('?') ? '&' : '?') + 'format=' + format);
+    } catch (err) {
+      mount(body, h('div.notice.notice-danger', {}, icon('alert'),
+        h('span', {}, err.message ?? '만들지 못했습니다')));
+      return;
+    }
+    draw();
+  };
+
+  function tab(value, label, help) {
+    return h('button', {
+      type: 'button',
+      class: format === value ? 'btn btn-small btn-primary' : 'btn btn-small',
+      title: help,
+      onclick: () => {
+        if (format === value) return;
+        format = value;
+        load();
+      },
+    }, label);
   }
 
-  const files = Object.entries(res.files ?? {});
-  const yamlBox = h('pre.code-block.dbsetup-compose', {}, res.yaml);
-
-  const close = openModal({
-    title, width: 780,
-    body: h('div', {},
-      h('p.field-help', {}, `서비스 ${res.services}개.`),
+  function draw() {
+    const res = current;
+    const files = Object.entries(res.files ?? {});
+    mount(body,
+      h('div.dbsetup-format', {},
+        tab('compose', 'docker compose', '한 대에서 띄웁니다'),
+        tab('stack', 'docker swarm', 'docker stack deploy 로 띄웁니다'),
+        h('span.field-help', {}, `서비스 ${res.services}개 · ${res.filename}`)),
       (res.notes ?? []).length
         ? h('div.notice.notice-warn', {}, icon('alert'),
           h('div', {}, ...res.notes.map((n) => h('p', {}, n))))
@@ -589,39 +618,40 @@ async function openCompose(path, title) {
             h('strong', {}, '빠진 것'),
             ...res.skipped.map((n) => h('p', {}, n))))
         : null,
-      yamlBox,
+      h('pre.code-block.dbsetup-compose', {}, res.yaml),
       res.envExample
         ? h('div', {},
-          h('h3.erd-sub', {}, '.env'),
-          // 비밀번호는 서버가 파일에 넣지 않는다. 그 사실을 여기서 말해야
-          // 받아 간 사람이 "왜 안 뜨지"로 시간을 쓰지 않는다.
-          h('p.field-help', {}, '비밀번호는 파일에 넣지 않았습니다. '
-            + '만들 때 정한 값을 여기 채워 넣으세요.'),
+          h('h3.erd-sub', {}, format === 'stack' ? '넣어야 하는 환경변수' : '.env'),
+          h('p.field-help', {}, format === 'stack'
+            ? 'docker stack deploy 는 .env 를 읽지 않습니다. 아래 이름들을 환경변수로 '
+              + '넣고 배포하세요 — 넣지 않으면 배포가 멈춥니다.'
+            : '비밀번호는 파일에 넣지 않았습니다. 만들 때 정한 값을 여기 채워 넣으세요.'),
           h('pre.code-block.dbsetup-compose', {}, res.envExample))
         : null,
       files.length
         ? h('div', {},
           h('h3.erd-sub', {}, '함께 저장할 설정 파일'),
-          h('p.field-help', {}, 'compose.yml 옆에 같은 경로로 두어야 합니다. '
+          h('p.field-help', {}, `${res.filename} 옆에 같은 경로로 두어야 합니다. `
             + '없으면 도커가 그 자리에 빈 디렉터리를 만들고, DB 는 설정 없이 뜹니다.'),
           ...files.map(([p]) => h('div.field-help', {}, h('code', {}, p))))
-        : null),
-    footer: (closeFn) => [
+        : null);
+
+    mount(foot,
       h('button.btn', {
         type: 'button',
         onclick: () => {
           copyToClipboard(res.yaml);
-          toast('compose.yml 을 복사했습니다', 'success');
+          toast(`${res.filename} 을 복사했습니다`, 'success');
         },
       }, icon('copy'), '복사'),
       h('button.btn.btn-primary', {
         type: 'button', onclick: () => saveComposeBundle(res),
       }, icon('save'), '파일로 저장'),
       h('span.dbsetup-actions-gap'),
-      h('button.btn', { type: 'button', onclick: closeFn }, '닫기'),
-    ],
-  });
-  void close;
+      h('button.btn', { type: 'button', onclick: close }, '닫기'));
+  }
+
+  await load();
 }
 
 // saveComposeBundle은 파일들을 하나씩 내려받게 한다.
@@ -630,8 +660,10 @@ async function openCompose(path, title) {
 // 하는데, 파일은 많아야 서너 개다. 대신 경로를 이름에 담아 어디에 두어야
 // 하는지가 파일 이름만 봐도 보이게 한다.
 function saveComposeBundle(res) {
-    downloadText('compose.yaml', res.yaml);
-  if (res.envExample) downloadText('.env', res.envExample);
+  downloadText(res.filename ?? 'compose.yaml', res.yaml);
+  // 스웜은 .env 를 읽지 않는다. 읽지 않는 파일을 함께 내려받게 하면 그것을
+  // 두고서 "넣었는데 왜 안 되지"가 된다 — 이름 목록은 창에 이미 보인다.
+  if (res.envExample && res.format !== 'stack') downloadText('.env', res.envExample);
   for (const [path, body] of Object.entries(res.files ?? {})) {
     downloadText(path.replace(/\//g, '__'), body);
   }
