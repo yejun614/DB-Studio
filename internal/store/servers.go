@@ -129,6 +129,28 @@ func (s *Store) CreateServer(ctx context.Context, p SaveServerParams) (*model.Se
 //
 // 여기서 비밀번호를 한 번 고치면 그 서버의 모든 DB에 반영된다 — 이것이 서버를
 // 뽑아낸 이유 그 자체다. 소속 커넥션은 손대지 않는다.
+// SetServerAddress는 주소만 바꾼다.
+//
+// UpdateServer 를 쓰지 않는 이유: 그쪽은 이름·종류·태그까지 함께 덮어쓴다.
+// 주소 하나를 고치려고 나머지를 읽어 되돌려 쓰면, 그 사이에 사람이 화면에서
+// 고친 것이 조용히 되돌아간다.
+//
+// 어디에 쓰는가: 도커로 만든 DB 는 멈췄다 시작하면 호스트 포트가 **바뀐다**
+// (도커가 매번 빈 포트를 고른다). 그것을 옮겨 적지 않으면 커넥션은 없는 포트를
+// 가리킨 채로 남고, 접속 실패만 보인다.
+func (s *Store) SetServerAddress(ctx context.Context, id, host string, port int) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE servers SET host = ?, port = ?, updated_at = ? WHERE id = ?`,
+		host, port, nowString(), id)
+	if err != nil {
+		return fmt.Errorf("set server address: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) UpdateServer(ctx context.Context, id string, p SaveServerParams) (*model.Server, error) {
 	now := nowString()
 	optJSON, err := p.Options.MarshalDB()

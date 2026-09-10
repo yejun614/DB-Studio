@@ -130,8 +130,12 @@ func (s *Server) handleCreateDBInstance(c *fiber.Ctx) error {
 	})
 	switch {
 	case errors.Is(err, store.ErrInstanceNameTaken):
-		return fail(c, fiber.StatusConflict, "duplicate",
-			"같은 이름의 DB 컨테이너가 이미 있습니다. 다른 이름을 쓰세요")
+		// 지운 것의 기록이 이름을 쥐고 있는 경우를 따로 말해 준다.
+		//
+		// 그 줄은 화면에서 흐리게 보여서 "이미 있는 것"으로 읽히지 않는다.
+		// 그냥 "이름이 있습니다"라고만 하면 사람은 목록을 보고 없는데 왜 그러냐고
+		// 생각하게 된다 — 무엇을 해야 하는지까지 적어야 막힌 데서 나올 수 있다.
+		return fail(c, fiber.StatusConflict, "duplicate", nameTakenMessage(c, s, req.Name))
 	case errors.Is(err, store.ErrNoProject):
 		return fail(c, fiber.StatusBadRequest, "no_project", "프로젝트를 고르세요")
 	case err != nil:
@@ -205,6 +209,9 @@ func (s *Server) handleGetDBInstance(c *fiber.Ctx) error {
 		if err := s.provisioner().Refresh(ctx, in); err == nil {
 			if fresh, err := s.st.GetDBInstance(c.Context(), in.ID); err == nil {
 				in = fresh
+				// 사람이 도커에서 직접 다시 시작했을 수도 있다. 그때도 포트가
+				// 바뀌므로 여기서 한 번 더 맞춘다.
+				s.syncConnectionAddress(c.Context(), in)
 			}
 		}
 	}
@@ -301,6 +308,38 @@ func (s *Server) registerInstance(instanceID, actorID string, env model.Environm
 	s.monitor.TriggerPoll(conn.ID)
 }
 
+// syncConnectionAddress는 바뀐 주소를 등록해 둔 커넥션에 옮겨 적는다.
+//
+// ── 왜 필요한가 ─────────────────────────────────────────────────────
+// 도커가 골라 준 호스트 포트는 **멈췄다 시작하면 바뀐다.** 살아 있는 데몬에
+// 돌려 보고 알았다: 32805 로 떠 있던 것이 중단·시작 뒤 32806 이 됐다.
+// 옮겨 적지 않으면 커넥션은 아무도 듣지 않는 포트를 가리킨 채로 남고, 화면에는
+// "접속 실패"만 뜬다 — 우리가 만든 DB 인데 우리가 붙지 못하는 셈이다.
+//
+// 우리가 컨테이너 안에 있으면 주소가 컨테이너 이름과 안쪽 포트라 바뀌지 않는다.
+// 그때는 아무 일도 하지 않는다(connectTarget 이 같은 값을 준다).
+func (s *Server) syncConnectionAddress(ctx context.Context, in *store.DBInstance) {
+	if in == nil || in.ConnectionID == "" {
+		return
+	}
+	conn, err := s.st.GetConnection(ctx, in.ConnectionID)
+	if err != nil {
+		return // 사람이 커넥션을 지웠다. 그것은 실패가 아니다.
+	}
+	host, port, _ := connectTarget(in, inContainer())
+	if port <= 0 || (conn.Host == host && conn.Port == port) {
+		return
+	}
+	if err := s.st.SetServerAddress(ctx, conn.ServerID, host, port); err != nil {
+		slog.Error("바뀐 포트를 커넥션에 옮겨 적지 못했습니다",
+			"instance", in.ID, "connection", conn.ID, "err", err)
+		return
+	}
+	slog.Info("DB 컨테이너의 주소가 바뀌어 커넥션을 고쳤습니다",
+		"instance", in.Name, "from", conn.Port, "to", port)
+	s.monitor.TriggerPoll(conn.ID)
+}
+
 // connectTarget은 이 앱에서 그 DB 에 붙을 주소를 정한다.
 //
 // ── 왜 두 갈래인가 ─────────────────────────────────────────────────
@@ -338,6 +377,27 @@ func inContainer() bool {
 }
 
 // ---------- 유틸 ----------
+
+// nameTakenMessage는 이름이 겹쳤을 때 무엇을 해야 하는지까지 적는다.
+func nameTakenMessage(c *fiber.Ctx, s *Server, name string) string {
+	const base = "같은 이름의 DB 컨테이너가 이미 있습니다"
+	all, err := s.st.ListDBInstances(c.Context(), "")
+	if err != nil {
+		return base + ". 다른 이름을 쓰세요"
+	}
+	want := provision.ContainerName(strings.TrimSpace(name))
+	for _, in := range all {
+		if in.ContainerName != want {
+			continue
+		}
+		if in.Status == store.InstanceRemoved {
+			return base + " (지운 기록이 이름을 쥐고 있습니다). " +
+				"목록에서 그 줄의 기록을 지우고 다시 만들거나, 다른 이름을 쓰세요"
+		}
+		break
+	}
+	return base + ". 다른 이름을 쓰세요"
+}
 
 // splitSecrets는 비밀 필드를 갈라낸다.
 //
