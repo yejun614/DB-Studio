@@ -52,6 +52,13 @@ type DBInstance struct {
 	Error    string `json:"error,omitempty"`
 	Progress string `json:"progress,omitempty"`
 
+	// Cluster는 이 노드가 속한 클러스터 이름이다(단독이면 빈 값).
+	Cluster string `json:"cluster,omitempty"`
+	// Role은 '' (단독) · keeper (조정자) · node (데이터 노드) 다.
+	Role    string `json:"role,omitempty"`
+	Shard   int    `json:"shard,omitempty"`
+	Replica int    `json:"replica,omitempty"`
+
 	ConnectionID  string    `json:"connectionId,omitempty"`
 	CreatedBy     string    `json:"createdBy,omitempty"`
 	CreatedByName string    `json:"createdByName,omitempty"`
@@ -70,7 +77,8 @@ const dbInstanceSelect = `
 	       host_port, port, values_json,
 	       status, health, error, progress,
 	       COALESCE(connection_id, ''), COALESCE(created_by, ''), created_by_name,
-	       created_at, updated_at
+	       created_at, updated_at,
+	       cluster, role, shard, replica
 	FROM db_instances`
 
 func scanDBInstance(row interface{ Scan(...any) error }) (*DBInstance, error) {
@@ -81,7 +89,8 @@ func scanDBInstance(row interface{ Scan(...any) error }) (*DBInstance, error) {
 		&in.HostPort, &in.Port, &valuesJSON,
 		&in.Status, &in.Health, &in.Error, &in.Progress,
 		&in.ConnectionID, &in.CreatedBy, &in.CreatedByName,
-		&createdAt, &updatedAt)
+		&createdAt, &updatedAt,
+		&in.Cluster, &in.Role, &in.Shard, &in.Replica)
 	if err != nil {
 		return nil, err
 	}
@@ -110,6 +119,13 @@ type CreateDBInstanceParams struct {
 	Values        map[string]string
 	// Secrets는 봉해서 따로 둘 값이다(비밀번호 등).
 	Secrets map[string]string
+
+	// Cluster·Role·Shard·Replica는 클러스터로 만든 노드일 때만 채운다.
+	Cluster string
+	Role    string
+	Shard   int
+	Replica int
+
 	ActorID string
 	Actor   string
 }
@@ -144,11 +160,13 @@ func (s *Store) CreateDBInstance(ctx context.Context, p CreateDBInstanceParams) 
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO db_instances (id, project_id, name, kind, image, version,
 			container_name, volume_name, host_port, port, values_json,
-			status, created_by, created_by_name, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			status, created_by, created_by_name, created_at, updated_at,
+			cluster, role, shard, replica)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, p.ProjectID, p.Name, p.Kind, p.Image, p.Version,
 		p.ContainerName, p.VolumeName, p.HostPort, p.Port, string(valuesJSON),
-		InstanceCreating, nullString(p.ActorID), p.Actor, now, now)
+		InstanceCreating, nullString(p.ActorID), p.Actor, now, now,
+		p.Cluster, p.Role, p.Shard, p.Replica)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, ErrInstanceNameTaken

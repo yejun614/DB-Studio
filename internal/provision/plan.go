@@ -101,6 +101,14 @@ type Plan struct {
 	// Files는 시작하기 전에 컨테이너에 넣을 파일이다(경로 → 내용).
 	Files map[string]string `json:"files,omitempty"`
 
+	// Health는 이 계획만의 헬스체크다(비우면 레시피의 것을 쓴다).
+	//
+	// 왜 필요한가: 같은 이미지로 다른 것을 띄울 때가 있다. ClickHouse Keeper 는
+	// clickhouse-server 이미지로 뜨지만 DB 가 아니라서 clickhouse-client 로
+	// 물어볼 수 없다 — 레시피의 헬스체크를 그대로 쓰면 잘 도는 조정자가
+	// 영원히 "뜨는 중"으로 남는다.
+	Health []string `json:"-"`
+
 	MemoryMB int    `json:"memoryMB,omitempty"`
 	CPUs     string `json:"cpus,omitempty"`
 	Restart  string `json:"restart"`
@@ -249,6 +257,17 @@ func NetworkLabels() map[string]string {
 	}
 }
 
+// healthTest는 이 계획의 헬스체크다(계획의 것이 있으면 그것, 없으면 레시피의 것).
+func (p *Plan) healthTest() []string {
+	if len(p.Health) > 0 {
+		return p.Health
+	}
+	if p.Recipe != nil {
+		return p.Recipe.Health
+	}
+	return nil
+}
+
 // Labels는 이 계획으로 만드는 것들에 붙일 라벨이다.
 func (p *Plan) Labels(instanceID string) map[string]string {
 	name := strings.TrimPrefix(p.Container, "dbstudio-")
@@ -312,9 +331,9 @@ func (p *Plan) CreateRequest(instanceID string) *docker.CreateRequest {
 			EndpointsConfig: map[string]struct{}{NetworkName: {}},
 		},
 	}
-	if len(p.Recipe.Health) > 0 {
+	if health := p.healthTest(); len(health) > 0 {
 		req.Healthcheck = &docker.HealthConfig{
-			Test:     p.Recipe.Health,
+			Test:     health,
 			Interval: int64(5 * time.Second),
 			Timeout:  int64(5 * time.Second),
 			// 처음 뜰 때 데이터 디렉터리를 만드는 DB 가 있다(MySQL 은 수십 초).

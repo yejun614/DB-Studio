@@ -188,7 +188,10 @@ func render(items []ComposeItem, format Format) *ComposeFile {
 			// 이미지가 넣어 둔 것이 사라진다(ClickHouse 의 listen_host 설정과
 			// 엔트리포인트가 만드는 비밀번호 파일이 그렇게 사라진다).
 			rel := "./" + svc + path
-			out.Files[strings.TrimPrefix(rel, "./")] = p.Files[path]
+			// 설정 파일에도 비밀이 들어갈 수 있다(클러스터의 remote_servers 는
+			// 노드끼리 붙을 계정을 담는다). 환경변수와 인자만 가리고 파일을
+			// 그대로 내보내면, 저장소에 들어가라고 만든 파일에 평문이 실린다.
+			out.Files[strings.TrimPrefix(rel, "./")] = mask.applyInText(p.Files[path])
 			mounts = append(mounts, rel+":"+path+":ro")
 		}
 		if len(mounts) > 0 {
@@ -377,6 +380,21 @@ func (m *masker) apply(v string) string {
 		}
 	}
 	return escapeDollar(v)
+}
+
+// applyInText는 글 안에 박힌 비밀 값을 자리로 바꾼다.
+//
+// apply 와 달리 **부분 문자열**로 찾는다. 설정 파일 안의 비밀번호는 태그
+// 사이에 끼어 있어서 값 전체가 같을 수 없다. 짧은 비밀번호가 다른 낱말 안에서
+// 걸릴 수 있지만, 설정 파일에서는 그 위험보다 평문이 새는 쪽이 훨씬 나쁘다.
+func (m *masker) applyInText(text string) string {
+	for _, v := range sortedKeys(m.byValue) {
+		if v == "" {
+			continue
+		}
+		text = strings.ReplaceAll(text, v, m.placeholder(m.byValue[v]))
+	}
+	return text
 }
 
 // envVarName은 비밀 자리에 쓸 변수 이름이다.
