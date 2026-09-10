@@ -83,12 +83,12 @@ func TestLiveRunnerFullCycle(t *testing.T) {
 		}
 	}()
 
-	if err := runner.Create(in.ID, plan); err != nil {
+	if err := runner.Create(in.ID, plan, nil); err != nil {
 		t.Fatalf("만들기: %v", err)
 	}
 	// 두 번 누르는 것은 막아야 한다. 막지 않으면 두 번째가 409 로 실패하면서
 	// 잘 되고 있는 첫 번째를 failed 로 덮는다.
-	if err := runner.Create(in.ID, plan); !errors.Is(err, ErrBusy) {
+	if err := runner.Create(in.ID, plan, nil); !errors.Is(err, ErrBusy) {
 		t.Errorf("두 번째 만들기 = %v (기대 ErrBusy)", err)
 	}
 

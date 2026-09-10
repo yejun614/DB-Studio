@@ -28,11 +28,39 @@ import (
 // 우리가 만든 것이 하나의 프로젝트로 보인다 — 우리 라벨만 쓰면 도커 CLI 를
 // 쓰는 사람에게는 정체 모를 컨테이너가 흩어져 있는 것으로 보인다.
 const (
-	LabelProject   = "com.docker.compose.project"
-	LabelService   = "com.docker.compose.service"
-	LabelManagedBy = "dbstudio.managed"
-	LabelInstance  = "dbstudio.instance"
-	LabelKind      = "dbstudio.kind"
+	LabelProject = "com.docker.compose.project"
+	LabelService = "com.docker.compose.service"
+	// LabelConfigHash가 **결정적이다.**
+	//
+	// project·service 라벨만으로는 compose 가 우리 컨테이너를 자기 프로젝트의
+	// 것으로 보지 않는다. 살아 있는 데몬에 라벨을 하나씩 지워 가며 확인했다:
+	// 이 라벨이 있으면 `docker compose -p dbstudio ps` 에 나타나고, 없으면
+	// 나머지를 다 갖춰도 나타나지 않는다.
+	LabelConfigHash = "com.docker.compose.config-hash"
+	// 아래 셋은 compose 가 만든 것과 모양을 맞추는 값이다.
+	//
+	// oneoff 는 `docker compose run` 으로 잠깐 띄운 것과 구분하는 표시이고
+	// (그것들은 목록에서 빠진다), container-number 는 같은 서비스의 몇 번째
+	// 인스턴스인지다 — 우리는 서비스마다 하나뿐이라 늘 1 이다.
+	// LabelNetwork는 네트워크에 붙는다. 없으면 `docker compose up` 이
+	// **거절한다** — "network dbstudio-net was found but has incorrect label".
+	// 내보낸 파일을 실제로 돌려 보고서야 알았다.
+	LabelNetwork   = "com.docker.compose.network"
+	LabelOneOff    = "com.docker.compose.oneoff"
+	LabelContainer = "com.docker.compose.container-number"
+	LabelVersion   = "com.docker.compose.version"
+	// LabelConfigFiles는 **빈 값으로** 붙인다.
+	//
+	// 우리가 만든 컨테이너에는 딸린 파일이 없다(내보내기를 눌러야 파일이 생기고,
+	// 그 파일이 어디 저장될지는 우리가 모른다). 그런데 이 라벨이 아예 없으면
+	// `docker compose ls` 가 컨테이너마다 경고를 한 줄씩 낸다 — 우리가 남의
+	// 도구를 시끄럽게 만드는 셈이다. 빈 값이면 경고 없이 "없음"으로 보인다.
+	//
+	// 없는 경로를 지어내지 않는 이유: 도커 데스크톱이 그 파일을 열려고 한다.
+	LabelConfigFiles = "com.docker.compose.project.config_files"
+	LabelManagedBy   = "dbstudio.managed"
+	LabelInstance    = "dbstudio.instance"
+	LabelKind        = "dbstudio.kind"
 	// ProjectName은 우리가 만든 것들이 모이는 compose 프로젝트 이름이다.
 	ProjectName = "dbstudio"
 	// NetworkName은 만든 DB 들이 붙는 네트워크다.
@@ -79,6 +107,15 @@ type Plan struct {
 
 	// Secrets는 감사·미리보기에서 가려야 하는 환경변수 이름들이다.
 	Secrets []string `json:"-"`
+	// secretValues는 밖으로 나가면 안 되는 **값**이다(필드 열쇠 → 값).
+	//
+	// 이름이 아니라 값으로 들고 있는 이유: 비밀이 환경변수로만 가지 않는다.
+	// Redis 의 비밀번호는 실행 인자로 간다(--requirepass). 환경변수 이름만
+	// 가리면 compose 파일에 그 값이 인자로 실려 나간다 — 실제로 그렇게 새는
+	// 것을 검사가 잡았다.
+	//
+	// 내보내지 않는 필드다(소문자). 계획 미리보기 응답에 실리지 않아야 한다.
+	secretValues map[string]string
 
 	// Warnings는 만들 수는 있지만 알아야 하는 것이다.
 	Warnings []string `json:"warnings,omitempty"`
@@ -127,6 +164,7 @@ func Build(spec Spec) (*Plan, error) {
 
 	// 파일로 가는 값은 모아서 마지막에 한 파일로 만든다.
 	fileVals := map[string]string{}
+	p.secretValues = map[string]string{}
 
 	for i := range r.Fields {
 		f := &r.Fields[i]
@@ -143,6 +181,11 @@ func Build(spec Spec) (*Plan, error) {
 		}
 		if err := checkField(f, raw); err != nil {
 			return nil, err
+		}
+		// 어느 길로 가든 비밀이면 값을 적어 둔다. 길마다 따로 적으면 새 길을
+		// 더할 때 한쪽을 빠뜨리고, 빠뜨린 쪽으로 값이 새어 나간다.
+		if f.Secret {
+			p.secretValues[f.Key] = raw
 		}
 
 		switch f.Target {
@@ -191,12 +234,34 @@ func ContainerName(name string) string { return "dbstudio-" + name }
 // VolumeName은 데이터 볼륨 이름이다.
 func VolumeName(name string) string { return "dbstudio-" + name + "-data" }
 
+// NetworkLabels는 우리 네트워크에 붙일 라벨이다.
+//
+// compose 가 만든 것과 같은 모양이어야 한다. 우리가 먼저 만들어 둔 네트워크에
+// 이것이 없으면, 내보낸 compose 파일로 띄우려 할 때 compose 가 "라벨이 다르다"며
+// 멈춘다. 그 오류는 네트워크 이야기를 하지만 사람이 한 일은 DB 를 띄운 것뿐이라
+// 무엇을 고쳐야 하는지 알기 어렵다.
+func NetworkLabels() map[string]string {
+	return map[string]string{
+		LabelProject:   ProjectName,
+		LabelNetwork:   NetworkName,
+		LabelVersion:   "dbstudio",
+		LabelManagedBy: "dbstudio",
+	}
+}
+
 // Labels는 이 계획으로 만드는 것들에 붙일 라벨이다.
 func (p *Plan) Labels(instanceID string) map[string]string {
 	name := strings.TrimPrefix(p.Container, "dbstudio-")
 	return map[string]string{
-		LabelProject:   ProjectName,
-		LabelService:   name,
+		LabelProject:     ProjectName,
+		LabelService:     name,
+		LabelConfigHash:  p.configHash(),
+		LabelOneOff:      "False",
+		LabelContainer:   "1",
+		LabelConfigFiles: "",
+		// 우리가 만들었다는 것을 버전 자리에 적는다. 숫자를 흉내 내면 compose 의
+		// 어느 판이 만든 것인지 묻는 사람에게 거짓을 말하게 된다.
+		LabelVersion:   "dbstudio",
 		LabelManagedBy: "dbstudio",
 		LabelInstance:  instanceID,
 		LabelKind:      string(p.Recipe.Kind),

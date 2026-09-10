@@ -26,7 +26,7 @@ func TestLiveRecipesActuallyStart(t *testing.T) {
 	if st := c.Status(ctx); !st.Reachable {
 		t.Skipf("도커에 닿지 못했습니다: %s", st.Reason)
 	}
-	if err := c.EnsureNetwork(ctx, NetworkName, nil); err != nil {
+	if err := c.EnsureNetwork(ctx, NetworkName, NetworkLabels()); err != nil {
 		t.Fatalf("네트워크: %v", err)
 	}
 
@@ -118,7 +118,7 @@ func TestLiveClickHouseConfigTakesEffect(t *testing.T) {
 	if st := c.Status(ctx); !st.Reachable {
 		t.Skipf("도커에 닿지 못했습니다: %s", st.Reason)
 	}
-	if err := c.EnsureNetwork(ctx, NetworkName, nil); err != nil {
+	if err := c.EnsureNetwork(ctx, NetworkName, NetworkLabels()); err != nil {
 		t.Fatalf("네트워크: %v", err)
 	}
 

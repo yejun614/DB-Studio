@@ -132,9 +132,7 @@ func (r *Runner) Busy(instanceID string) bool {
 
 func (r *Runner) create(ctx context.Context, id string, plan *Plan) error {
 	r.progress(id, "네트워크를 준비합니다")
-	if err := r.docker.EnsureNetwork(ctx, NetworkName, map[string]string{
-		LabelProject: ProjectName, LabelManagedBy: "dbstudio",
-	}); err != nil {
+	if err := r.docker.EnsureNetwork(ctx, NetworkName, NetworkLabels()); err != nil {
 		return err
 	}
 
