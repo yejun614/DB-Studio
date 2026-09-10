@@ -5923,3 +5923,36 @@ tr.is-clickable:focus-visible { outline: 2px solid var(--primary); outline-offse
   max-width: 320px; white-space: pre-wrap; word-break: break-word;
   max-height: 3.6em; overflow: hidden; color: var(--danger);
 }
+
+/* 상세 창 — 실행·중단과 로그 */
+
+.dbsetup-detail .kv { margin-bottom: 14px; }
+.dbsetup-values { margin: 14px 0; }
+.dbsetup-values > summary { cursor: pointer; font-size: 13px; color: var(--text-dim); }
+.dbsetup-values[open] > summary { margin-bottom: 10px; }
+
+.dbsetup-actions { display: flex; align-items: center; gap: 8px; width: 100%; }
+/* 닫기를 오른쪽 끝으로 민다. 지우기 바로 옆에 두면 되돌릴 수 없는 버튼과
+ * 아무 일도 없는 버튼이 나란히 앉는다. */
+.dbsetup-actions-gap { flex: 1; }
+
+.dbsetup-log-head { display: flex; align-items: baseline; gap: 10px; margin-top: 18px; }
+.dbsetup-log-head .erd-sub { margin: 0; }
+.dbsetup-log {
+  margin-top: 8px;
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-alt);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.dbsetup-log-line { display: flex; gap: 10px; white-space: pre-wrap; word-break: break-word; }
+.dbsetup-log-time { flex: none; color: var(--text-mute); }
+/* stderr 는 빨갛게 칠하지 않는다. DB 는 평범한 시작 로그를 stderr 로 내는 것이
+ * 흔해서(ClickHouse·PostgreSQL), 칠하면 잘 뜬 DB 가 온통 오류처럼 보인다.
+ * 어느 쪽에서 왔는지만 흐리게 구분한다. */
+.dbsetup-log-err { color: var(--text-dim); }

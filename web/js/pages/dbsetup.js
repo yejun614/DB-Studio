@@ -339,59 +339,210 @@ function statusCell(in_) {
       ? h('span.field-help.dbsetup-error', {}, in_.error) : null);
 }
 
-// openDetail은 하나를 자세히 본다.
+// openDetail은 하나를 자세히 보고 다룬다.
 //
-// 실행·중단·로그는 다음 단계에서 붙는다. 지금 이 창이 하는 일은 "무슨 값으로
-// 만들었는가"를 되짚는 것이다 — 그것을 못 보면 접속이 안 될 때 무엇을 확인해야
-// 하는지 알 수 없다.
+// 실행·중단·다시 시작·지우기와 **로그**가 여기 모인다. 로그를 같은 창에 두는
+// 이유: 이 버튼들을 누르는 이유의 대부분이 로그에 적혀 있다. 창을 갈라 두면
+// "다시 시작했는데 또 죽는다"를 볼 때마다 두 창을 오가게 된다.
 async function openDetail(root, summary) {
-  let detail;
-  try {
-    detail = await api.get(`/docker/instances/${encodeURIComponent(summary.id)}`);
-  } catch (err) {
-    toastError(err);
-    return;
-  }
-  const in_ = detail.instance;
-  const recipe = detail.recipe;
-  const label = (key) => recipe?.fields?.find((f) => f.key === key)?.label ?? key;
+  const body = h('div.dbsetup-detail');
+  const foot = h('div.dbsetup-actions');
+  let stream = null;
 
-  const rows = [
-    ['상태', (STATUS[in_.status] ?? [in_.status])[0]],
-    ['컨테이너', in_.containerName],
-    ['이미지', in_.image],
-    ['볼륨', in_.volumeName || '없음 (데이터를 남기지 않습니다)'],
-    ['포트', in_.hostPort > 0 ? `${in_.hostPort} → ${in_.port}` : `아직 없음 (안쪽 ${in_.port})`],
-    ['커넥션', in_.connectionId ? '등록되어 있습니다' : '등록되지 않았습니다'],
-    ['만든 사람', in_.createdByName || '—'],
-  ];
+  const stop = () => { stream?.close(); stream = null; };
+  const close = openModal({
+    title: summary.name, width: 720, body, footer: () => foot,
+    // 창을 닫으면 스트림도 닫는다. 두지 않으면 창을 여닫을 때마다 도커 쪽에
+    // 아무도 보지 않는 로그 스트림이 하나씩 쌓인다.
+    onClose: stop,
+  });
 
-  openModal({
-    title: in_.name, width: 620,
-    body: h('div', {},
+  const reload = async () => {
+    let detail;
+    try {
+      detail = await api.get(`/docker/instances/${encodeURIComponent(summary.id)}`);
+    } catch (err) {
+      mount(body, h('div.notice.notice-danger', {}, icon('alert'),
+        h('span', {}, err.message ?? '읽지 못했습니다')));
+      return;
+    }
+    draw(detail);
+  };
+
+  const act = async (label, run) => {
+    for (const b of foot.querySelectorAll('button')) b.disabled = true;
+    try {
+      await run();
+      toast(`${summary.name} — ${label}`, 'success');
+    } catch (err) {
+      toastError(err);
+    }
+    // 무엇을 눌렀든 목록과 창을 다시 읽는다. 상태는 도커가 들고 있고, 우리가
+    // 아는 것은 방금 부탁한 것뿐이다.
+    stop();
+    await reload();
+    renderDBSetup(root);
+  };
+
+  function draw(detail) {
+    const in_ = detail.instance;
+    const recipe = detail.recipe;
+    const label = (key) => recipe?.fields?.find((f) => f.key === key)?.label ?? key;
+    const running = in_.status === 'running' || in_.status === 'unhealthy';
+    const gone = in_.status === 'removed';
+
+    const rows = [
+      ['상태', (STATUS[in_.status] ?? [in_.status])[0]],
+      ['컨테이너', in_.containerName],
+      ['이미지', in_.image],
+      ['볼륨', in_.volumeName || '없음 (데이터를 남기지 않습니다)'],
+      ['포트', in_.hostPort > 0 ? `${in_.hostPort} → ${in_.port}` : `아직 없음 (안쪽 ${in_.port})`],
+      ['커넥션', in_.connectionId ? '등록되어 있습니다' : '등록되지 않았습니다'],
+      ['만든 사람', in_.createdByName || '—'],
+    ];
+
+    mount(body,
       in_.error
         ? h('div.notice.notice-danger', {}, icon('alert'), h('span', {}, in_.error))
         : null,
       h('dl.kv', {}, ...rows.flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, String(v))])),
-      h('h3.erd-sub', {}, '만들 때 정한 값'),
-      Object.keys(in_.values ?? {}).length
-        ? h('dl.kv', {}, ...Object.entries(in_.values).flatMap(([k, v]) => [
-          h('dt', {}, label(k)), h('dd', {}, String(v)),
-        ]))
-        : h('p.field-help', {}, '기본값으로 만들었습니다'),
-      // 비밀번호는 보여 주지 않는다. 목록에도 실려 나오지 않는 값이고,
-      // 여기서 한 번 보여 주면 그 화면을 캡처한 것이 곧 비밀이 아니게 된다.
-      h('p.field-help', {}, '비밀번호는 저장되어 있지만 화면에는 보여주지 않습니다. '
-        + '커넥션으로 등록했다면 접속에는 그 값이 쓰입니다.'),
+      h('details.dbsetup-values', {},
+        h('summary', {}, '만들 때 정한 값'),
+        Object.keys(in_.values ?? {}).length
+          ? h('dl.kv', {}, ...Object.entries(in_.values).flatMap(([k, v]) => [
+            h('dt', {}, label(k)), h('dd', {}, String(v)),
+          ]))
+          : h('p.field-help', {}, '기본값으로 만들었습니다'),
+        // 비밀번호는 보여 주지 않는다. 목록에도 실려 나오지 않는 값이고,
+        // 여기서 한 번 보여 주면 그 화면을 캡처한 것이 곧 비밀이 아니게 된다.
+        h('p.field-help', {}, '비밀번호는 저장되어 있지만 화면에는 보여주지 않습니다. '
+          + '커넥션으로 등록했다면 접속에는 그 값이 쓰입니다.')),
       in_.connectionId
         ? h('a.btn.btn-small', { href: `/connections/${in_.connectionId}` },
           icon('link'), '커넥션 보기')
+        : null,
+      logSection(in_));
+
+    mount(foot,
+      running
+        ? h('button.btn', {
+          type: 'button',
+          onclick: () => act('중단했습니다', () => api.post(`/docker/instances/${in_.id}/stop`)),
+        }, icon('stop'), '중단')
+        : null,
+      !running && !gone
+        ? h('button.btn.btn-primary', {
+          type: 'button',
+          onclick: () => act('시작했습니다', () => api.post(`/docker/instances/${in_.id}/start`)),
+        }, icon('play'), '시작')
+        : null,
+      running
+        ? h('button.btn', {
+          type: 'button',
+          onclick: () => act('다시 시작했습니다', () => api.post(`/docker/instances/${in_.id}/restart`)),
+        }, icon('refresh'), '다시 시작')
+        : null,
+      h('button.btn.btn-danger', {
+        type: 'button', onclick: () => removeInstance(in_, act),
+      }, icon('trash'), gone && !in_.containerId ? '기록 지우기' : '지우기'),
+      h('span.dbsetup-actions-gap'),
+      h('button.btn', { type: 'button', onclick: close }, '닫기'));
+  }
+
+  // logSection은 로그 상자다. 스트림은 여기서 붙인다.
+  function logSection(in_) {
+    if (!in_.containerId) {
+      return h('div', {},
+        h('h3.erd-sub', {}, '로그'),
+        h('p.field-help', {}, '컨테이너가 없어 로그를 읽을 수 없습니다.'));
+    }
+    const note = h('span.field-help', {}, '따라가는 중…');
+    const head = h('div.dbsetup-log-head', {}, h('h3.erd-sub', {}, '로그'), note);
+    const box = h('div.dbsetup-log');
+
+    stop();
+    stream = new EventSource(`/api/v1/docker/instances/${in_.id}/logs?tail=200`);
+    stream.addEventListener('log', (e) => appendLine(box, JSON.parse(e.data)));
+    stream.addEventListener('end', () => {
+      note.textContent = '로그가 끝났습니다 (컨테이너가 멈춰 있습니다)';
+      stop();
+    });
+    stream.addEventListener('error', () => {
+      // 끊기면 조용히 닫는다. 여기서 다시 붙으면 멈춘 컨테이너에 계속 매달린다 —
+      // 창을 다시 열면 처음부터 받는다.
+      note.textContent = '연결이 끊겼습니다 (창을 다시 열면 이어집니다)';
+      stop();
+    });
+    return h('div', {}, head, box);
+  }
+
+  await reload();
+}
+
+// appendLine은 로그 한 줄을 붙인다.
+//
+// 맨 아래에 붙어 있을 때만 따라 내린다. 위로 올려 읽고 있는 사람을 끌어내리면
+// 새 줄이 올 때마다 읽던 자리를 잃는다.
+function appendLine(box, line) {
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  // stderr 를 빨갛게 칠하지 않는다. DB 는 평범한 시작 로그를 stderr 로 내는
+  // 것이 흔해서(ClickHouse·PostgreSQL), 그러면 잘 뜬 DB 가 온통 오류로 보인다.
+  // 어느 쪽에서 왔는지는 흐린 색으로만 구분한다.
+  box.appendChild(h('div.dbsetup-log-line', {},
+    line.timestamp ? h('span.dbsetup-log-time', {}, shortTime(line.timestamp)) : null,
+    h('span', { class: line.stream === 'stderr' ? 'dbsetup-log-err' : undefined }, line.text)));
+  // 너무 길어지면 앞을 버린다. 브라우저가 느려지는 것이 로그를 다 들고 있는
+  // 것보다 나쁘다 — 오래된 줄은 어차피 위로 밀려 아무도 보지 않는다.
+  while (box.childElementCount > 2000) box.removeChild(box.firstChild);
+  if (atBottom) box.scrollTop = box.scrollHeight;
+}
+
+function shortTime(ts) {
+  const d = new Date(ts);
+  return Number.isNaN(d.getTime()) ? ts.slice(11, 19) : d.toLocaleTimeString();
+}
+
+// removeInstance는 지우기 전에 무엇이 사라지는지 묻는다.
+//
+// 컨테이너와 데이터는 되돌릴 수 있는 정도가 다르다. 컨테이너는 다시 만들면
+// 되지만 볼륨은 지우면 끝이라, 한 번의 확인으로 둘 다 지우게 두지 않는다.
+async function removeInstance(in_, act) {
+  const recordOnly = in_.status === 'removed' && !in_.containerId;
+  if (recordOnly) {
+    const ok = await confirmDialog({
+      title: '기록 지우기',
+      message: `"${in_.name}" 의 기록을 지웁니다. 컨테이너는 이미 없습니다.`,
+      confirmLabel: '지우기',
+      danger: true,
+    });
+    if (!ok) return;
+    await act('기록을 지웠습니다', () => api.del(`/docker/instances/${in_.id}`));
+    return;
+  }
+
+  const dropData = checkbox('데이터도 함께 지웁니다 (되돌릴 수 없습니다)', {});
+  const ok = await confirmDialog({
+    title: 'DB 컨테이너 지우기',
+    message: `"${in_.name}" 컨테이너를 지웁니다.`,
+    details: h('div', {},
+      in_.volumeName
+        ? h('div', {}, dropData,
+          h('p.field-help', {}, `볼륨 ${in_.volumeName} 에 데이터가 있습니다. `
+            + '끄면 볼륨은 남으므로, 같은 이름으로 다시 만들면 그 데이터를 이어서 씁니다.'))
+        : h('p.field-help', {}, '이 DB 는 데이터를 남기지 않으므로 함께 사라집니다.'),
+      in_.connectionId
+        ? h('p.field-help', {}, '등록된 커넥션은 그대로 남습니다. '
+          + '더 쓰지 않을 것이면 DB 커넥션 화면에서 따로 지우세요.')
         : null),
-    footer: (closeFn) => [
-      h('button.btn', { type: 'button', onclick: closeFn }, '닫기'),
-    ],
+    confirmLabel: '지우기',
+    danger: true,
   });
-  void root;
+  if (!ok) return;
+  const keep = !dropData.querySelector('input').checked;
+  await act(
+    keep ? '컨테이너를 지웠습니다 (데이터는 남겼습니다)' : '컨테이너와 데이터를 지웠습니다',
+    () => api.del(`/docker/instances/${in_.id}?keepData=${keep}`),
+  );
 }
 
 // ---------- 상태 ----------
