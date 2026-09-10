@@ -343,3 +343,68 @@ func TestManualBodiesAreClosedProperly(t *testing.T) {
 		t.Fatalf("설명서 본문을 %d개만 찾았습니다 — 검사가 무력해졌는지 확인하세요", bodies)
 	}
 }
+
+// TestManualBodiesEscapeInterpolation은 설명서 본문의 `${` 가 이스케이프되어 있는지 본다.
+//
+// 위의 백틱 검사와 같은 부류이고, 같은 이유로 있다. 본문에 `${VAR}` 를 그대로
+// 적으면 그것은 글자가 아니라 **자바스크립트 보간**이 되고, VAR 이 없으므로
+// 모듈을 읽는 순간 예외가 난다. 문법은 맞으므로 파싱 검사도 눈으로 읽는 것도
+// 통과하는데, manual.js 는 main.js 가 처음에 불러오는 모듈이라 그 예외 하나로
+// 앱 전체가 빈 화면이 된다.
+//
+// 실제로 compose 설명을 적다 `${VAR}` 를 그대로 넣어 화면이 멈췄고, 브라우저로
+// 열어 보고서야 알았다.
+//
+// 코드에는 진짜 보간이 있으므로(`#${s.id}`) 본문 안에서만 금지한다. 본문은
+// 사람이 읽는 글이고, 거기 남는 `${` 는 언제나 실수다.
+func TestManualBodiesEscapeInterpolation(t *testing.T) {
+	raw, err := fs.ReadFile(embedded, "web/js/pages/manual.js")
+	if err != nil {
+		t.Fatalf("manual.js: %v", err)
+	}
+	src := string(raw)
+	const open = "body: `"
+
+	bodies := 0
+	for i := 0; ; {
+		start := strings.Index(src[i:], open)
+		if start < 0 {
+			break
+		}
+		start += i + len(open)
+		bodies++
+
+		end := -1
+		for j := start; j < len(src); j++ {
+			if src[j] == '`' && src[j-1] != '\\' {
+				end = j
+				break
+			}
+		}
+		if end < 0 {
+			break // 닫히지 않은 것은 위 검사가 잡는다
+		}
+
+		body := src[start:end]
+		for j := 0; j+1 < len(body); j++ {
+			if body[j] != '$' || body[j+1] != '{' {
+				continue
+			}
+			// 앞의 역슬래시가 홀수 개면 이스케이프된 것이다.
+			slashes := 0
+			for k := j - 1; k >= 0 && body[k] == '\\'; k-- {
+				slashes++
+			}
+			if slashes%2 == 1 {
+				continue
+			}
+			line := 1 + strings.Count(src[:start+j], "\n")
+			t.Errorf("manual.js:%d 본문에 이스케이프되지 않은 ${ 가 있습니다 (%.40q)",
+				line, body[j:])
+		}
+		i = end + 1
+	}
+	if bodies == 0 {
+		t.Fatal("본문을 하나도 찾지 못했습니다 — 검사가 형식을 못 따라가고 있습니다")
+	}
+}
