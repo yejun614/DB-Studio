@@ -49,6 +49,13 @@ services:
     # 이 볼륨을 잃으면 등록한 커넥션과 이력이 사라진다.
     volumes:
       - dbstudio-data:/data
+      # DB 컨테이너 기능을 켤 때 함께 켠다(위 DBSTUDIO_ALLOW_DOCKER 참고).
+      # - /var/run/docker.sock:/var/run/docker.sock
+
+    # 소켓을 열 권한. 호스트에서 `getent group docker` 로 확인한 gid 를 적는다
+    # (예: docker:x:988: 이면 "988"). 이것 없이 소켓만 넣으면 permission denied 다.
+    # group_add:
+    #   - "988"
 
     environment:
       # ── 반드시 줄 것 ────────────────────────────────────────────────
@@ -98,6 +105,37 @@ services:
       # 있다. 아래 ngrok 터널과 함께 켜는 것은 그 셸을 인터넷에 두는 일이다.
       # DBSTUDIO_ALLOW_SHELL: "true"
       # DBSTUDIO_SHELL_TIMEOUT: "2m"
+
+      # ── DB 컨테이너 (도커로 DB 세우기) ────────────────────────────
+      # 켜면 화면에 **DB 컨테이너** 메뉴가 생기고, 거기서 PostgreSQL·MySQL·
+      # MariaDB·MongoDB·Redis·ClickHouse·MS-SQL 을 띄우고 실행·중단하고 로그를
+      # 본다. 세 가지가 함께 필요하다.
+      #
+      #   1. 아래 줄을 켠다.
+      #   2. 도커 소켓을 넣어 준다(아래 volumes 의 docker.sock 줄).
+      #   3. 소켓을 열 권한을 준다(아래 group_add). 이 앱은 nonroot(65532)로
+      #      돌고 소켓은 보통 root:docker 라, 마운트만 해서는 열 수 없다.
+      #      호스트에서 `getent group docker` 로 gid 를 확인해 적는다.
+      #
+      # 사용자에게 **DB 컨테이너 관리**(docker.manage) 권한도 줘야 한다 —
+      # 이중 잠금이라 이 값만으로는 아무도 쓸 수 없다(슈퍼 어드민은 이미 가진다).
+      #
+      # 켜지 않으면 메뉴 자체가 보이지 않는다. "메뉴가 없다"의 첫 번째 원인이다.
+      #
+      # **켜기 전에**: 도커 소켓에 닿는다는 것은 그 기계에서 무엇이든 할 수
+      # 있다는 뜻이다. 특권 컨테이너를 띄워 호스트의 파일 계통을 마운트하면
+      # 그것으로 끝이고, 그 사이에 아무 경고도 나지 않는다. 셸 스위치와 같은
+      # 무게로 다뤄야 하고, 아래 ngrok 터널과 함께 켜는 것은 그 권한을
+      # 인터넷에 두는 일이다.
+      #
+      # 소켓을 그대로 주는 것이 부담스러우면 소켓 프록시를 앞에 두고 필요한
+      # 경로만 열 수 있다. 그때는 DBSTUDIO_DOCKER_SOCKET 으로 프록시의 소켓을
+      # 가리킨다.
+      #
+      # 윈도의 도커 데스크톱은 유닉스 소켓이 아니라 이름 있는 파이프를 쓰므로
+      # 이 기능은 리눅스 호스트에서 쓴다(앱을 컨테이너로 띄우면 윈도에서도 된다).
+      # DBSTUDIO_ALLOW_DOCKER: "true"
+      # DBSTUDIO_DOCKER_SOCKET: "/var/run/docker.sock"
 
       # ── 그 밖에 ────────────────────────────────────────────────────
       # 플래그 40개 전부에 DBSTUDIO_* 대응이 있다. 전체 목록:
