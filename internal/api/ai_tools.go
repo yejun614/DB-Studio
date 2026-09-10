@@ -63,6 +63,9 @@ type aiTool struct {
 	ConnManagerOnly bool
 	// RequiresPerm이 지정되면 그 전역 권한이 있는 사용자에게만 노출된다.
 	RequiresPerm model.Perm
+	// RequiresDocker면 서버가 -allow-docker 로 켜져 있을 때만 노출된다.
+	// 권한(RequiresPerm)과 짝으로 쓴다 — 도커 기능은 스위치와 권한이 모두 있어야 한다.
+	RequiresDocker bool
 	// RequiresCap이 지정되면 그 데이터 능력을 **어느 커넥션에서든** 가진 사용자에게만
 	// 노출된다. 실제 판정은 커넥션별이므로 여기서는 목록에서 감출지만 정한다 —
 	// 어차피 못 쓰는 툴을 보여주면 모델이 그것을 시도하는 데 토큰을 쓴다.
@@ -90,6 +93,7 @@ func objectSchema(props map[string]any, required ...string) map[string]any {
 
 func str(desc string) map[string]any   { return map[string]any{"type": "string", "description": desc} }
 func num(desc string) map[string]any   { return map[string]any{"type": "integer", "description": desc} }
+func flag(desc string) map[string]any  { return map[string]any{"type": "boolean", "description": desc} }
 func boolp(desc string) map[string]any { return map[string]any{"type": "boolean", "description": desc} }
 
 // aiTools는 툴 레지스트리다. 이름 → 정의.
@@ -348,6 +352,9 @@ func aiTools() map[string]*aiTool {
 	// 매크로를 만드는 툴(ai_tools_macro.go). 노드 설명과 만들기를 함께 둔다 —
 	// 설명 없이 만들게 하면 모델이 설정 칸 이름을 지어낸다.
 	list = append(list, macroTools()...)
+	// 도커로 DB 를 세우는 툴(ai_tools_docker.go). 카탈로그를 설명하는 툴을 함께
+	// 두는 이유는 매크로와 같다 — 설정 칸 이름을 모르면 모델이 그것을 지어낸다.
+	list = append(list, dockerTools()...)
 
 	out := make(map[string]*aiTool, len(list))
 	for _, t := range list {
@@ -368,10 +375,16 @@ func aiTools() map[string]*aiTool {
 // 조작해도 권한이 늘어나지 않는다.
 type toolHints struct {
 	Caps map[model.Capability]bool
+	// DockerEnabled는 서버가 -allow-docker 로 켜져 있는지다.
+	//
+	// 권한과 따로 보는 이유: 도커 기능은 이중 문이다(스위치 × 권한). 꺼진
+	// 서버에서 권한만 보고 툴을 내놓으면 모델이 그것을 부르고, 매번 "이 서버는
+	// 도커 기능이 꺼져 있습니다"를 받는다 — 토큰을 쓰고 대화도 지저분해진다.
+	DockerEnabled bool
 }
 
 func (s *Server) toolHints(c *fiber.Ctx, u *model.User) toolHints {
-	hints := toolHints{Caps: map[model.Capability]bool{}}
+	hints := toolHints{Caps: map[model.Capability]bool{}, DockerEnabled: s.cfg.AllowDocker}
 	policy, err := s.st.GetAccessPolicy(c.Context(), u.ID)
 	if err != nil {
 		return hints
@@ -403,6 +416,9 @@ func availableTools(u *model.User, hints toolHints) ([]ai.Tool, map[string]*aiTo
 			continue
 		}
 		if t.RequiresCap != "" && !hints.Caps[t.RequiresCap] {
+			continue
+		}
+		if t.RequiresDocker && !hints.DockerEnabled {
 			continue
 		}
 		out = append(out, ai.Tool{
