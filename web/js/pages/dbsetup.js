@@ -520,9 +520,12 @@ async function openDetail(root, summary) {
         // 여기서 한 번 보여 주면 그 화면을 캡처한 것이 곧 비밀이 아니게 된다.
         h('p.field-help', {}, '비밀번호는 저장되어 있지만 화면에는 보여주지 않습니다. '
           + '커넥션으로 등록했다면 접속에는 그 값이 쓰입니다.')),
+      // 커넥션 화면은 목록 하나다(/connections/:id 라는 경로는 없다).
+      // 이 앱의 다른 화면들도 모두 목록으로 보낸다 — 여기서만 다른 규칙을
+      // 만들면 그 경로가 없다는 것을 눌러 보고서야 알게 된다.
       in_.connectionId
-        ? h('a.btn.btn-small', { href: `/connections/${in_.connectionId}` },
-          icon('link'), '커넥션 보기')
+        ? h('a.btn.btn-small', { href: '/connections' },
+          icon('link'), `커넥션 목록에서 ${in_.name} 보기`)
         : null,
       logSection(in_));
 

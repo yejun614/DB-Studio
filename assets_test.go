@@ -408,3 +408,93 @@ func TestManualBodiesEscapeInterpolation(t *testing.T) {
 		t.Fatal("본문을 하나도 찾지 못했습니다 — 검사가 형식을 못 따라가고 있습니다")
 	}
 }
+
+// TestFrontendLinksHitRealRoutes는 화면이 가리키는 주소가 라우터에 있는지 본다.
+//
+// ── 이 검사가 있는 이유(실제로 겪었다) ──────────────────────────────
+// DB 컨테이너 상세 창에 `/connections/<id>` 로 가는 버튼을 뒀는데, 이 앱에는
+// 그런 경로가 없다(커넥션 화면은 목록 하나다). 누르면 "페이지를 찾을 수
+// 없습니다"가 뜬다 — 그런데 그것은 **누르기 전에는 알 수 없다.** 문법도 맞고
+// 파싱도 통과하고 화면도 잘 그려진다.
+//
+// ── 값이 붙는 주소를 따로 보는 이유 ─────────────────────────────────
+// 처음 쓴 검사는 이것을 놓쳤다. `/connections/${id}` 를 "${ 앞까지"로 잘라
+// `/connections` 로 봤고, 그 라우트는 있으므로 통과했다. 하지만 그 둘은 다른
+// 주소다 — 값이 붙는 주소는 **:param 을 받는 라우트**가 있어야 한다.
+// 검사를 되돌려 넣어 보고서야 그것을 알았다.
+func TestFrontendLinksHitRealRoutes(t *testing.T) {
+	main, err := fs.ReadFile(embedded, "web/js/main.js")
+	if err != nil {
+		t.Fatalf("main.js: %v", err)
+	}
+
+	// 라우터에 등록된 것을 두 갈래로 모은다.
+	fixed := map[string]bool{}     // 값이 붙지 않는 주소 (/connections)
+	withParam := map[string]bool{} // 값을 받는 주소의 앞부분 (/erd/:id → /erd)
+	for _, m := range regexp.MustCompile(`router\.define\('([^']+)'`).FindAllStringSubmatch(string(main), -1) {
+		p := m[1]
+		if i := strings.Index(p, "/:"); i >= 0 {
+			withParam[p[:i]] = true
+			continue
+		}
+		fixed[p] = true
+	}
+	if len(fixed) < 10 {
+		t.Fatalf("라우트를 %d개만 찾았습니다 — 검사가 형식을 못 따라가고 있습니다", len(fixed))
+	}
+
+	files, err := fs.Glob(embedded, "web/js/*/*.js")
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	// 따옴표든 백틱이든, **닫는 자리까지** 통째로 잡는다.
+	link := regexp.MustCompile("href: (?:'([^']*)'|`([^`]*)`)")
+	for _, name := range files {
+		data, err := fs.ReadFile(embedded, name)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		for _, m := range link.FindAllStringSubmatch(string(data), -1) {
+			href := m[1] + m[2]
+			if !strings.HasPrefix(href, "/") || strings.HasPrefix(href, "//") {
+				continue // 바깥 주소이거나 앵커다
+			}
+			// API 와 정적 자산은 라우터가 아니라 서버가 답한다.
+			if strings.HasPrefix(href, "/api/") || strings.HasPrefix(href, "/js/") ||
+				strings.HasPrefix(href, "/css/") || strings.HasPrefix(href, "/favicon") {
+				continue
+			}
+
+			// 질의 문자열과 조각을 **먼저** 뗀다. `/monitor?conn=${id}` 의 ${ 는
+			// 경로가 아니라 값이고, 그 링크는 멀쩡하다.
+			path := href
+			if i := strings.IndexAny(path, "?#"); i >= 0 {
+				path = path[:i]
+			}
+
+			if at := strings.Index(path, "${"); at >= 0 {
+				// 값이 붙는 주소. 앞부분을 받는 라우트가 있어야 한다.
+				head := strings.TrimSuffix(path[:at], "/")
+				if head == "" || withParam[head] {
+					continue
+				}
+				what := "그런 라우트가 없습니다"
+				if fixed[head] {
+					what = head + " 는 있지만 뒤에 값을 받지 않습니다"
+				}
+				t.Errorf("%s: %q 로 가는 링크 — %s. 누르면 "+
+					"\"페이지를 찾을 수 없습니다\"가 뜹니다", name, href, what)
+				continue
+			}
+
+			if path != "/" {
+				path = strings.TrimSuffix(path, "/")
+			}
+			if path == "" || fixed[path] || withParam[path] {
+				continue
+			}
+			t.Errorf("%s: %q 로 가는 링크가 있는데 그런 라우트가 없습니다 — "+
+				"누르면 \"페이지를 찾을 수 없습니다\"가 뜹니다", name, href)
+		}
+	}
+}
