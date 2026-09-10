@@ -32,7 +32,8 @@ func (s *Server) handleInstanceCompose(c *fiber.Ctx) error {
 	if err != nil {
 		return fail(c, fiber.StatusBadRequest, "invalid_plan", err.Error())
 	}
-	return c.JSON(composeResponse(provision.Compose([]provision.ComposeItem{item}), 1))
+	f := composeFormat(c)
+	return c.JSON(composeResponse(renderFor(f, []provision.ComposeItem{item}), 1, f))
 }
 
 // handleProjectCompose는 프로젝트의 DB 들을 한 파일로 내보낸다.
@@ -72,7 +73,8 @@ func (s *Server) handleProjectCompose(c *fiber.Ctx) error {
 		return fail(c, fiber.StatusNotFound, "empty",
 			"내보낼 DB 가 없습니다")
 	}
-	res := composeResponse(provision.Compose(items), len(items))
+	f := composeFormat(c)
+	res := composeResponse(renderFor(f, items), len(items), f)
 	if len(skipped) > 0 {
 		res["skipped"] = skipped
 	}
@@ -115,12 +117,37 @@ func (s *Server) composeItem(c *fiber.Ctx, in *store.DBInstance) (provision.Comp
 	}, nil
 }
 
-func composeResponse(f *provision.ComposeFile, count int) fiber.Map {
+// composeFormat은 무엇을 위한 파일인지 읽는다.
+//
+// 기본이 compose 인 이유: 스웜을 쓰지 않는 사람이 훨씬 많고, 스웜용 파일은
+// 스웜이 아닌 곳에서 조용히 다르게 동작한다(restart 가 무시되고 네트워크가
+// 오버레이라 만들어지지 않는다).
+func composeFormat(c *fiber.Ctx) provision.Format {
+	if strings.EqualFold(strings.TrimSpace(c.Query("format")), string(provision.ForStack)) {
+		return provision.ForStack
+	}
+	return provision.ForCompose
+}
+
+func renderFor(f provision.Format, items []provision.ComposeItem) *provision.ComposeFile {
+	if f == provision.ForStack {
+		return provision.Stack(items)
+	}
+	return provision.Compose(items)
+}
+
+func composeResponse(f *provision.ComposeFile, count int, format provision.Format) fiber.Map {
+	name := "compose.yaml"
+	if format == provision.ForStack {
+		name = "stack.yaml"
+	}
 	return fiber.Map{
 		"yaml":       f.YAML,
 		"envExample": f.EnvExample,
 		"files":      f.Files,
 		"notes":      f.Notes,
 		"services":   count,
+		"format":     string(format),
+		"filename":   name,
 	}
 }
