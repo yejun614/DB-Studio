@@ -244,3 +244,94 @@ func TestSyncConnectionAddressFollowsThePort(t *testing.T) {
 		t.Errorf("비밀번호가 바뀌었습니다: %q", sec.Password)
 	}
 }
+
+// 내보낸 파일에 비밀번호가 들어 있으면 안 된다.
+//
+// 계획을 다시 세울 때는 저장해 둔 비밀을 **합쳐서** 세운다(그러지 않으면
+// "비밀번호를 입력하세요"로 막힌다). 합친 값이 그대로 파일에 실리지 않는지를
+// 여기서 지킨다 — 이 파일은 저장소에 들어가라고 만드는 것이다.
+func TestComposeExportHidesSecrets(t *testing.T) {
+	e, c := dockerEnv(t)
+	const pw = "S3cret-도망간다"
+	in, err := e.st.CreateDBInstance(context.Background(), store.CreateDBInstanceParams{
+		ProjectID: e.project.ID, Name: "exp1", Kind: "postgres",
+		Image: "postgres:17-alpine", Version: "17-alpine",
+		ContainerName: "dbstudio-exp1", VolumeName: "dbstudio-exp1-data",
+		Port: 5432, HostPort: 32900,
+		Values:  map[string]string{"database": "appdb", "username": "app"},
+		Secrets: map[string]string{"password": pw},
+	})
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+
+	status, body := c.do("GET", "/api/v1/docker/instances/"+in.ID+"/compose", nil)
+	if status != 200 {
+		t.Fatalf("= %d %v", status, body)
+	}
+	yaml, _ := body["yaml"].(string)
+	if strings.Contains(yaml, pw) {
+		t.Error("비밀번호가 compose.yml 에 실렸습니다")
+	}
+	if !strings.Contains(yaml, "${EXP1_PASSWORD}") {
+		t.Errorf("비밀 자리가 없습니다:\n%s", yaml)
+	}
+	// 실제로 잡힌 포트가 들어가야 한다. 계획의 값(0)을 그대로 쓰면 내보낸
+	// 파일로 띄웠을 때 포트가 또 달라지고, 지금 붙어 있는 주소와 어긋난다.
+	if !strings.Contains(yaml, "32900:5432") {
+		t.Errorf("잡힌 포트가 반영되지 않았습니다:\n%s", yaml)
+	}
+	if env, _ := body["envExample"].(string); !strings.Contains(env, "EXP1_PASSWORD=") ||
+		strings.Contains(env, pw) {
+		t.Errorf(".env 뼈대가 잘못됐습니다: %q", env)
+	}
+}
+
+// 프로젝트 전체 내보내기는 지운 것을 넣지 않는다.
+//
+// 그 줄은 기록이지 띄울 것이 아니다. 넣으면 받아 간 사람이 이미 없앤 DB 를
+// 다시 띄우게 된다.
+func TestProjectComposeSkipsRemoved(t *testing.T) {
+	e, c := dockerEnv(t)
+	ctx := context.Background()
+	live := newRow(t, e, store.CreateDBInstanceParams{
+		Name: "live1", Kind: "redis", Image: "redis:7-alpine", Version: "7-alpine",
+		ContainerName: "dbstudio-live1", Port: 6379,
+		Secrets: map[string]string{"password": "pw1234!"},
+	})
+	dead := newRow(t, e, store.CreateDBInstanceParams{
+		Name: "dead1", Kind: "redis", Image: "redis:7-alpine", Version: "7-alpine",
+		ContainerName: "dbstudio-dead1", Port: 6379,
+		Secrets: map[string]string{"password": "pw1234!"},
+	})
+	removed := store.InstanceRemoved
+	if err := e.st.UpdateDBInstance(ctx, dead.ID,
+		store.UpdateDBInstanceParams{Status: &removed}); err != nil {
+		t.Fatalf("%v", err)
+	}
+	_ = live
+
+	status, body := c.do("GET", "/api/v1/docker/compose?project="+e.project.ID, nil)
+	if status != 200 {
+		t.Fatalf("= %d %v", status, body)
+	}
+	yaml, _ := body["yaml"].(string)
+	if !strings.Contains(yaml, "  live1:") {
+		t.Errorf("살아 있는 것이 빠졌습니다:\n%s", yaml)
+	}
+	if strings.Contains(yaml, "  dead1:") {
+		t.Errorf("지운 것이 실렸습니다:\n%s", yaml)
+	}
+}
+
+// 내보낼 것이 없으면 빈 파일 대신 그렇게 말한다.
+//
+// 서비스가 하나도 없는 compose 파일은 문법은 맞지만 아무것도 하지 않는다.
+// 그것을 받아 든 사람은 자기가 뭘 잘못했는지 찾게 된다.
+func TestProjectComposeSaysWhenEmpty(t *testing.T) {
+	e, c := dockerEnv(t)
+	status, body := c.do("GET", "/api/v1/docker/compose?project="+e.project.ID, nil)
+	if status != 404 || body["error"] != "empty" {
+		t.Errorf("= %d %v (기대 404 empty)", status, body["error"])
+	}
+}

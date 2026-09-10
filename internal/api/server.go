@@ -560,6 +560,10 @@ func (s *Server) routes() {
 	dockers.Delete("/instances/:id", s.handleRemoveDBInstance)
 	// 로그는 끝나지 않는 응답이다(SSE). 매크로 실행 로그와 같은 모양을 쓴다.
 	dockers.Get("/instances/:id/logs", s.handleDBInstanceLogs)
+	// compose.yml 내보내기. 프로젝트 전체를 한 파일로 뽑는 길을 함께 둔다 —
+	// 하나씩 뽑아 손으로 합치면 볼륨·네트워크 선언이 겹친다.
+	dockers.Get("/compose", s.handleProjectCompose)
+	dockers.Get("/instances/:id/compose", s.handleInstanceCompose)
 
 	// 매크로. 메뉴 접근 자체가 권한이므로 그룹 전체에 미들웨어를 건다.
 	//
