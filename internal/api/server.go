@@ -554,6 +554,12 @@ func (s *Server) routes() {
 	dockers.Get("/instances", s.handleListDBInstances)
 	dockers.Post("/instances", s.handleCreateDBInstance)
 	dockers.Get("/instances/:id", s.handleGetDBInstance)
+	dockers.Post("/instances/:id/start", s.handleStartDBInstance)
+	dockers.Post("/instances/:id/stop", s.handleStopDBInstance)
+	dockers.Post("/instances/:id/restart", s.handleRestartDBInstance)
+	dockers.Delete("/instances/:id", s.handleRemoveDBInstance)
+	// 로그는 끝나지 않는 응답이다(SSE). 매크로 실행 로그와 같은 모양을 쓴다.
+	dockers.Get("/instances/:id/logs", s.handleDBInstanceLogs)
 
 	// 매크로. 메뉴 접근 자체가 권한이므로 그룹 전체에 미들웨어를 건다.
 	//

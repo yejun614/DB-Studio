@@ -1,0 +1,246 @@
+package api
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	"dbstudio/internal/model"
+	"dbstudio/internal/store"
+)
+
+// dockerEnv는 도커 기능이 켜진 서버와 로그인한 클라이언트를 만든다.
+//
+// 여기 검사들은 **도커에 닿지 않는 길**만 본다(권한, 이미 지운 것, 컨테이너가
+// 없는 것). 실제 데몬이 필요한 길은 internal/provision 의 dockerlive 검사가 본다 —
+// 그것을 여기서 흉내 내면 도커가 아니라 우리 흉내를 검사하게 된다.
+func dockerEnv(t *testing.T) (*testEnv, *client) {
+	t.Helper()
+	e := newTestEnv(t)
+	e.srv.cfg.AllowDocker = true
+	c := e.client(t)
+	if status, body := c.do("POST", "/api/v1/auth/login",
+		map[string]string{"username": "alice", "password": testPassword}); status != 200 {
+		t.Fatalf("로그인 = %d: %v", status, body)
+	}
+	return e, c
+}
+
+func newRow(t *testing.T, e *testEnv, p store.CreateDBInstanceParams) *store.DBInstance {
+	t.Helper()
+	if p.ProjectID == "" {
+		p.ProjectID = e.project.ID
+	}
+	in, err := e.st.CreateDBInstance(context.Background(), p)
+	if err != nil {
+		t.Fatalf("인스턴스: %v", err)
+	}
+	return in
+}
+
+// 만드는 중에는 건드리지 못한다.
+//
+// 러너가 그 컨테이너를 쓰고 있고, 그 사이에 멈추면 만들기가 "뜨지 못했습니다"로
+// 실패한다 — 사람이 스스로 멈춰 놓고 실패 메시지를 받는 셈이다.
+func TestControlRefusesWhileCreating(t *testing.T) {
+	e, c := dockerEnv(t)
+	in := newRow(t, e, store.CreateDBInstanceParams{
+		Name: "pg1", Kind: "postgres", Image: "postgres:17-alpine", Version: "17-alpine",
+		ContainerName: "dbstudio-pg1", Port: 5432,
+	})
+	if in.Status != store.InstanceCreating {
+		t.Fatalf("처음 상태 = %s", in.Status)
+	}
+
+	for _, op := range []string{"start", "stop", "restart"} {
+		status, body := c.do("POST", "/api/v1/docker/instances/"+in.ID+"/"+op, nil)
+		if status != 409 || body["error"] != "busy" {
+			t.Errorf("%s = %d %v (기대 409 busy)", op, status, body["error"])
+		}
+	}
+}
+
+// 만드는 중으로 **멈춰 버린** 줄은 지울 수 있어야 한다.
+//
+// 러너가 실제로 돌고 있으면 지우기도 막는다(Busy). 하지만 만드는 도중에 앱이
+// 죽으면 그 줄은 creating 인 채로 남고 러너는 아무것도 하고 있지 않다 —
+// 그때 상태만 보고 막으면 그 줄은 영영 지울 수 없고, 이름도 영영 묶인다.
+// 지우기가 그 상태에서 빠져나오는 유일한 문이다.
+func TestRemoveIsTheWayOutOfAStuckCreate(t *testing.T) {
+	e, c := dockerEnv(t)
+	in := newRow(t, e, store.CreateDBInstanceParams{
+		Name: "pg2", Kind: "postgres", Image: "postgres:17-alpine", Version: "17-alpine",
+		ContainerName: "dbstudio-pg2", Port: 5432,
+	})
+
+	status, body := c.do("DELETE", "/api/v1/docker/instances/"+in.ID, nil)
+	if status != 200 {
+		t.Fatalf("= %d %v", status, body)
+	}
+	got, err := e.st.GetDBInstance(context.Background(), in.ID)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	if got.Status != store.InstanceRemoved {
+		t.Errorf("상태 = %s (기대 removed)", got.Status)
+	}
+}
+
+// 이미 지운 것에 다시 지우기를 부르면 **기록**을 지운다.
+//
+// 지울 컨테이너가 없는 상태에서 "지우기"가 뜻할 수 있는 것은 그것뿐이고,
+// 그렇게 두어야 같은 이름을 다시 쓸 수 있다(컨테이너 이름은 유일해야 한다).
+func TestRemoveDeletesRecordWhenContainerGone(t *testing.T) {
+	e, c := dockerEnv(t)
+	in := newRow(t, e, store.CreateDBInstanceParams{
+		Name: "pg1", Kind: "postgres", Image: "postgres:17-alpine", Version: "17-alpine",
+		ContainerName: "dbstudio-pg1", Port: 5432,
+	})
+	removed := store.InstanceRemoved
+	if err := e.st.UpdateDBInstance(context.Background(), in.ID,
+		store.UpdateDBInstanceParams{Status: &removed}); err != nil {
+		t.Fatalf("%v", err)
+	}
+
+	status, body := c.do("DELETE", "/api/v1/docker/instances/"+in.ID, nil)
+	if status != 200 || body["deleted"] != true {
+		t.Fatalf("= %d %v", status, body)
+	}
+	if _, err := e.st.GetDBInstance(context.Background(), in.ID); err == nil {
+		t.Error("기록이 남아 있습니다")
+	}
+}
+
+// 이름이 겹쳤을 때, 그 이름을 쥐고 있는 것이 **지운 기록**이면 그렇게 말해야 한다.
+//
+// 그 줄은 목록에서 흐리게 보여 "이미 있는 것"으로 읽히지 않는다. 그냥 "이름이
+// 있습니다"라고만 하면 사람은 목록을 보고 없는데 왜 그러냐고 생각하게 된다.
+func TestCreateSaysWhenRemovedRecordHoldsTheName(t *testing.T) {
+	e, c := dockerEnv(t)
+	in := newRow(t, e, store.CreateDBInstanceParams{
+		Name: "pg1", Kind: "postgres", Image: "postgres:17-alpine", Version: "17-alpine",
+		ContainerName: "dbstudio-pg1", Port: 5432,
+	})
+	removed := store.InstanceRemoved
+	if err := e.st.UpdateDBInstance(context.Background(), in.ID,
+		store.UpdateDBInstanceParams{Status: &removed}); err != nil {
+		t.Fatalf("%v", err)
+	}
+
+	status, body := c.do("POST", "/api/v1/docker/instances", map[string]any{
+		"projectId": e.project.ID, "kind": "postgres", "name": "pg1",
+		"values": map[string]string{"database": "appdb", "password": "pw1234!"},
+	})
+	if status != 409 {
+		t.Fatalf("= %d %v", status, body)
+	}
+	msg, _ := body["message"].(string)
+	if !strings.Contains(msg, "기록") {
+		t.Errorf("기록이 이름을 쥐고 있다는 말이 없습니다: %q", msg)
+	}
+}
+
+// 컨테이너가 없으면 로그를 열 수 없다.
+//
+// 409 로 답하는 이유: 이것은 없는 자원이 아니라 아직 열 수 없는 상태다.
+// 404 로 답하면 화면이 "인스턴스가 사라졌다"로 읽고 목록을 다시 그린다.
+func TestLogsNeedAContainer(t *testing.T) {
+	e, c := dockerEnv(t)
+	in := newRow(t, e, store.CreateDBInstanceParams{
+		Name: "pg1", Kind: "postgres", Image: "postgres:17-alpine", Version: "17-alpine",
+		ContainerName: "dbstudio-pg1", Port: 5432,
+	})
+	status, body := c.do("GET", "/api/v1/docker/instances/"+in.ID+"/logs", nil)
+	if status != 409 || body["error"] != "no_container" {
+		t.Errorf("= %d %v (기대 409 no_container)", status, body["error"])
+	}
+}
+
+// 다른 프로젝트의 것은 다룰 수 없다.
+//
+// 프로젝트를 못 보면 그 안의 것도 없는 것이다. 403 이 아니라 404 로 답한다 —
+// 있다는 사실 자체가 정보다.
+func TestControlStaysInsideTheProject(t *testing.T) {
+	e, c := dockerEnv(t)
+	other, err := e.st.CreateProject(context.Background(), store.SaveProjectParams{Name: "남의것"})
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	// 슈퍼 어드민은 모든 프로젝트를 본다. 참여로 좁히는 사람으로 바꿔 확인한다.
+	e.srv.cfg.AllowDocker = true
+	in := newRow(t, e, store.CreateDBInstanceParams{
+		ProjectID: other.ID,
+		Name:      "pg9", Kind: "postgres", Image: "postgres:17-alpine", Version: "17-alpine",
+		ContainerName: "dbstudio-pg9", Port: 5432,
+	})
+
+	// 없는 id 는 404 여야 한다(있는 것과 없는 것의 답이 같아야 한다).
+	status, _ := c.do("POST", "/api/v1/docker/instances/없는것/stop", nil)
+	if status != 404 {
+		t.Errorf("없는 인스턴스 = %d (기대 404)", status)
+	}
+	_ = in
+}
+
+// 포트가 바뀌면 커넥션이 따라가야 한다.
+//
+// 도커가 골라 준 호스트 포트는 **멈췄다 시작하면 바뀐다**(살아 있는 데몬에서
+// 32809 가 32810 이 되는 것을 봤다). 옮겨 적지 않으면 커넥션은 아무도 듣지 않는
+// 포트를 가리킨 채로 남고, 화면에는 "접속 실패"만 뜬다 — 우리가 만든 DB 인데
+// 우리가 붙지 못하는 셈이다.
+func TestSyncConnectionAddressFollowsThePort(t *testing.T) {
+	e, _ := dockerEnv(t)
+	ctx := context.Background()
+
+	pw := "pw1234!"
+	_, conn, err := e.st.CreateServerWithDatabase(ctx,
+		store.SaveServerParams{
+			ProjectID: e.project.ID, Name: "rd1", Kind: model.KindRedis,
+			Host: "127.0.0.1", Port: 32809, Options: model.Options{},
+			DefaultEnvironment: model.EnvDev, Tags: []string{"docker"},
+			Enabled: true, Password: &pw,
+		},
+		store.SaveConnectionParams{
+			ProjectID: e.project.ID, Name: "rd1", Environment: model.EnvDev,
+			Tags: []string{"docker"}, Enabled: true,
+		})
+	if err != nil {
+		t.Fatalf("커넥션: %v", err)
+	}
+
+	in := newRow(t, e, store.CreateDBInstanceParams{
+		Name: "rd1", Kind: "redis", Image: "redis:7-alpine", Version: "7-alpine",
+		ContainerName: "dbstudio-rd1", Port: 6379, HostPort: 32810,
+	})
+	newPort := 32810
+	connID := conn.ID
+	if err := e.st.UpdateDBInstance(ctx, in.ID, store.UpdateDBInstanceParams{
+		ConnectionID: &connID, HostPort: &newPort,
+	}); err != nil {
+		t.Fatalf("%v", err)
+	}
+	fresh, _ := e.st.GetDBInstance(ctx, in.ID)
+
+	e.srv.syncConnectionAddress(ctx, fresh)
+
+	got, err := e.st.GetConnection(ctx, conn.ID)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	// 기대값을 127.0.0.1 로 박지 않는다. 우리가 컨테이너 안이면 주소가 컨테이너
+	// 이름이 되고(connectTarget), 그러면 이 검사가 도는 곳에 따라 틀린 값을
+	// 요구하게 된다. 확인할 것은 "그 함수가 말한 주소와 같은가"다.
+	wantHost, wantPort, _ := connectTarget(fresh, inContainer())
+	if got.Host != wantHost || got.Port != wantPort {
+		t.Errorf("커넥션 주소 = %s:%d (기대 %s:%d)", got.Host, got.Port, wantHost, wantPort)
+	}
+
+	// 비밀번호는 그대로여야 한다. 주소만 고치는 자리에서 자격증명이 사라지면
+	// 접속은 여전히 안 되고, 이유만 바뀐다.
+	sec, err := e.st.GetServerSecret(ctx, got.ServerID)
+	if err != nil {
+		t.Errorf("자격증명이 사라졌습니다: %v", err)
+	} else if sec.Password != pw {
+		t.Errorf("비밀번호가 바뀌었습니다: %q", sec.Password)
+	}
+}

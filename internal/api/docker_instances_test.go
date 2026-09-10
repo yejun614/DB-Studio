@@ -159,6 +159,11 @@ func TestDockerRoutesClosedWhenDisabled(t *testing.T) {
 		{"GET", "/api/v1/docker/instances"},
 		{"POST", "/api/v1/docker/instances"},
 		{"GET", "/api/v1/docker/instances/x"},
+		{"POST", "/api/v1/docker/instances/x/start"},
+		{"POST", "/api/v1/docker/instances/x/stop"},
+		{"POST", "/api/v1/docker/instances/x/restart"},
+		{"DELETE", "/api/v1/docker/instances/x"},
+		{"GET", "/api/v1/docker/instances/x/logs"},
 	}
 	for _, p := range paths {
 		status, body := c.do(p.method, p.path, map[string]string{})
