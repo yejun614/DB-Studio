@@ -33,7 +33,14 @@ func (s *Server) handleInstanceCompose(c *fiber.Ctx) error {
 		return fail(c, fiber.StatusBadRequest, "invalid_plan", err.Error())
 	}
 	f := composeFormat(c)
-	return c.JSON(composeResponse(renderFor(f, []provision.ComposeItem{item}), 1, f))
+	res := composeResponse(renderFor(f, []provision.ComposeItem{item}), 1, f)
+	if in.Cluster != "" {
+		res["notes"] = append(toStrings(res["notes"]),
+			"이 노드는 클러스터의 일부입니다. 내보낸 파일에는 클러스터 설정"+
+				"(remote_servers·macros·Keeper)이 **들어 있지 않습니다** — 이 파일로 띄우면 "+
+				"클러스터가 아니라 혼자 도는 ClickHouse 가 뜹니다.")
+	}
+	return c.JSON(res)
 }
 
 // handleProjectCompose는 프로젝트의 DB 들을 한 파일로 내보낸다.
@@ -52,6 +59,7 @@ func (s *Server) handleProjectCompose(c *fiber.Ctx) error {
 
 	items := make([]provision.ComposeItem, 0, len(all))
 	skipped := []string{}
+	clustered := false
 	for _, in := range all {
 		if !inProjects(scope, in.ProjectID) {
 			continue
@@ -67,6 +75,9 @@ func (s *Server) handleProjectCompose(c *fiber.Ctx) error {
 			skipped = append(skipped, in.Name+": "+err.Error())
 			continue
 		}
+		if in.Cluster != "" {
+			clustered = true
+		}
 		items = append(items, item)
 	}
 	if len(items) == 0 {
@@ -77,6 +88,17 @@ func (s *Server) handleProjectCompose(c *fiber.Ctx) error {
 	res := composeResponse(renderFor(f, items), len(items), f)
 	if len(skipped) > 0 {
 		res["skipped"] = skipped
+	}
+	if clustered {
+		// 클러스터 노드는 값에서 계획을 다시 세우는 길로는 온전히 나오지
+		// 않는다. remote_servers·macros·조정자 설정이 빠지고, 그렇게 나온
+		// 파일로 띄우면 **클러스터가 아닌 노드 여럿**이 뜬다 — 겉보기에는
+		// 멀쩡하다. 그 사실을 말하지 않으면 받아 간 사람이 그것으로 클러스터를
+		// 세웠다고 믿는다.
+		res["notes"] = append(toStrings(res["notes"]),
+			"클러스터로 만든 노드가 들어 있습니다. 내보낸 파일에는 클러스터 설정"+
+				"(remote_servers·macros·Keeper)이 **들어 있지 않습니다** — 이 파일로 띄우면 "+
+				"서로 모르는 ClickHouse 여럿이 뜹니다.")
 	}
 	return c.JSON(res)
 }
@@ -134,6 +156,14 @@ func renderFor(f provision.Format, items []provision.ComposeItem) *provision.Com
 		return provision.Stack(items)
 	}
 	return provision.Compose(items)
+}
+
+// toStrings는 fiber.Map 에 들어 있던 안내 목록을 되꺼낸다.
+func toStrings(v any) []string {
+	if out, ok := v.([]string); ok {
+		return out
+	}
+	return nil
 }
 
 func composeResponse(f *provision.ComposeFile, count int, format provision.Format) fiber.Map {

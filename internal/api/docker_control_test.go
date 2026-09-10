@@ -446,3 +446,39 @@ func TestUpdateWithNoChangesDoesNothing(t *testing.T) {
 		t.Errorf("= %d %v", status, body["needed"])
 	}
 }
+
+// 클러스터 노드를 내보낼 때는 그 파일이 클러스터가 아니라고 말해야 한다.
+//
+// 값에서 계획을 다시 세우는 길로는 remote_servers·macros·Keeper 가 나오지
+// 않는다. 그렇게 나온 파일로 띄우면 **서로 모르는 ClickHouse 여럿**이 뜨는데,
+// 겉보기에는 멀쩡하다 — 말하지 않으면 받아 간 사람이 그것으로 클러스터를
+// 세웠다고 믿는다.
+func TestComposeExportWarnsAboutClusterNodes(t *testing.T) {
+	e, c := dockerEnv(t)
+	ctx := context.Background()
+	in, err := e.st.CreateDBInstance(ctx, store.CreateDBInstanceParams{
+		ProjectID: e.project.ID, Name: "chc-s1r1", Kind: "clickhouse",
+		Image: "clickhouse/clickhouse-server:24.8", Version: "24.8",
+		ContainerName: "dbstudio-chc-s1r1", Port: 9000,
+		Values:  map[string]string{"database": "appdb"},
+		Secrets: map[string]string{"password": "Pw1234!aB"},
+		Cluster: "chc", Role: "node", Shard: 1, Replica: 1,
+	})
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+
+	status, body := c.do("GET", "/api/v1/docker/instances/"+in.ID+"/compose", nil)
+	if status != 200 {
+		t.Fatalf("= %d %v", status, body)
+	}
+	notes, _ := body["notes"].([]any)
+	joined := ""
+	for _, n := range notes {
+		s, _ := n.(string)
+		joined += s + " "
+	}
+	if !strings.Contains(joined, "클러스터") {
+		t.Errorf("클러스터라는 안내가 없습니다: %v", body["notes"])
+	}
+}

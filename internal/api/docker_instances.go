@@ -50,6 +50,9 @@ type instanceRequest struct {
 	// Environment는 등록할 커넥션의 환경이다. 비우면 dev 다 —
 	// 방금 도커로 띄운 DB 를 prod 로 잡아 두면 운영 화면의 경고가 무뎌진다.
 	Environment model.Environment `json:"environment"`
+
+	// Cluster가 있으면 클러스터로 만든다(지금은 ClickHouse 만).
+	Cluster *clusterRequest `json:"cluster"`
 }
 
 // handleDockerCatalog는 띄울 수 있는 DB 목록이다.
@@ -96,6 +99,11 @@ func (s *Server) handleCreateDBInstance(c *fiber.Ctx) error {
 	}
 	if !req.Environment.Valid() {
 		return fail(c, fiber.StatusBadRequest, "bad_request", "환경은 dev 또는 prod여야 합니다")
+	}
+
+	// 클러스터는 줄이 여럿이고 순서가 있다. 다른 길로 보낸다.
+	if req.Cluster != nil {
+		return s.createCluster(c, &req, proj)
 	}
 
 	plan, err := provision.Build(provision.Spec{
@@ -253,7 +261,18 @@ func (s *Server) requireDBInstance(c *fiber.Ctx, id string) (*store.DBInstance, 
 // 러너의 배경 작업에서 불린다. 요청의 컨텍스트가 없으므로 시간 제한을 스스로
 // 둔다.
 func (s *Server) registerInstance(instanceID, actorID string, env model.Environment) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	s.registerInstanceWith(instanceID, actorID, env, model.Options{})
+}
+
+// backgroundCtx는 요청이 끝난 뒤에 도는 일의 시간 상한이다.
+func backgroundCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 30*time.Second)
+}
+
+// registerInstanceWith는 커넥션 옵션까지 정해 등록한다.
+func (s *Server) registerInstanceWith(instanceID, actorID string,
+	env model.Environment, opts model.Options) {
+	ctx, cancel := backgroundCtx()
 	defer cancel()
 
 	in, err := s.st.GetDBInstance(ctx, instanceID)
@@ -280,7 +299,7 @@ func (s *Server) registerInstance(instanceID, actorID string, env model.Environm
 		ProjectID: in.ProjectID,
 		Name:      in.Name, Kind: recipe.Kind,
 		Host: host, Port: port,
-		Options: model.Options{}, DefaultEnvironment: env,
+		Options: opts, DefaultEnvironment: env,
 		Tags: []string{"docker"}, Note: note, Enabled: true,
 		Username: recipe.AdminAccount(in.Values), Password: &pw,
 		ActorID: actorID,
