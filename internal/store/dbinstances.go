@@ -227,6 +227,12 @@ type UpdateDBInstanceParams struct {
 	Error        *string
 	Progress     *string
 	ConnectionID *string
+	// Values는 사람이 고친 설정이다.
+	//
+	// 포인터인 이유는 나머지와 같다 — nil 은 "건드리지 마라"이고, 빈 map 은
+	// "전부 지워라"다. 둘을 구분하지 못하면 상태만 고치는 갱신이 설정을 통째로
+	// 날린다.
+	Values *map[string]string
 }
 
 // UpdateDBInstance는 인스턴스의 상태를 고친다.
@@ -259,6 +265,13 @@ func (s *Store) UpdateDBInstance(ctx context.Context, id string, p UpdateDBInsta
 	if p.ConnectionID != nil {
 		// 빈 문자열은 "연결 없음"이다. NULL 로 넣어야 외래키가 걸리지 않는다.
 		add("connection_id", nullString(*p.ConnectionID))
+	}
+	if p.Values != nil {
+		blob, err := json.Marshal(*p.Values)
+		if err != nil {
+			return fmt.Errorf("marshal values: %w", err)
+		}
+		add("values_json", string(blob))
 	}
 	if len(sets) == 1 {
 		return nil // 고칠 것이 없다

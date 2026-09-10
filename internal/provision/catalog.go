@@ -42,6 +42,34 @@ const (
 	TargetMeta Target = "meta"
 )
 
+// Apply는 만든 뒤에 이 값을 고쳤을 때 무엇이 필요한지다.
+//
+// ── 왜 필드마다 따로 적는가 ─────────────────────────────────────────
+// 짐작할 수 없어서다. 살아 있는 컨테이너로 일곱 종류를 다 재 보니 **DB 마다
+// 달랐다.** 비밀번호를 고치고 컨테이너를 다시 만들었을 때:
+//
+//	PostgreSQL · MySQL · MariaDB · MongoDB · MS-SQL  →  안 바뀐다(옛 것이 남는다)
+//	ClickHouse · Redis                               →  바뀐다
+//
+// 앞의 다섯은 첫 실행에서만 계정을 만들고, 그 뒤로는 데이터에 든 것이 진짜다.
+// 그것을 모르고 "고쳤습니다"라고 말하면 사람은 바뀐 줄 알고 새 비밀번호로
+// 접속을 시도하다 막힌다 — 그리고 무엇이 잘못됐는지 알 길이 없다.
+type Apply string
+
+const (
+	// ApplyLive는 컨테이너를 그대로 두고 바꾼다(도커가 해 준다).
+	ApplyLive Apply = "live"
+	// ApplyRestart는 설정 파일을 다시 넣고 재시작해야 먹는다.
+	ApplyRestart Apply = "restart"
+	// ApplyRecreate는 컨테이너를 다시 만들어야 먹는다(데이터는 남는다).
+	ApplyRecreate Apply = "recreate"
+	// ApplyInitOnly는 **처음 만들 때 한 번만** 쓰인다.
+	//
+	// 다시 만들어도 이미 있는 데이터에는 적용되지 않는다. 고칠 수 있게 두되,
+	// 고쳐도 지금 DB 는 그대로라는 것을 화면이 말해야 한다.
+	ApplyInitOnly Apply = "init"
+)
+
 // FieldKind는 화면이 무엇으로 그릴지다.
 type FieldKind string
 
@@ -76,6 +104,11 @@ type Field struct {
 	Target Target `json:"-"`
 	Name   string `json:"-"`
 
+	// Apply는 만든 뒤에 이 값을 고쳤을 때 무엇이 필요한지다.
+	//
+	// 비워 두면 목적지에서 뽑는다(applyOf). 목적지만으로 정할 수 없는 것들은
+	// (계정·비밀번호처럼 DB 마다 다른 것) 레시피가 직접 적는다.
+	Apply Apply `json:"apply,omitempty"`
 	// Secret이면 값을 로그·감사 기록에 남기지 않는다.
 	Secret bool `json:"secret,omitempty"`
 	// Hidden이면 화면에 그리지 않는다.
@@ -178,7 +211,19 @@ func commonFields(defaultPort int) []Field {
 // 순서가 화면 순서다. 많이 쓰는 것을 앞에 둔다 — 알파벳 순으로 두면 처음
 // 쓰는 사람이 목록 전체를 읽어야 한다.
 func Catalog() []*Recipe {
-	return []*Recipe{postgres(), mysql(), mariadb(), mongo(), redis(), clickhouse(), mssql()}
+	out := []*Recipe{postgres(), mysql(), mariadb(), mongo(), redis(), clickhouse(), mssql()}
+	// 빈 Apply 를 여기서 채운다.
+	//
+	// 비워 두면 JSON 에서 빠지고(omitempty), 화면은 그것을 보고 스스로 짐작하게
+	// 된다 — 그러면 같은 규칙이 서버와 화면 두 곳에 생기고, 실제로 어긋났다:
+	// 메모리 상한이 화면에서 "다시 만들기 필요"로 보였다(진짜는 "바로 적용").
+	// 규칙은 서버 한 곳에 두고, 나가는 값에는 언제나 답이 들어 있게 한다.
+	for _, r := range out {
+		for i := range r.Fields {
+			r.Fields[i].Apply = ApplyOf(&r.Fields[i])
+		}
+	}
+	return out
 }
 
 // Find는 레시피 ID 로 찾는다.
@@ -202,6 +247,31 @@ func (r *Recipe) Field(key string) *Field {
 		}
 	}
 	return nil
+}
+
+// ApplyOf는 이 필드를 고쳤을 때 무엇이 필요한지다.
+//
+// 레시피가 적어 둔 것이 있으면 그것을 쓰고, 없으면 목적지에서 뽑는다.
+// 목적지로 정해지는 것들은 DB 와 무관하게 같기 때문이다 — 실행 인자는 만들 때
+// 정해지므로 다시 만들어야 하고, 설정 파일은 넣고 재시작하면 읽힌다.
+func ApplyOf(f *Field) Apply {
+	if f.Apply != "" {
+		return f.Apply
+	}
+	switch f.Target {
+	case TargetFile:
+		return ApplyRestart
+	case TargetMeta:
+		switch f.Key {
+		case "memoryMB", "cpus", "restart":
+			// 도커가 컨테이너를 그대로 두고 바꿔 준다.
+			return ApplyLive
+		default: // hostPort, persist
+			return ApplyRecreate
+		}
+	default: // env, arg
+		return ApplyRecreate
+	}
 }
 
 // AdminAccount는 이 DB 에 붙을 계정 이름이다.
@@ -243,21 +313,21 @@ func postgres() *Recipe {
 		Health: []string{"CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"},
 		Fields: append([]Field{
 			{
-				Key: "database", Label: "데이터베이스 이름", Kind: KindText,
+				Key: "database", Apply: ApplyInitOnly, Label: "데이터베이스 이름", Kind: KindText,
 				Default: "appdb", Required: true,
 				Target: TargetEnv, Name: "POSTGRES_DB",
 			},
 			{
-				Key: "username", Label: "계정", Kind: KindText, Default: "postgres",
+				Key: "username", Apply: ApplyInitOnly, Label: "계정", Kind: KindText, Default: "postgres",
 				Required: true, Target: TargetEnv, Name: "POSTGRES_USER",
 			},
 			{
-				Key: "password", Label: "비밀번호", Kind: KindPassword, Required: true,
+				Key: "password", Apply: ApplyInitOnly, Label: "비밀번호", Kind: KindPassword, Required: true,
 				Help:   "비워 두면 만들 수 없습니다. PostgreSQL 이 비밀번호 없이는 뜨지 않습니다",
 				Secret: true, Target: TargetEnv, Name: "POSTGRES_PASSWORD",
 			},
 			{
-				Key: "encoding", Label: "인코딩", Kind: KindSelect,
+				Key: "encoding", Apply: ApplyInitOnly, Label: "인코딩", Kind: KindSelect,
 				Choices: []string{"UTF8", "SQL_ASCII", "LATIN1"}, Default: "UTF8",
 				Target: TargetEnv, Name: "POSTGRES_INITDB_ARGS_ENCODING", Advanced: true,
 				Help: "만들 때 한 번만 정해집니다. 뒤에 바꾸려면 데이터를 옮겨야 합니다",
@@ -294,29 +364,29 @@ func mysql() *Recipe {
 			"mysqladmin ping -h 127.0.0.1 -u root -p\"$MYSQL_ROOT_PASSWORD\" --silent"},
 		Fields: append([]Field{
 			{
-				Key: "database", Label: "데이터베이스 이름", Kind: KindText,
+				Key: "database", Apply: ApplyInitOnly, Label: "데이터베이스 이름", Kind: KindText,
 				Default: "appdb", Required: true, Target: TargetEnv, Name: "MYSQL_DATABASE",
 			},
 			{
-				Key: "password", Label: "root 비밀번호", Kind: KindPassword, Required: true,
+				Key: "password", Apply: ApplyInitOnly, Label: "root 비밀번호", Kind: KindPassword, Required: true,
 				Secret: true, Target: TargetEnv, Name: "MYSQL_ROOT_PASSWORD",
 			},
 			{
-				Key: "appUser", Label: "앱 계정 (선택)", Kind: KindText,
+				Key: "appUser", Apply: ApplyInitOnly, Label: "앱 계정 (선택)", Kind: KindText,
 				Help:   "적어 두면 그 계정을 함께 만들고 위 데이터베이스의 권한을 줍니다",
 				Target: TargetEnv, Name: "MYSQL_USER", Advanced: true,
 			},
 			{
-				Key: "appPassword", Label: "앱 계정 비밀번호", Kind: KindPassword,
+				Key: "appPassword", Apply: ApplyInitOnly, Label: "앱 계정 비밀번호", Kind: KindPassword,
 				Secret: true, Target: TargetEnv, Name: "MYSQL_PASSWORD", Advanced: true,
 			},
 			{
-				Key: "charset", Label: "문자셋", Kind: KindSelect,
+				Key: "charset", Apply: ApplyInitOnly, Label: "문자셋", Kind: KindSelect,
 				Choices: []string{"utf8mb4", "utf8mb3", "latin1"}, Default: "utf8mb4",
 				Target: TargetArg, Name: "character-set-server", Advanced: true,
 			},
 			{
-				Key: "collation", Label: "정렬 규칙", Kind: KindText,
+				Key: "collation", Apply: ApplyInitOnly, Label: "정렬 규칙", Kind: KindText,
 				Placeholder: "utf8mb4_0900_ai_ci",
 				Target:      TargetArg, Name: "collation-server", Advanced: true,
 			},
@@ -351,23 +421,23 @@ func mariadb() *Recipe {
 		Health: []string{"CMD-SHELL", "healthcheck.sh --connect --innodb_initialized"},
 		Fields: append([]Field{
 			{
-				Key: "database", Label: "데이터베이스 이름", Kind: KindText,
+				Key: "database", Apply: ApplyInitOnly, Label: "데이터베이스 이름", Kind: KindText,
 				Default: "appdb", Required: true, Target: TargetEnv, Name: "MARIADB_DATABASE",
 			},
 			{
-				Key: "password", Label: "root 비밀번호", Kind: KindPassword, Required: true,
+				Key: "password", Apply: ApplyInitOnly, Label: "root 비밀번호", Kind: KindPassword, Required: true,
 				Secret: true, Target: TargetEnv, Name: "MARIADB_ROOT_PASSWORD",
 			},
 			{
-				Key: "appUser", Label: "앱 계정 (선택)", Kind: KindText,
+				Key: "appUser", Apply: ApplyInitOnly, Label: "앱 계정 (선택)", Kind: KindText,
 				Target: TargetEnv, Name: "MARIADB_USER", Advanced: true,
 			},
 			{
-				Key: "appPassword", Label: "앱 계정 비밀번호", Kind: KindPassword,
+				Key: "appPassword", Apply: ApplyInitOnly, Label: "앱 계정 비밀번호", Kind: KindPassword,
 				Secret: true, Target: TargetEnv, Name: "MARIADB_PASSWORD", Advanced: true,
 			},
 			{
-				Key: "charset", Label: "문자셋", Kind: KindSelect,
+				Key: "charset", Apply: ApplyInitOnly, Label: "문자셋", Kind: KindSelect,
 				Choices: []string{"utf8mb4", "utf8mb3"}, Default: "utf8mb4",
 				Target: TargetArg, Name: "character-set-server", Advanced: true,
 			},
@@ -393,15 +463,15 @@ func mongo() *Recipe {
 			"mongosh --quiet --eval 'db.adminCommand({ping:1}).ok' | grep -q 1"},
 		Fields: append([]Field{
 			{
-				Key: "username", Label: "root 계정", Kind: KindText, Default: "root",
+				Key: "username", Apply: ApplyInitOnly, Label: "root 계정", Kind: KindText, Default: "root",
 				Required: true, Target: TargetEnv, Name: "MONGO_INITDB_ROOT_USERNAME",
 			},
 			{
-				Key: "password", Label: "root 비밀번호", Kind: KindPassword, Required: true,
+				Key: "password", Apply: ApplyInitOnly, Label: "root 비밀번호", Kind: KindPassword, Required: true,
 				Secret: true, Target: TargetEnv, Name: "MONGO_INITDB_ROOT_PASSWORD",
 			},
 			{
-				Key: "database", Label: "데이터베이스 이름", Kind: KindText, Default: "appdb",
+				Key: "database", Apply: ApplyInitOnly, Label: "데이터베이스 이름", Kind: KindText, Default: "appdb",
 				Help:   "이 이름으로 초기화 스크립트가 도는 자리를 정합니다",
 				Target: TargetEnv, Name: "MONGO_INITDB_DATABASE",
 			},
@@ -439,7 +509,7 @@ func redis() *Recipe {
 		Health: []string{"CMD-SHELL", "redis-cli ping | grep -q PONG"},
 		Fields: append([]Field{
 			{
-				Key: "password", Label: "비밀번호", Kind: KindPassword, Required: true,
+				Key: "password", Apply: ApplyRecreate, Label: "비밀번호", Kind: KindPassword, Required: true,
 				Help:   "Redis 는 계정이 없고 비밀번호만 있습니다",
 				Secret: true, Target: TargetArg, Name: "requirepass",
 			},
@@ -485,11 +555,11 @@ func clickhouse() *Recipe {
 		Health: []string{"CMD-SHELL", "clickhouse-client --password \"$CLICKHOUSE_PASSWORD\" --query 'SELECT 1'"},
 		Fields: append([]Field{
 			{
-				Key: "database", Label: "데이터베이스 이름", Kind: KindText,
+				Key: "database", Apply: ApplyInitOnly, Label: "데이터베이스 이름", Kind: KindText,
 				Default: "appdb", Required: true, Target: TargetEnv, Name: "CLICKHOUSE_DB",
 			},
 			{
-				Key: "password", Label: "default 계정 비밀번호", Kind: KindPassword,
+				Key: "password", Apply: ApplyRecreate, Label: "default 계정 비밀번호", Kind: KindPassword,
 				Required: true, Secret: true,
 				Target: TargetEnv, Name: "CLICKHOUSE_PASSWORD",
 			},
@@ -543,7 +613,7 @@ func mssql() *Recipe {
 			"/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$MSSQL_SA_PASSWORD\" -C -Q 'SELECT 1'"},
 		Fields: append([]Field{
 			{
-				Key: "password", Label: "sa 비밀번호", Kind: KindPassword, Required: true,
+				Key: "password", Apply: ApplyInitOnly, Label: "sa 비밀번호", Kind: KindPassword, Required: true,
 				Help: "대문자·소문자·숫자·기호를 섞은 8자 이상이어야 합니다. " +
 					"약하면 컨테이너가 뜨자마자 죽습니다",
 				Secret: true, Target: TargetEnv, Name: "MSSQL_SA_PASSWORD",
@@ -556,7 +626,7 @@ func mssql() *Recipe {
 				Target:  TargetEnv, Name: "MSSQL_PID",
 			},
 			{
-				Key: "collation", Label: "정렬 규칙", Kind: KindText,
+				Key: "collation", Apply: ApplyInitOnly, Label: "정렬 규칙", Kind: KindText,
 				Placeholder: "Korean_Wansung_CI_AS",
 				Help:        "만들 때 한 번만 정해집니다",
 				Target:      TargetEnv, Name: "MSSQL_COLLATION", Advanced: true,

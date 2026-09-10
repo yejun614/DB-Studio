@@ -48,6 +48,7 @@ const (
 	// "누가 그 DB 를 멈췄나"는 반드시 물어질 질문이고, 그때 볼 곳이 없으면
 	// 도커 로그를 뒤져도 사람 이름은 나오지 않는다.
 	ActionDBInstanceCreated   = "dbinstance.created"
+	ActionDBInstanceUpdated   = "dbinstance.updated"
 	ActionDBInstanceStarted   = "dbinstance.started"
 	ActionDBInstanceStopped   = "dbinstance.stopped"
 	ActionDBInstanceRestarted = "dbinstance.restarted"

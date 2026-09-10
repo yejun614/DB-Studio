@@ -193,6 +193,37 @@ func (c *Client) StartContainer(ctx context.Context, id string) error {
 	return res.Body.Close()
 }
 
+// UpdateResources는 컨테이너를 그대로 두고 바꿀 수 있는 것들이다.
+//
+// 도커가 `docker update` 로 받는 것과 같다. 메모리와 CPU 는 커널의 cgroup 값을
+// 바꾸는 것이라 컨테이너를 다시 만들지 않아도 되고, 다시 시작 정책은 데몬이
+// 들고 있는 값이라 마찬가지다.
+//
+// 포트와 환경변수는 여기 없다. 그것들은 컨테이너를 만들 때 정해지고, 도커에는
+// 그것을 바꾸는 길이 없다 — 바꾸려면 다시 만들어야 한다.
+type UpdateResources struct {
+	Memory   int64          `json:"Memory,omitempty"`
+	NanoCPUs int64          `json:"NanoCpus,omitempty"`
+	Restart  *RestartPolicy `json:"RestartPolicy,omitempty"`
+}
+
+// UpdateContainer는 도는 컨테이너의 자원 상한을 바꾼다.
+//
+// 응답의 Warnings 를 오류로 올리지 않는 이유: 데몬은 "이 커널에서는 스왑 상한을
+// 못 건다" 같은 것을 경고로 준다. 그때 바꾼 나머지는 이미 적용됐으므로 실패로
+// 다루면 사람이 같은 일을 다시 시도하게 된다.
+func (c *Client) UpdateContainer(ctx context.Context, id string, r UpdateResources) ([]string, error) {
+	var out struct {
+		Warnings []string `json:"Warnings"`
+	}
+	err := c.postJSON(ctx, "/"+APIVersion+"/containers/"+url.PathEscape(id)+"/update",
+		r, &out, "컨테이너 자원 바꾸기")
+	if err != nil {
+		return nil, err
+	}
+	return out.Warnings, nil
+}
+
 // StopContainer는 컨테이너를 멈춘다. timeout 초 뒤에 강제로 끊는다.
 //
 // 이미 멈춰 있으면(304) 오류로 보지 않는다 — 시작과 같은 이유다.
