@@ -237,41 +237,79 @@ function openCreateModal(root, recipe) {
 //
 // 종류별 분기를 여기 한 곳에 두는 이유: 화면이 DB 마다 칸을 적어 두면 새 DB 를
 // 더할 때 화면도 고쳐야 하고, 그때 한쪽만 고치면 값이 조용히 빠진다.
-function fieldFor(f, values) {
+//
+// current 를 주면 그 값으로 채운다(고치기). 주지 않으면 기본값이다(만들기).
+// edit 이면 **이 칸을 고치면 무엇이 필요한지**를 칸 옆에 붙인다 — 누르고 나서
+// 알게 되는 것과 적기 전에 아는 것은 다른 일이다.
+function fieldFor(f, values, opts = {}) {
+  const { current = null, edit = false } = opts;
+  const initial = current && current[f.key] !== undefined ? current[f.key] : (f.default ?? '');
   const set = (v) => { values[f.key] = v; };
+  if (initial !== '' && values[f.key] === undefined) set(initial);
+
   let control;
   switch (f.kind) {
     case 'bool': {
-      const box = checkbox(f.label, { checked: f.default === 'true' });
+      const on = String(initial) === 'true';
+      const box = checkbox(f.label, { checked: on });
       box.querySelector('input').onchange = (e) => set(e.target.checked ? 'true' : 'false');
-      set(f.default === 'true' ? 'true' : 'false');
+      set(on ? 'true' : 'false');
       return h('div.dbsetup-bool', {}, box,
+        edit ? applyBadge(f) : null,
         f.help ? h('span.field-help', {}, f.help) : null);
     }
     case 'select':
       control = select((f.choices ?? []).map((v) => ({ value: v, label: v })),
-        { value: f.default ?? '', onchange: (e) => set(e.target.value) });
+        { value: initial, onchange: (e) => set(e.target.value) });
       break;
     case 'password':
       control = input({
-        type: 'password', placeholder: f.placeholder ?? '',
+        type: 'password',
+        // 고칠 때는 값을 채우지 않는다. 저장된 비밀번호를 화면에 되돌려 주면
+        // 그 화면을 보는 것이 곧 비밀번호를 보는 것이 된다.
+        placeholder: edit ? '그대로 두려면 비워 두세요' : (f.placeholder ?? ''),
         autocomplete: 'new-password', oninput: (e) => set(e.target.value),
       });
+      if (edit) delete values[f.key];
       break;
     case 'number':
       control = input({
-        type: 'number', value: f.default ?? '', placeholder: f.placeholder ?? '',
+        type: 'number', value: initial, placeholder: f.placeholder ?? '',
         min: f.min ?? undefined, max: f.max ?? undefined,
         oninput: (e) => set(e.target.value),
       });
       break;
     default:
       control = input({
-        value: f.default ?? '', placeholder: f.placeholder ?? '',
+        value: initial, placeholder: f.placeholder ?? '',
         oninput: (e) => set(e.target.value),
       });
   }
-  return field(f.required ? `${f.label} *` : f.label, control, f.help);
+  const label = f.required && !edit ? `${f.label} *` : f.label;
+  const wrapped = field(label, control, f.help);
+  if (edit) wrapped.querySelector('.field-label').appendChild(applyBadge(f));
+  return wrapped;
+}
+
+// applyBadge는 이 칸을 고치면 무엇이 필요한지다.
+//
+// init 을 가장 눈에 띄게 둔다. 그것만이 "고쳐도 소용없다"이고, 나머지는
+// "이만큼 하면 된다"이기 때문이다.
+function applyBadge(f) {
+  const map = {
+    live: ['바로 적용', 'success'],
+    restart: ['재시작 필요', 'warn'],
+    recreate: ['다시 만들기 필요', 'warn'],
+    init: ['지금 DB 에는 적용 안 됨', 'danger'],
+  };
+  const [label, kind] = map[f.apply ?? ''] ?? ['다시 만들기 필요', 'warn'];
+  const help = f.apply === 'init'
+    ? '이 값은 처음 만들 때 한 번만 쓰입니다. 고쳐도 지금 DB 는 그대로입니다'
+    : label;
+  const b = badge(label, kind);
+  b.classList.add('dbsetup-apply');
+  b.title = help;
+  return b;
 }
 
 // fieldValues는 서버에 보낼 값만 고른다.
@@ -446,6 +484,12 @@ async function openDetail(root, summary) {
           onclick: () => act('다시 시작했습니다', () => api.post(`/docker/instances/${in_.id}/restart`)),
         }, icon('refresh'), '다시 시작')
         : null,
+      !gone
+        ? h('button.btn', {
+          type: 'button',
+          onclick: () => openEditModal(root, summary, detail, reload),
+        }, icon('settings'), '설정 고치기')
+        : null,
       h('button.btn', {
         type: 'button',
         onclick: () => openCompose(`/docker/instances/${in_.id}/compose`,
@@ -552,6 +596,137 @@ async function removeInstance(in_, act) {
     keep ? '컨테이너를 지웠습니다 (데이터는 남겼습니다)' : '컨테이너와 데이터를 지웠습니다',
     () => api.del(`/docker/instances/${in_.id}?keepData=${keep}`),
   );
+}
+
+// openEditModal은 만든 DB 의 설정을 고친다.
+//
+// ── 왜 "무엇이 일어나는지"를 먼저 보여 주는가 ───────────────────────
+// 고칠 수 있는 값이라고 다 같은 값이 아니다. 메모리 상한은 도커가 컨테이너를
+// 그대로 두고 바꿔 주지만, 실행 인자는 다시 만들어야 하고, 계정과 비밀번호는
+// **다시 만들어도 안 바뀌는** DB 가 있다(PostgreSQL·MySQL·MariaDB·MongoDB·
+// MS-SQL 은 첫 실행에서만 쓴다 — 실제로 재 봤다).
+//
+// 그것을 말하지 않고 "저장했습니다"라고만 하면, 사람은 바뀐 줄 알고 새
+// 비밀번호로 접속하다 막힌다.
+async function openEditModal(root, summary, detail, onDone) {
+  const recipe = detail.recipe;
+  const in_ = detail.instance;
+  if (!recipe) {
+    toast('이 DB 의 레시피를 찾을 수 없어 고칠 수 없습니다', 'error');
+    return;
+  }
+
+  const values = {};
+  const current = in_.values ?? {};
+  const basic = recipe.fields.filter((f) => !f.advanced && !f.hidden);
+  const advanced = recipe.fields.filter((f) => f.advanced && !f.hidden);
+  const opts = { current, edit: true };
+
+  const body = h('div', {},
+    h('p.field-help', {},
+      '칸 옆의 표시가 그 값을 고쳤을 때 무엇이 필요한지입니다. '
+      + '비밀번호는 그대로 두려면 비워 두세요.'),
+    ...basic.map((f) => fieldFor(f, values, opts)),
+    advanced.length
+      ? h('details.dbsetup-advanced', { open: true },
+        h('summary', {}, '자세한 설정'),
+        ...advanced.map((f) => fieldFor(f, values, opts)))
+      : null);
+
+  const submit = h('button.btn.btn-primary', { type: 'button' }, icon('save'), '고치기');
+  const close = openModal({
+    title: `${in_.name} 설정 고치기`, body, width: 640,
+    footer: (closeFn) => [
+      h('button.btn', { type: 'button', onclick: closeFn }, '취소'),
+      submit,
+    ],
+  });
+
+  submit.onclick = async () => {
+    // 바꾸지 않은 칸은 보내지 않는다. 다 보내면 서버가 "바뀌었다"로 읽고
+    // 컨테이너를 괜히 다시 만든다.
+    const payload = { values: changedOnly(recipe, current, values) };
+    if (!Object.keys(payload.values).length) {
+      toast('바뀐 것이 없습니다', 'info');
+      return;
+    }
+
+    let preview;
+    try {
+      submit.disabled = true;
+      preview = await api.post(`/docker/instances/${in_.id}/changes`, payload);
+    } catch (err) {
+      submit.disabled = false;
+      toastError(err);
+      return;
+    }
+    submit.disabled = false;
+
+    const ok = await confirmDialog({
+      title: '이대로 고칠까요?',
+      message: preview.needsText,
+      details: changeList(preview),
+      confirmLabel: '고치기',
+      danger: preview.needed === 'recreate',
+    });
+    if (!ok) return;
+
+    try {
+      const res = await api.patch(`/docker/instances/${in_.id}`, payload);
+      close();
+      const skipped = (res.initOnly ?? []).length;
+      toast(skipped
+        ? `고쳤습니다. ${skipped}개는 지금 DB 에 적용되지 않았습니다`
+        : '고쳤습니다', skipped ? 'warn' : 'success');
+      onDone?.();
+      renderDBSetup(root);
+    } catch (err) {
+      toastError(err);
+      onDone?.();
+    }
+  };
+}
+
+// changedOnly는 실제로 바뀐 칸만 고른다.
+function changedOnly(recipe, current, values) {
+  const out = {};
+  for (const f of recipe.fields) {
+    const v = values[f.key];
+    if (v === undefined) continue;
+    // 비밀번호는 비워 두면 "그대로"다. 빈 값을 보내면 서버가 지우려는 것으로 읽는다.
+    if (f.secret && v === '') continue;
+    // 적어 두지 않은 칸의 지금 값은 **기본값**이다. 빈 값으로 보면 손대지
+    // 않은 칸이 전부 "바뀜"으로 잡히고, 그중 하나가 다시 만들기를 요구하면
+    // 컨테이너가 괜히 다시 만들어진다.
+    const was = current[f.key] ?? f.default ?? '';
+    if (String(v) === String(was)) continue;
+    out[f.key] = String(v);
+  }
+  return out;
+}
+
+// changeList는 확인 창에 보일 변경 목록이다.
+//
+// 적용되지 않는 것을 맨 위에 따로 모은다. 목록 가운데 섞여 있으면 그것만
+// 다르다는 것이 읽히지 않는다.
+function changeList(preview) {
+  const initOnly = preview.initOnly ?? [];
+  const rest = (preview.changes ?? []).filter((c) => c.apply !== 'init');
+  return h('div', {},
+    initOnly.length
+      ? h('div.notice.notice-danger', {}, icon('alert'),
+        h('div', {},
+          h('strong', {}, '이 값들은 지금 DB 에 적용되지 않습니다'),
+          h('p', {}, '처음 만들 때 한 번만 쓰이는 값입니다. 바꾸려면 데이터를 지우고 '
+            + '새로 만들거나, DB 안에서 직접 바꿔야 합니다.'),
+          ...initOnly.map((c) => h('p', {}, `• ${c.label}: ${c.from || '(없음)'} → ${c.to}`))))
+      : null,
+    rest.length
+      ? h('dl.kv', {}, ...rest.flatMap((c) => [
+        h('dt', {}, c.label),
+        h('dd', {}, `${c.from || '(없음)'} → ${c.to}`),
+      ]))
+      : null);
 }
 
 // ---------- compose.yml 내보내기 ----------

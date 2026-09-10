@@ -5972,3 +5972,7 @@ tr.is-clickable:focus-visible { outline: 2px solid var(--primary); outline-offse
   border-bottom: 1px solid var(--border-soft);
 }
 .dbsetup-format .field-help { margin-left: auto; }
+
+/* 이 칸을 고치면 무엇이 필요한지. 적기 전에 보여야 한다. */
+.dbsetup-apply { margin-left: 8px; font-weight: 400; }
+.field-label .dbsetup-apply { vertical-align: middle; }
