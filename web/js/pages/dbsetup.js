@@ -160,6 +160,7 @@ function openCreateModal(root, recipe) {
   const advanced = recipe.fields.filter((f) => f.advanced && !f.hidden);
 
   const registerBox = checkbox('DB 커넥션으로 바로 등록', { checked: true });
+  const cluster = recipe.id === 'clickhouse' ? clusterFields() : null;
   const body = h('div', {},
     h('p.field-help', {}, recipe.blurb),
     field('이름', nameInput,
@@ -171,6 +172,7 @@ function openCreateModal(root, recipe) {
         h('summary', {}, '자세한 설정'),
         ...advanced.map((f) => fieldFor(f, values)))
       : null,
+    cluster ? cluster.node : null,
     h('div.dbsetup-register', {}, registerBox),
     (recipe.notes ?? []).length
       ? h('div.notice.notice-info', {}, icon('alert'),
@@ -197,22 +199,29 @@ function openCreateModal(root, recipe) {
       values: fieldValues(recipe, values),
       register: registerBox.querySelector('input').checked,
     };
+    const shape = cluster?.value();
+    if (shape) payload.cluster = shape;
 
     // 만들기 전에 계획을 받아 경고를 보여 준다. 이 만들기는 되돌리는 값이
     // 크다 — 컨테이너 하나와 볼륨 하나가 생기고, 잘못이면 지우는 것까지 해야
     // 한다. 값이 잘못되었으면 여기서 걸려서 아무것도 만들어지지 않는다.
-    let plan;
-    try {
-      submit.disabled = true;
-      plan = await api.post('/docker/plan', payload);
-    } catch (err) {
+    // 클러스터는 계획이 하나가 아니라 미리보기 경로가 다르다. 여기서는
+    // 만들기 응답에 담겨 오는 경고를 보여 준다.
+    let warnings = [];
+    if (!shape) {
+      let plan;
+      try {
+        submit.disabled = true;
+        plan = await api.post('/docker/plan', payload);
+      } catch (err) {
+        submit.disabled = false;
+        toastError(err);
+        return;
+      }
       submit.disabled = false;
-      toastError(err);
-      return;
+      warnings = plan.plan?.warnings ?? [];
     }
-    submit.disabled = false;
 
-    const warnings = plan.plan?.warnings ?? [];
     if (warnings.length) {
       const ok = await confirmDialog({
         title: '이대로 만들까요?',
@@ -223,13 +232,57 @@ function openCreateModal(root, recipe) {
     }
 
     try {
-      await api.post('/docker/instances', payload);
+      const res = await api.post('/docker/instances', payload);
       close();
-      toast(`${name} 을(를) 만들고 있습니다`, 'info');
+      if (res.nodes) {
+        // 클러스터의 경고는 만들고 나서야 온다. 토스트로 흘려보내면 읽히지
+        // 않으므로 창으로 보여 준다 — 한 기계에 다 뜬다는 것 같은 것은
+        // 만든 사람이 반드시 알아야 한다.
+        await confirmDialog({
+          title: `${name} 클러스터를 만들고 있습니다`,
+          message: `노드 ${res.nodes}대를 순서대로 띄웁니다. 몇 분 걸립니다.`,
+          details: (res.warnings ?? []).length
+            ? h('div', {}, ...res.warnings.map((w) => h('p.field-help', {}, `• ${w}`)))
+            : null,
+          confirmLabel: '알겠습니다',
+        });
+      } else {
+        toast(`${name} 을(를) 만들고 있습니다`, 'info');
+      }
       renderDBSetup(root);
     } catch (err) {
       toastError(err);
     }
+  };
+}
+
+// clusterFields는 ClickHouse 를 클러스터로 세울 때의 칸이다.
+//
+// ── 왜 ClickHouse 뿐인가 ────────────────────────────────────────────
+// 클러스터는 DB 마다 뜻이 다르다. PostgreSQL 의 복제와 ClickHouse 의 샤딩은
+// 같은 말이 아니고, 만드는 것도 다루는 것도 다르다. 하나를 제대로 하는 편이
+// 여럿을 어설프게 하는 것보다 낫다.
+function clusterFields() {
+  const on = checkbox('클러스터로 만들기 (샤딩·복제)', { checked: false });
+  const shards = select([1, 2, 3, 4].map((n) => ({ value: String(n), label: `${n}개` })),
+    { value: '2' });
+  const replicas = select([1, 2, 3].map((n) => ({ value: String(n), label: `${n}개` })),
+    { value: '2' });
+  const detail = h('div.dbsetup-cluster-opts', { hidden: true },
+    field('샤드 (데이터를 나눌 조각)', shards,
+      '조각마다 다른 데이터가 들어갑니다. 늘리면 쓰기와 조회가 나뉩니다'),
+    field('레플리카 (조각마다 둘 복제본)', replicas,
+      '같은 데이터를 몇 벌 둘지입니다. 2 이상이면 복제를 맞출 Keeper 가 함께 뜹니다'),
+    h('p.field-help', {},
+      '노드는 샤드 × 레플리카 만큼 뜨고, 모두 이 기계 한 대에 뜹니다. '
+      + '커넥션은 첫 노드 하나만 등록되며 DDL 에 ON CLUSTER 가 붙습니다.'));
+
+  on.querySelector('input').onchange = (e) => { detail.hidden = !e.target.checked; };
+  return {
+    node: h('div.dbsetup-cluster', {}, on, detail),
+    value: () => (on.querySelector('input').checked
+      ? { shards: Number(shards.value), replicas: Number(replicas.value) }
+      : null),
   };
 }
 
@@ -355,7 +408,15 @@ function instanceRow(root, in_) {
     h('td', {}, h('div.dbsetup-name', {},
       h('strong', {}, in_.name),
       h('span.field-help', {}, in_.containerName))),
-    h('td', {}, `${in_.kind} ${in_.version}`),
+    h('td', {},
+      `${in_.kind} ${in_.version}`,
+      // 클러스터의 노드는 그렇게 보여야 한다. 이름만 보고는 다섯 줄이 한
+      // 묶음인지, 서로 다른 DB 다섯 개인지 알 수 없다.
+      in_.cluster
+        ? h('div.field-help', {}, in_.role === 'keeper'
+          ? `${in_.cluster} · 조정자`
+          : `${in_.cluster} · 샤드 ${in_.shard} 레플리카 ${in_.replica}`)
+        : null),
     h('td', {}, statusCell(in_)),
     h('td', {}, in_.hostPort > 0 ? h('code', {}, `:${in_.hostPort}`) : '—'),
     h('td', {}, relativeTime(in_.createdAt)),

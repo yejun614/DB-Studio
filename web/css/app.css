@@ -5976,3 +5976,7 @@ tr.is-clickable:focus-visible { outline: 2px solid var(--primary); outline-offse
 /* 이 칸을 고치면 무엇이 필요한지. 적기 전에 보여야 한다. */
 .dbsetup-apply { margin-left: 8px; font-weight: 400; }
 .field-label .dbsetup-apply { vertical-align: middle; }
+
+/* 클러스터 칸. 켰을 때만 아래가 열린다. */
+.dbsetup-cluster { margin: 14px 0; padding-top: 12px; border-top: 1px solid var(--border-soft); }
+.dbsetup-cluster-opts { margin-top: 10px; padding-left: 24px; }
