@@ -47,6 +47,15 @@ import { setScreenDetail, screenConn } from '../core/screen.js';
 import { errorPanel } from './users.js';
 import { statusBadge, STATUS_LABELS } from './erd.js';
 
+// 좁은 화면인가. app.css 의 ERD 좁은 화면 블록과 같은 값이어야 한다 —
+// 거기서 속성 창이 격자의 칸이 아니라 도면 위에 뜬 것이 되고, 그 배치에서만
+// "처음에는 접어 둔다"가 뜻이 있다.
+const NARROW = '(max-width: 900px)';
+
+function isNarrow() {
+  return typeof window.matchMedia === 'function' && window.matchMedia(NARROW).matches;
+}
+
 // 테이블에 붙일 수 있는 아이콘. 빈 값은 "없음"이다.
 // 종류를 늘리는 것보다 서로 확실히 구분되는 몇 개가 낫다 — 스무 개 중에서 고르면
 // 다음에 같은 뜻으로 어느 것을 골랐는지 기억하지 못한다.
@@ -159,7 +168,11 @@ class Editor {
     // 편집 권한(canEdit)과 다른 축이다 — 남의 초안을 고쳐 줄 수는 있어도
     // 그 문서의 이름을 바꾸는 것은 만든 사람의 일이다.
     this.canManage = Boolean(initial.canManage);
-    this.panelHidden = false;
+    // 좁은 화면에서 속성 창은 도면 위에 겹쳐 뜬다(app.css). 겹친 채로 열려 있으면
+    // 문서를 열자마자 도면의 아래 절반이 가려지고, 처음 보는 사람은 그것을 "도면이
+    // 안 나온다"로 읽는다. 접어 두고 시작한다 — 도구 줄의 손잡이로 언제든 편다.
+    this.panelHidden = isNarrow();
+    if (this.panelHidden) ui.root.classList.add('is-panel-hidden');
     // present는 발표 모드다. 전체화면으로 도면만 남기고, 편집 경로를 모두 닫는다.
     // beforePresent는 돌아올 자리다(도구·탭·사이드바) — 발표는 잠깐 하는 일이고,
     // 끝나면 하던 대로 돌아와야 한다.
@@ -309,13 +322,20 @@ class Editor {
     setScreenDetail(() => this.screenBits());
     this.canvas.setDoc(this.doc);
     this.canvas.setTool(this.tool);
-    this.canvas.fitView();
     // 타입 목록은 미리 받아 둔다. 고르개를 열 때 받으면 빈 창이 떴다가 채워지고,
     // 컬럼 줄의 "자동 증가" 설명(DB마다 이름이 다르다)도 그때까지 비어 있다.
     this.ensureTypeCatalog().then(() => {
       if (this.tab === 'table') this.renderPanelIfIdle();
     });
     this.renderToolbar();
+    // 맞추기는 **도구 줄을 그린 뒤**다. 도구 줄의 높이는 그 안의 단추가 몇 줄로
+    // 접히는지에 달렸고, 그만큼이 캔버스 높이에서 빠진다. 빈 도구 줄을 기준으로
+    // 맞추면 그 뒤에 오는 크기 변화를 syncViewport 가 "배율은 그대로, 범위만 넓힘"
+    // 으로 받아, 도면이 맞춘 것보다 작게 그려진 채 남는다.
+    //
+    // 넓은 화면에서는 한 줄이라 오차가 몇십 픽셀이지만, 휴대폰에서는 도구 줄이
+    // 네댓 줄(160px)로 접힌다 — 재 보면 도면이 3할 작게 그려졌다.
+    this.canvas.fitView();
     this.renderCanvas();
     this.renderPanel();
     this.bindPanel();
@@ -1698,6 +1718,9 @@ class Editor {
   setTab(tab) {
     const was = this.tab;
     this.tab = tab;
+    // 탭을 누르는 것은 그 탭을 보겠다는 뜻이다. 창이 접혀 있으면(좁은 화면의
+    // 기본값) 아무 일도 일어나지 않은 것처럼 보이므로 함께 편다.
+    if (this.panelHidden) this.togglePanel();
     this.renderToolbar();
     this.renderPanel();
     // 강조가 켜지거나 꺼지는 전환에서만 캔버스를 건드린다. 탭을 옮길 때마다

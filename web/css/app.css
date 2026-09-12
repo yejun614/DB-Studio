@@ -2867,7 +2867,19 @@ optgroup option { color: var(--text); font-weight: 400; }
 tr.is-destructive td { background: hsl(var(--h-danger) / 0.08); }
 
 @media (max-width: 1100px) {
-  .erd-body { grid-template-columns: 1fr; grid-template-rows: 1fr 300px; }
+  .erd-body {
+    grid-template-columns: minmax(0, 1fr);
+    /* 속성 창은 300px 을 넘지 않되, 낮은 화면에서는 그보다도 양보한다. 1024x768
+     * 가로 화면에서 300px 을 고집하면 도면 몫이 220px 밖에 남지 않는다. */
+    grid-template-rows: minmax(0, 1fr) minmax(0, min(300px, 42%));
+  }
+  /* 위아래로 쌓인 배치에서 폭 손잡이는 잡을 것이 없다.
+   *
+   * 지우지 않으면 조용히 자리를 먹는다: .erd-body 의 자식은 셋인데(도면·손잡이·
+   * 속성 창) 줄은 둘만 정해 두었으므로, 손잡이가 두 번째 줄(300px)을 통째로 가져가고
+   * 도면은 남은 높이를 받는다. 390px 화면에서 그 값은 0px 이었다 — 도면이 아예
+   * 그려지지 않던 이유다. */
+  .erd-panel-resize { display: none; }
 }
 
 /* ---------- 발표 모드 ----------
@@ -3015,6 +3027,51 @@ tr.is-destructive td { background: hsl(var(--h-danger) / 0.08); }
 .erd-present-meta-row { display: flex; gap: 10px; }
 .erd-present-meta-row dt { flex: none; min-width: 76px; color: var(--text-mute); font-size: 12px; }
 .erd-present-meta-row dd { margin: 0; font: 12.5px var(--mono); word-break: break-all; }
+
+/* ---------- ERD: 좁은 화면 ----------
+ *
+ * 휴대폰에서 이 화면의 문제는 자리 다툼이다. 세로 844px 짜리 화면에서 머리글이
+ * 98px, 도구 줄이 234px 을 가져가고 나면 도면과 속성 창이 나눠 가질 것은 400px
+ * 남짓이다. 위아래로 쪼개면 도면도 속성도 읽을 수 없는 크기가 된다.
+ *
+ * 그래서 여기서는 속성 창을 격자의 한 칸이 아니라 **도면 위에 뜬 것**으로 바꾼다.
+ * 발표 모드가 같은 이유로 이미 그렇게 한다(위의 주석): 칸으로 두면 창이 뜰 때마다
+ * 도면이 좁아지고 다시 맞춰지며 눈앞에서 움직인다.
+ *
+ * 이 블록이 @media (max-width: 1100px) 와 발표 모드 뒤에 오는 이유: 앞의 것이
+ * 정한 2단 격자를 여기서 되돌려야 하고, 발표 중에는 이 규칙이 걸리면 안 된다
+ * (그래서 :not(.is-present) 로 좁혀 둔다). */
+@media (max-width: 900px) {
+  /* 좁은 화면에는 상단 막대(55px)가 더 붙는다. 그리고 100vh 는 주소창이 접힌
+   * 높이라 실제로 보이는 것보다 크다 — 그 값으로 잡으면 편집기 아래쪽이 화면
+   * 밖으로 내려가고, 도면 위에서는 손가락이 팬으로 먹히므로 스크롤로 되찾기도
+   * 어렵다. dvh 로 재고 막대(55) + 콘텐츠 여백(20 + 48)을 뺀다. */
+  .erd-editor { height: calc(100dvh - 123px); min-height: 360px; }
+  .erd-editor.is-present { height: 100dvh; }
+
+  /* 도구 줄. 단추가 스물 남짓이라 다섯 줄로 접히고, 그 234px 이 통째로 도면에서
+   * 빠진다. 단추를 감추는 대신 간격을 좁혀 줄 수를 줄인다 — 감춘 단추는 좁은
+   * 화면에서 다시 찾을 길이 없다. */
+  .erd-toolbar { gap: 6px 8px; padding: 6px 8px; }
+  .erd-tool-group { gap: 4px; }
+  /* 빈 칸은 남은 폭을 다 먹어 탭 단추를 다음 줄로 밀어낸다. 넓은 화면에서는
+   * 오른쪽 정렬이지만 여기서는 그저 한 줄을 버리는 일이다. */
+  .erd-tool-spacer { display: none; }
+
+  .erd-editor:not(.is-present) .erd-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    position: relative;
+  }
+  /* 속성 창은 아래에서 올라와 도면을 덮는다. 도면의 높이는 창이 뜨든 말든 그대로다.
+   * 처음에는 접혀 있다(erdeditor.js) — 문서를 열자마자 도면이 가려지면 안 된다. */
+  .erd-editor:not(.is-present) .erd-panel {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    max-height: min(62%, 420px);
+    z-index: 24;
+    box-shadow: 0 -12px 32px hsl(0 0% 0% / 0.35);
+  }
+}
 
 /* ---------- 마이그레이션 ---------- */
 
