@@ -444,3 +444,82 @@ func TestClusterJoinRequiresMaster(t *testing.T) {
 		t.Errorf("리플리카에 참여 요청 = %d (기대 409)", res.StatusCode)
 	}
 }
+
+// TestIsRoutableSuffix는 커넥션 하위 경로의 담당 노드 라우팅 판정을 고정한다.
+//
+// ── 이 시험이 필요한 이유 ─────────────────────────────────────────────
+// routableSuffix/routablePrefix는 허용 목록이다. 새 경로가 생겼을 때 빠지면
+// "접속 테스트는 성공하는데 해당 화면에서는 Access Denied"가 나는 조용한 실패가 된다.
+// 이 시험은 "어떤 경로가 담당 노드로 가야 하고 어떤 경로는 가면 안 되는가"를 코드로 명시한다.
+func TestIsRoutableSuffix(t *testing.T) {
+	cases := []struct {
+		suffix string
+		want   bool
+		why    string
+	}{
+		// ── 기존 경로 (회귀 보호) ──
+		{"/data/objects", true, "데이터 조회: 대상 DB에 직접 접속"},
+		{"/data/query", true, "SQL 조회: 대상 DB에 직접 접속"},
+		{"/data/mutate", true, "데이터 변경: 대상 DB에 직접 접속"},
+		{"/data/batch", true, "일괄 변경: 대상 DB에 직접 접속"},
+		{"/statement", true, "SQL 실행: 대상 DB에 직접 접속"},
+		{"/statement/check", true, "SQL 구문 검사: 대상 DB에 직접 접속"},
+		{"/schema", true, "스키마 조회: introspect"},
+		{"/schema/ddl", true, "DDL 생성: introspect"},
+		{"/schema/diff", true, "스키마 비교: introspect"},
+		{"/explore", true, "탐색 화면: 대상 DB에 직접 접속"},
+		{"/logs", true, "로그 조회: 대상 DB에 직접 접속"},
+		{"/logs/sources", true, "로그 소스 목록: 대상 DB에 직접 접속"},
+		{"/test", true, "접속 테스트: Ping"},
+
+		// ── 새로 추가된 경로 ──
+		{"/structure", true, "구조 화면: introspectConnection을 통해 대상 DB에 접속"},
+		{"/schema/comments", true, "설명 수정 계획 생성: introspectConnection 호출"},
+		{"/storage", true, "스토리지 개요: resolveStorage → GetSecret"},
+		{"/storage/browse", true, "스토리지 탐색: resolveStorage → GetSecret"},
+		{"/storage/apps", true, "YARN 앱: resolveStorage → GetSecret"},
+		{"/storage/pools", true, "Ceph 풀: resolveStorage → GetSecret"},
+		{"/storage/osds", true, "Ceph OSD: resolveStorage → GetSecret"},
+		{"/storage/buckets", true, "버킷 목록: resolveStorage → GetSecret"},
+		{"/storage/objects", true, "오브젝트 목록: resolveStorage → GetSecret"},
+		{"/storage/bucket-stat", true, "버킷 통계: resolveStorage → GetSecret"},
+		{"/storage/mkdir", true, "디렉터리 생성: resolveStorage → GetSecret"},
+		{"/storage/rename", true, "이름 변경: resolveStorage → GetSecret"},
+		{"/storage/delete", true, "삭제: resolveStorage → GetSecret"},
+		{"/vector", true, "벡터 개요: resolveVector → GetSecret"},
+		{"/vector/scroll", true, "벡터 목록: resolveVector → GetSecret"},
+		{"/vector/fetch", true, "벡터 조회: resolveVector → GetSecret"},
+		{"/vector/search", true, "벡터 검색: resolveVector → GetSecret"},
+		{"/vector/compare", true, "벡터 비교: resolveVector → GetSecret"},
+		{"/broker", true, "브로커 개요: resolveBroker → GetSecret"},
+		{"/broker/queues", true, "큐 목록: resolveBroker → GetSecret"},
+		{"/broker/exchanges", true, "익스체인지: resolveBroker → GetSecret"},
+		{"/broker/connections", true, "연결 목록: resolveBroker → GetSecret"},
+		{"/broker/topics", true, "토픽 목록: resolveBroker → GetSecret"},
+		{"/broker/topics/my-topic/config", true, "토픽 설정: routablePrefix로 매칭"},
+		{"/broker/topics/complex-name-123/config", true, "동적 토픽 이름: routablePrefix로 매칭"},
+		{"/broker/groups", true, "컨슈머 그룹: resolveBroker → GetSecret"},
+		{"/broker/purge", true, "큐 비우기: resolveBroker → GetSecret"},
+		{"/broker/delete-queue", true, "큐 삭제: resolveBroker → GetSecret"},
+		{"/broker/close-connection", true, "연결 끊기: resolveBroker → GetSecret"},
+		{"/drift/check", true, "드리프트 감지: monitor.CheckDriftByID → GetSecret"},
+
+		// ── 메타 DB 작업 — 담당 노드로 넘기면 안 된다 ──
+		{"/versions", false, "스키마 버전 목록은 메타 DB에서 읽는다"},
+		{"/versions/diff", false, "버전 비교는 메타 DB 스냅샷 읽기"},
+		{"/metrics", false, "지표는 로컬 시계열 DB에서 읽는다"},
+		{"/metrics/available", false, "사용 가능한 지표 목록도 메타 DB"},
+		{"/snapshots", false, "스냅샷은 메타 DB에서 읽는다"},
+		{"/backups", false, "백업 시작은 메타 DB에 기록을 남긴다 — 마스터에서 처리"},
+		{"/impact", false, "삭제 영향 확인은 메타 DB 쿼리만"},
+		{"", false, "빈 suffix는 통과시키지 않는다"},
+		{"/unknown-future-path", false, "등록되지 않은 경로는 기본적으로 넘기지 않는다"},
+	}
+
+	for _, tc := range cases {
+		if got := isRoutableSuffix(tc.suffix); got != tc.want {
+			t.Errorf("isRoutableSuffix(%q) = %v (기대 %v) — %s",
+				tc.suffix, got, tc.want, tc.why)
+		}
+	}
+}

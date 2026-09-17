@@ -34,6 +34,12 @@ import (
 //
 // 허용 목록으로 둔 이유: 새 경로가 생겼을 때 기본값이 "넘긴다"이면, 메타 DB에 쓰는
 // 경로가 리플리카에서 실행되어 그 기록이 조용히 사라진다. 모르는 것은 넘기지 않는다.
+//
+// 정확한 suffix와 prefix 두 종류로 관리한다.
+//  - routableSuffix: 정확히 일치하는 경로 (동적 세그먼트 없음)
+//  - routablePrefix: 이 문자열로 시작하는 경로 (동적 세그먼트 포함, 예: /broker/topics/:topic/...)
+//
+// 두 목록 중 하나라도 맞으면 담당 노드로 넘긴다.
 var routableSuffix = map[string]bool{
 	"/data/objects":    true,
 	"/data/query":      true,
@@ -44,10 +50,51 @@ var routableSuffix = map[string]bool{
 	"/schema":          true,
 	"/schema/ddl":      true,
 	"/schema/diff":     true,
+	"/schema/comments": true,
 	"/explore":         true,
 	"/logs":            true,
 	"/logs/sources":    true,
 	"/test":            true,
+	// 구조 화면: 현재(또는 특정 버전) 스키마를 ERD로 본다. introspect를 통해 DB에 접속한다.
+	"/structure": true,
+	// 분산 스토리지(하둡·Ceph·S3). resolveStorage가 GetSecret을 써서 대상 DB에 접속한다.
+	"/storage":            true,
+	"/storage/browse":     true,
+	"/storage/apps":       true,
+	"/storage/pools":      true,
+	"/storage/osds":       true,
+	"/storage/buckets":    true,
+	"/storage/objects":    true,
+	"/storage/bucket-stat": true,
+	"/storage/mkdir":      true,
+	"/storage/rename":     true,
+	"/storage/delete":     true,
+	// 벡터 DB(Qdrant·Pinecone·pgvector). resolveVector가 GetSecret을 써서 대상 DB에 접속한다.
+	"/vector":         true,
+	"/vector/scroll":  true,
+	"/vector/fetch":   true,
+	"/vector/search":  true,
+	"/vector/compare": true,
+	// 메시지 브로커(RabbitMQ·Kafka). resolveBroker가 GetSecret을 써서 대상 DB에 접속한다.
+	"/broker":               true,
+	"/broker/queues":        true,
+	"/broker/exchanges":     true,
+	"/broker/connections":   true,
+	"/broker/topics":        true,
+	"/broker/groups":        true,
+	"/broker/purge":         true,
+	"/broker/delete-queue":  true,
+	"/broker/close-connection": true,
+	// 드리프트 감지: handleCheckDrift → monitor.CheckDriftByID → GetSecret → 실제 DB 접속.
+	"/drift/check": true,
+}
+
+// routablePrefix는 이 문자열로 시작하는 커넥션 하위 경로를 담당 노드로 넘긴다.
+//
+// 동적 세그먼트(예: /broker/topics/:topic/config)가 포함된 경로는 정확한 매칭이
+// 불가능하므로 prefix로 판정한다. 이 목록에 넣는 값은 반드시 고정 부분이어야 한다.
+var routablePrefix = []string{
+	"/broker/topics/", // /broker/topics/:topic/config 등
 }
 
 // execHeader가 붙은 요청은 "네가 실행하라"는 뜻이다. 이 표시가 있으면 다시 넘기지 않는다
@@ -63,7 +110,7 @@ func (s *Server) clusterRoute(c *fiber.Ctx) error {
 		return c.Next()
 	}
 	connID, suffix, ok := splitConnPath(c.Path())
-	if !ok || !routableSuffix[suffix] {
+	if !ok || !isRoutableSuffix(suffix) {
 		return c.Next()
 	}
 	conn, err := s.st.GetConnection(c.Context(), connID)
@@ -102,6 +149,24 @@ func splitConnPath(path string) (id, suffix string, ok bool) {
 		return "", "", false
 	}
 	return rest[:slash], rest[slash:], true
+}
+
+// isRoutableSuffix는 이 suffix를 담당 노드로 넘길 수 있는지 판정한다.
+//
+// 두 단계로 확인한다:
+//  1. routableSuffix 맵에서 정확히 일치하는지 본다.
+//  2. routablePrefix 목록의 어느 항목으로 시작하는지 본다.
+//     (예: /broker/topics/my-topic/config 는 /broker/topics/ 로 시작한다)
+func isRoutableSuffix(suffix string) bool {
+	if routableSuffix[suffix] {
+		return true
+	}
+	for _, p := range routablePrefix {
+		if strings.HasPrefix(suffix, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // proxyTo는 요청을 다른 노드로 그대로 넘기고 그 답을 돌려준다.
