@@ -36,8 +36,8 @@ import (
 // 경로가 리플리카에서 실행되어 그 기록이 조용히 사라진다. 모르는 것은 넘기지 않는다.
 //
 // 정확한 suffix와 prefix 두 종류로 관리한다.
-//  - routableSuffix: 정확히 일치하는 경로 (동적 세그먼트 없음)
-//  - routablePrefix: 이 문자열로 시작하는 경로 (동적 세그먼트 포함, 예: /broker/topics/:topic/...)
+//   - routableSuffix: 정확히 일치하는 경로 (동적 세그먼트 없음)
+//   - routablePrefix: 이 문자열로 시작하는 경로 (동적 세그먼트 포함, 예: /broker/topics/:topic/...)
 //
 // 두 목록 중 하나라도 맞으면 담당 노드로 넘긴다.
 var routableSuffix = map[string]bool{
@@ -58,17 +58,17 @@ var routableSuffix = map[string]bool{
 	// 구조 화면: 현재(또는 특정 버전) 스키마를 ERD로 본다. introspect를 통해 DB에 접속한다.
 	"/structure": true,
 	// 분산 스토리지(하둡·Ceph·S3). resolveStorage가 GetSecret을 써서 대상 DB에 접속한다.
-	"/storage":            true,
-	"/storage/browse":     true,
-	"/storage/apps":       true,
-	"/storage/pools":      true,
-	"/storage/osds":       true,
-	"/storage/buckets":    true,
-	"/storage/objects":    true,
+	"/storage":             true,
+	"/storage/browse":      true,
+	"/storage/apps":        true,
+	"/storage/pools":       true,
+	"/storage/osds":        true,
+	"/storage/buckets":     true,
+	"/storage/objects":     true,
 	"/storage/bucket-stat": true,
-	"/storage/mkdir":      true,
-	"/storage/rename":     true,
-	"/storage/delete":     true,
+	"/storage/mkdir":       true,
+	"/storage/rename":      true,
+	"/storage/delete":      true,
 	// 벡터 DB(Qdrant·Pinecone·pgvector). resolveVector가 GetSecret을 써서 대상 DB에 접속한다.
 	"/vector":         true,
 	"/vector/scroll":  true,
@@ -76,14 +76,14 @@ var routableSuffix = map[string]bool{
 	"/vector/search":  true,
 	"/vector/compare": true,
 	// 메시지 브로커(RabbitMQ·Kafka). resolveBroker가 GetSecret을 써서 대상 DB에 접속한다.
-	"/broker":               true,
-	"/broker/queues":        true,
-	"/broker/exchanges":     true,
-	"/broker/connections":   true,
-	"/broker/topics":        true,
-	"/broker/groups":        true,
-	"/broker/purge":         true,
-	"/broker/delete-queue":  true,
+	"/broker":                  true,
+	"/broker/queues":           true,
+	"/broker/exchanges":        true,
+	"/broker/connections":      true,
+	"/broker/topics":           true,
+	"/broker/groups":           true,
+	"/broker/purge":            true,
+	"/broker/delete-queue":     true,
 	"/broker/close-connection": true,
 	// 드리프트 감지: handleCheckDrift → monitor.CheckDriftByID → GetSecret → 실제 DB 접속.
 	"/drift/check": true,
