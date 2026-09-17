@@ -223,7 +223,7 @@ function capLabel(cap) {
 
 // ---------- 서버 등록/수정 ----------
 
-function openServerForm(existing, reload) {
+async function openServerForm(existing, reload) {
   const isEdit = Boolean(existing);
   const kinds = state.meta?.dbKinds ?? [];
 
