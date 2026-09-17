@@ -154,6 +154,41 @@ func (c *client) do(method, path string, body any) (int, map[string]any) {
 	return res.StatusCode, out
 }
 
+// doAsNode는 노드 사이 호출(공용 비밀)로 부른다.
+//
+// 사람의 세션 쿠키가 아니라 Authorization 헤더로 인증하는 경로를 시험하기 위한 것이다.
+// 쿠키를 실어 보내면 그 경로가 사람 인증을 요구하게 바뀌어도 시험이 통과해 버린다 —
+// 두 인증 방식이 서로를 가리지 않는다는 사실 자체가 확인해야 할 계약이다.
+func (c *client) doAsNode(method, path string, body any) (int, map[string]any) {
+	c.t.Helper()
+	var reader io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			c.t.Fatalf("marshal: %v", err)
+		}
+		reader = strings.NewReader(string(b))
+	}
+	req := httptest.NewRequest(method, path, reader)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("X-Requested-With", "dbstudio")
+	req.Header.Set("Authorization", "Bearer "+clusterSecret)
+
+	res, err := c.srv.App().Test(req, -1)
+	if err != nil {
+		c.t.Fatalf("%s %s: %v", method, path, err)
+	}
+	defer res.Body.Close()
+	raw, _ := io.ReadAll(res.Body)
+	out := map[string]any{}
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &out)
+	}
+	return res.StatusCode, out
+}
+
 // enrollTOTP는 HTTP로 2단계 인증을 등록하고 복구 코드를 돌려준다.
 func (c *client) enrollTOTP(t *testing.T, e *testEnv, userID string) []string {
 	t.Helper()

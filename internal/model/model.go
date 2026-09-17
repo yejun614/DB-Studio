@@ -261,6 +261,17 @@ type Server struct {
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
 
+	// NodeID는 이 서버에 접속할 클러스터 노드다(담당 노드).
+	//
+	// ── 왜 서버에 있는가 ────────────────────────────────────────────
+	// "이 DB가 어느 사설망 안에 있는가"는 host·port·options와 같은 급의 **접속 사실**이다.
+	// 그 셋은 서버에 있는데 담당 노드만 DB에 있으면, 같은 사실을 서버 아래 DB 개수만큼
+	// 반복 입력하게 된다. 하나만 빠뜨리면 그 DB만 조용히 실패한다.
+	//
+	// 소속 DB는 이 값을 **따른다**(store/connections.go의 connColumns가 COALESCE로 합친다).
+	// Connection.NodeID는 이제 이 값을 덮는 **예외**다 — 비어 있으면 서버를 따른다.
+	NodeID string `json:"nodeId,omitempty"`
+
 	// DatabaseCount는 목록 화면이 쓰는 조인 결과다.
 	DatabaseCount int `json:"databaseCount"`
 }
@@ -309,6 +320,15 @@ type Connection struct {
 
 	// NodeID는 이 DB에 접속할 클러스터 노드다. 비어 있으면 요청을 받은 노드가 직접
 	// 접속한다. 사설망 안에 있어 특정 서버에서만 닿는 DB를 위해 있다.
+	//
+	// ── 이 칸은 이제 예외다 ──────────────────────────────────────────
+	// 소속 서버에도 담당 노드가 있다(Server.NodeID). 이 DB가 서버와 다른 노드에서만
+	// 닿는 예외인 경우에만 여기에 값이 담기고, 비어 있으면 서버를 따른다.
+	//
+	// 그 판정은 store가 조회 시점에 한 번 한다(connections.go의 connColumns):
+	//   COALESCE(NULLIF(c.node_id,''), s.node_id, '')
+	// 그래서 이 값을 읽는 쪽(담당 노드 라우팅, 지표 묶음 키, 화면)은 서버가 생긴 것을
+	// 몰라도 된다 — 실효 담당 노드가 언제나 여기에 담겨 온다.
 	NodeID string `json:"nodeId,omitempty"`
 }
 

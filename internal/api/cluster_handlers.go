@@ -186,8 +186,18 @@ func (s *Server) handleClusterStatus(c *fiber.Ctx) error {
 		if err != nil {
 			return err
 		}
+		// 노드마다 질의하지 않고 한 번에 센다. 이 화면은 열릴 때마다 그려진다.
+		servers, err := s.st.ServersOnNodeAll(c.Context())
+		if err != nil {
+			return err
+		}
 		for _, n := range list {
-			nodes = append(nodes, newNodeView(n, status, s.cluster.NodeID()))
+			v := newNodeView(n, status, s.cluster.NodeID())
+			// 이 노드가 담당인 서버 수. 화면이 "이 노드를 내리면 무엇이 멈추는가"를
+			// 숫자로 말할 수 있어야 한다 — 담당 노드가 서버 등급이 되면서 노드 하나가
+			// 빠질 때 잃는 것이 DB 하나가 아니라 그 서버의 DB 전부가 되었다.
+			v.Servers = servers[n.ID]
+			nodes = append(nodes, v)
 		}
 	}
 	return c.JSON(fiber.Map{
@@ -209,6 +219,9 @@ type nodeView struct {
 	Lag   int64 `json:"lag"`
 	IsMe  bool  `json:"isMe"`
 	Stale bool  `json:"stale"`
+	// Servers는 이 노드가 담당인 서버 수다. 이 노드가 빠지면 그 서버들의 DB 전부가
+	// 접속하지 못한다 — 화면이 "무엇을 잃는가"를 숫자로 말하기 위해 싣는다.
+	Servers int `json:"servers"`
 }
 
 func newNodeView(n *store.ClusterNode, status cluster.Status, myID string) *nodeView {

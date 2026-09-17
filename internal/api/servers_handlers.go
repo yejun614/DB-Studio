@@ -1,10 +1,16 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
@@ -37,6 +43,32 @@ type serverRequest struct {
 	Username           string            `json:"username"`
 	Password           *string           `json:"password"`
 	Extra              map[string]string `json:"extra"`
+	// NodeID는 이 서버의 담당 노드다(클러스터). 비어 있으면 요청을 받은 노드가 접속한다.
+	NodeID string `json:"nodeId"`
+}
+
+// checkNode는 담당 노드로 쓸 수 있는 값인지 본다.
+//
+// ── 왜 여기서 막는가 ──────────────────────────────────────────────
+// 오타 하나가 조용한 실패가 되기 때문이다. 담당 노드는 지정해 놓고 틀리면 그 서버의
+// 요청이 전부 502로 떨어지는데, 화면에는 "담당 노드를 찾을 수 없습니다"만 뜨고
+// 어느 값이 틀렸는지는 안 나온다. 저장하는 자리에서 거절하면 그 사람은 즉시 안다.
+//
+// 빈 값은 통과시킨다 — "요청을 받은 노드가 접속한다"는 정상 상태다.
+// 클러스터가 아니면 아무것도 보지 않는다(단일 서버에서는 노드 목록 자체가 없다).
+func (s *Server) checkNode(c *fiber.Ctx, nodeID string) error {
+	nodeID = strings.TrimSpace(nodeID)
+	if nodeID == "" || s.cluster == nil || !s.cluster.Enabled() {
+		return nil
+	}
+	node, err := s.st.GetClusterNode(c.Context(), nodeID)
+	if err != nil {
+		return errors.New("그런 클러스터 노드가 없습니다. 클러스터 화면에서 노드 목록을 확인하세요")
+	}
+	if node.Status != "active" {
+		return errors.New("\"" + node.Name + "\" 는 목록에서 내려간 노드입니다")
+	}
+	return nil
 }
 
 func (r *serverRequest) toParams(actorID string) (store.SaveServerParams, dbx.Adapter, error) {
@@ -79,6 +111,8 @@ func (r *serverRequest) toParams(actorID string) (store.SaveServerParams, dbx.Ad
 		Enabled:  r.Enabled == nil || *r.Enabled,
 		Username: strings.TrimSpace(r.Username), Password: r.Password, Extra: r.Extra,
 		ActorID: actorID,
+		// 담당 노드는 서버의 접속 사실이다(host·port와 같은 급). 소속 DB는 이 값을 따른다.
+		NodeID: strings.TrimSpace(r.NodeID),
 	}
 	return p, adapter, nil
 }
@@ -210,6 +244,61 @@ func (s *Server) handleGetServer(c *fiber.Ctx) error {
 	return c.JSON(resp)
 }
 
+// handleServerNodeImpact는 담당 노드를 바꾸기 전에 무엇이 함께 움직이는지 알려준다.
+//
+// ── 왜 필요한가 ────────────────────────────────────────────────────
+// 담당 노드가 서버 등급이 되면서 이 설정 하나의 무게가 달라졌다. 전에는 DB마다 따로
+// 지정했으니 "이 DB 하나의 경로"가 바뀌었지만, 이제는 **그 서버의 DB 전부**가 바뀐다.
+// 확인 창에 숫자가 없으면 사람은 예전 감각으로 저장을 누른다.
+//
+// 자기 담당 노드를 따로 지정한(예외) DB는 따라가지 않는다는 사실도 함께 알린다 —
+// 그 줄이 없으면 "다 바뀐다"로 읽혀서 예외를 지정해 둔 사람이 자기 설정을 의심한다.
+func (s *Server) handleServerNodeImpact(c *fiber.Ctx) error {
+	srv, err := s.requireServer(c, c.Params("id"))
+	if err != nil {
+		return err
+	}
+	want := strings.TrimSpace(c.Query("nodeId"))
+	ch, err := s.st.DescribeServerNodeChange(c.Context(), srv.ID)
+	if err != nil {
+		return err
+	}
+
+	moving := ch.Databases - ch.Overridden
+	message := ""
+	if want == srv.NodeID {
+		// 바뀌지 않는다. "0개가 바뀝니다"보다 "그대로입니다"가 맞다.
+		message = "담당 노드가 그대로입니다."
+	} else if ch.Databases == 0 {
+		message = "이 서버에는 아직 DB가 없습니다. 앞으로 추가하는 DB가 이 담당 노드를 따릅니다."
+	} else {
+		message = fmt.Sprintf("DB %d개가 담당 노드를 따라갑니다", moving)
+		if ch.Overridden > 0 {
+			message += fmt.Sprintf(" (담당 노드를 따로 지정한 %d개는 그대로)", ch.Overridden)
+		}
+	}
+
+	// 그 노드에 실제로 닿는지 미리 본다. 저장한 뒤에 알면 담당 노드를 잘못 골랐을 때
+	// 그 서버의 요청이 전부 502로 떨어지는 것을 사람이 나중에 발견한다.
+	reach := fiber.Map{}
+	if want != "" && want != srv.NodeID && s.cluster != nil && s.cluster.Enabled() {
+		if node, nerr := s.st.GetClusterNode(c.Context(), want); nerr == nil {
+			probe := *srv
+			probe.NodeID = want
+			if _, lerr := s.serverDatabases(c, &probe); lerr != nil {
+				reach = fiber.Map{"ok": false, "node": node.Name, "message": lerr.Error()}
+			} else {
+				reach = fiber.Map{"ok": true, "node": node.Name}
+			}
+		}
+	}
+	return c.JSON(fiber.Map{
+		"databases": ch.Databases, "overridden": ch.Overridden,
+		"moving": moving, "message": message,
+		"reach": reach,
+	})
+}
+
 func (s *Server) handleCreateServer(c *fiber.Ctx) error {
 	var req serverRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -232,6 +321,9 @@ func (s *Server) handleCreateServer(c *fiber.Ctx) error {
 	// 서버는 목록에 뜨지 않으므로 만든 사람조차 찾지 못한다.
 	if _, perr := s.requireProject(c, params.ProjectID); perr != nil {
 		return perr
+	}
+	if err := s.checkNode(c, params.NodeID); err != nil {
+		return fail(c, fiber.StatusBadRequest, "invalid_node", err.Error())
 	}
 	// 대상 DB 없이도 접속 정보 자체는 검증할 수 있어야 한다.
 	// 종류별 부트스트랩 DB를 넣어 형식만 본다.
@@ -277,6 +369,9 @@ func (s *Server) handleUpdateServer(c *fiber.Ctx) error {
 	// 프로젝트는 옮기지 않는다. 옮기면 그 서버의 DB 전부가 함께 옮겨지고, 원래
 	// 프로젝트의 사람들이 그것을 소리 없이 잃는다.
 	params.ProjectID = before.ProjectID
+	if err := s.checkNode(c, params.NodeID); err != nil {
+		return fail(c, fiber.StatusBadRequest, "invalid_node", err.Error())
+	}
 	// 수정에서는 이미 등록된 DB 하나를 빌려 검증한다.
 	// Oracle·SQLite처럼 대상이 곧 접속 정보의 일부인 종류는 그래야 형식을 볼 수 있다.
 	probeDB := dbx.BootstrapDatabase(params.Kind)
@@ -343,6 +438,128 @@ func (s *Server) handleDeleteServer(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"ok": true})
 }
 
+// knownDatabases는 담당 노드가 보는 DB 이름 집합이다.
+//
+// 두 번째 반환값(checked)은 "확인했다"는 뜻이다. 확인하지 못한 경우(담당 노드에 닿지
+// 못했거나 그 종류가 목록을 못 읽는다)와 "확인했는데 비어 있다"는 전혀 다르다 — 앞은
+// 모르는 것이고 뒤는 아무것도 없는 것이다. 부르는 쪽이 그 둘을 구분해야 막을지 말지를
+// 정할 수 있다.
+func (s *Server) knownDatabases(c *fiber.Ctx, srv *model.Server) (map[string]bool, bool) {
+	list, err := s.serverDatabases(c, srv)
+	if err != nil {
+		return nil, false
+	}
+	out := make(map[string]bool, len(list))
+	for _, d := range list {
+		out[d.Name] = true
+	}
+	return out, true
+}
+
+// nodeLabel은 오류 문구에 넣을 노드 이름을 만든다. 담당이 없으면 그 사실을 적는다.
+func nodeLabel(srv *model.Server) string {
+	if srv.NodeID == "" {
+		return "(담당 없음: 요청을 받은 노드)"
+	}
+	return srv.NodeID
+}
+
+// serverDatabases는 그 서버의 DB 목록을 **닿는 노드에게 물어** 가져온다.
+//
+// ── 왜 여기서 갈라지지 않고 물어보는가 ──────────────────────────────
+// 마스터가 그 서버에 닿지 못하면 목록을 읽을 방법이 없다. 담당 노드를 지정해 두었는데도
+// "DB 목록 불러오기"와 "DB 추가"가 실패하던 자리가 정확히 여기였다 — 라우팅은
+// /connections/:id/* 만 보고 있었기 때문이다.
+//
+// 자격증명은 넘기지 않는다. 담당 노드는 어차피 자기 메타 DB(복제본)에 그 값을 갖고 있고,
+// 클러스터 비밀로 자격증명까지 오가게 하면 그 비밀 하나가 새는 순간 클러스터 전체의
+// DB 비밀번호가 함께 샌다.
+//
+// 담당 노드가 없거나 내가 담당이면 그냥 여기서 읽는다.
+func (s *Server) serverDatabases(c *fiber.Ctx, srv *model.Server) ([]dbx.DatabaseInfo, error) {
+	if s.cluster == nil || !s.cluster.Enabled() || srv.NodeID == "" || srv.NodeID == s.cluster.NodeID() {
+		return s.listDatabasesHere(c, srv)
+	}
+
+	node, err := s.st.GetClusterNode(c.Context(), srv.NodeID)
+	if err != nil {
+		return nil, fiber.NewError(fiber.StatusBadGateway,
+			"이 서버의 담당 노드를 찾을 수 없습니다. 서버 설정에서 담당 노드를 다시 고르세요")
+	}
+	if node.Status != "active" || strings.TrimSpace(node.Address) == "" {
+		return nil, fiber.NewError(fiber.StatusBadGateway,
+			"담당 노드 \""+node.Name+"\" 의 주소를 알 수 없어 요청을 넘길 수 없습니다")
+	}
+
+	body, err := json.Marshal(nodeServerDatabasesRequest{ServerID: srv.ID})
+	if err != nil {
+		return nil, err
+	}
+	target := strings.TrimRight(node.Address, "/") + "/api/v1/node/server-databases"
+	req, err := http.NewRequestWithContext(c.Context(), fiber.MethodPost, target, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set(fiber.HeaderContentType, fiber.MIMEApplicationJSON)
+	// 노드 사이 인증은 공용 비밀이다(requireClusterSecret).
+	if s.cluster != nil {
+		req.Header.Set(fiber.HeaderAuthorization, "Bearer "+s.cluster.Config().Secret)
+	}
+	client := &http.Client{Timeout: nodeRouteTimeout}
+	res, err := client.Do(req)
+	if err != nil {
+		slog.Warn("담당 노드에서 DB 목록을 읽지 못했습니다",
+			"node", node.Name, "server", srv.Name, "err", err)
+		return nil, fiber.NewError(fiber.StatusBadGateway,
+			"담당 노드 \""+node.Name+"\" 에 닿지 못했습니다")
+	}
+	defer res.Body.Close()
+	raw, err := io.ReadAll(res.Body)
+	if err != nil {
+		return nil, fiber.NewError(fiber.StatusBadGateway, "담당 노드의 응답을 읽지 못했습니다")
+	}
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		// 노드가 준 이유를 그대로 보여준다. "실패했습니다"만 남기면 그 사람은
+		// 담당 노드가 살아 있는지, 권한이 없는지, DB가 죽었는지 알 수 없다.
+		var failure struct {
+			Message string `json:"message"`
+		}
+		_ = json.Unmarshal(raw, &failure)
+		msg := strings.TrimSpace(failure.Message)
+		if msg == "" {
+			msg = "담당 노드 \"" + node.Name + "\" 가 " + strconv.Itoa(res.StatusCode) + " 로 답했습니다"
+		}
+		return nil, fiber.NewError(fiber.StatusBadGateway, msg)
+	}
+	var out struct {
+		Databases []dbx.DatabaseInfo `json:"databases"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fiber.NewError(fiber.StatusBadGateway, "담당 노드의 응답을 이해하지 못했습니다")
+	}
+	return out.Databases, nil
+}
+
+// listDatabasesHere는 이 프로세스에서 직접 목록을 읽는다.
+func (s *Server) listDatabasesHere(c *fiber.Ctx, srv *model.Server) ([]dbx.DatabaseInfo, error) {
+	sec, err := s.st.GetServerSecret(c.Context(), srv.ID)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(c.Context(), connTestTimeout)
+	defer cancel()
+
+	list, err := dbx.ListDatabases(ctx, srv, sec)
+	if err != nil {
+		if errors.Is(err, dbx.ErrNotImplemented) {
+			return nil, fiber.NewError(fiber.StatusBadRequest, err.Error())
+		}
+		return nil, fiber.NewError(fiber.StatusBadGateway, "DB 목록을 읽지 못했습니다: "+err.Error())
+	}
+	dbx.SortDatabases(list)
+	return list, nil
+}
+
 // handleListServerDatabases는 서버에 실제로 붙어 DB 목록을 읽어온다.
 //
 // 이미 등록된 것은 registered로 표시해 내려보낸다 — 목록에서 빼면 "왜 안 보이지"가 되고,
@@ -352,21 +569,10 @@ func (s *Server) handleListServerDatabases(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	sec, err := s.st.GetServerSecret(c.Context(), srv.ID)
+
+	list, err := s.serverDatabases(c, srv)
 	if err != nil {
 		return err
-	}
-
-	ctx, cancel := context.WithTimeout(c.Context(), connTestTimeout)
-	defer cancel()
-
-	list, err := dbx.ListDatabases(ctx, srv, sec)
-	if err != nil {
-		if errors.Is(err, dbx.ErrNotImplemented) {
-			return failDetail(c, fiber.StatusBadRequest, "not_supported", err.Error(), string(srv.Kind))
-		}
-		return failDetail(c, fiber.StatusBadGateway, "list_failed",
-			"DB 목록을 읽지 못했습니다: "+err.Error(), string(srv.Kind))
 	}
 
 	existing, err := s.st.ListConnectionsByServer(c.Context(), srv.ID)
@@ -380,7 +586,6 @@ func (s *Server) handleListServerDatabases(c *fiber.Ctx) error {
 	for i := range list {
 		list[i].Registered = registered[list[i].Name]
 	}
-	dbx.SortDatabases(list)
 	return c.JSON(fiber.Map{"databases": list})
 }
 
@@ -429,6 +634,34 @@ func (s *Server) handleAddServerDatabases(c *fiber.Ctx) error {
 		prefix = srv.Name
 	}
 	actor := currentUser(c)
+
+	// 고른 이름들이 그 서버에 **실제로 있는지** 담당 노드에게 확인한다.
+	//
+	// ── 왜 확인하는가 ───────────────────────────────────────────────
+	// 이름은 사람이 손으로도 넣을 수 있고(목록을 못 읽는 종류), 담당 노드를 나중에
+	// 바꿨거나 그 노드가 다른 곳을 보고 있을 수도 있다. 확인 없이 행을 만들면 목록에는
+	// 줄이 생기는데 접속은 영원히 실패하는 커넥션이 남는다 — 그 줄은 지표도 없고
+	// 사람은 왜 안 되는지 모른다.
+	//
+	// 확인할 수 없으면(담당 노드가 죽었거나 목록을 못 읽는 종류) **막지 않는다.**
+	// 이름 직접 입력은 원래 지원하는 길이고, 여기서 막으면 그 길이 사라진다.
+	// 접속 테스트 버튼이 그 자리를 채운다.
+	known, checked := s.knownDatabases(c, srv)
+	if checked {
+		var missing []string
+		for _, raw := range req.Databases {
+			name := strings.TrimSpace(raw)
+			if name != "" && !known[name] {
+				missing = append(missing, name)
+			}
+		}
+		if len(missing) > 0 {
+			return failDetail(c, fiber.StatusBadRequest, "unknown_database",
+				"그 서버에서 찾을 수 없는 DB입니다: "+strings.Join(missing, ", ")+
+					". 담당 노드 \""+nodeLabel(srv)+"\" 에서 본 목록에 없습니다",
+				strings.Join(missing, ","))
+		}
+	}
 
 	created := []*model.Connection{}
 	failed := []fiber.Map{}

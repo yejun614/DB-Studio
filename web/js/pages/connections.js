@@ -110,6 +110,10 @@ function serverCard(item, canManage, reload) {
       h('div.server-addr', {},
         srv.kind === 'sqlite' ? '파일 기반' : `${srv.host}:${srv.port}`,
         srv.username ? ` · ${srv.username}` : '',
+        // 담당 노드가 있으면 주소 옆에 붙인다. 이 서버의 DB들이 어디서 실행되는지가
+        // 목록에서 바로 보여야 한다 — 안 보이면 "왜 이 DB만 안 되지"를 서버 설정까지
+        // 올라가서야 알게 된다.
+        srv.nodeId ? ` · 담당 ${nodeName(srv.nodeId)}` : '',
       ),
       serverStatus(dbs),
       h('div.server-actions', {},
@@ -187,6 +191,11 @@ function dbRow(item, srv, canManage, reload) {
         h('code', {}, c.databaseName || '—'),
         ' · ',
         item.accessible ? levelBadge(item.level) : badge('접근 불가', 'neutral'),
+        // 서버와 다른 노드를 쓰는 DB에만 붙인다. 서버를 따르는 DB에까지 붙이면
+        // 모든 줄에 배지가 생겨 아무것도 구분해 주지 못한다.
+        c.nodeId && c.nodeId !== srv.nodeId
+          ? badge(`담당 ${nodeName(c.nodeId)} (예외)`, 'warn')
+          : null,
         (item.caps ?? []).length
           ? h('span.db-caps', {}, (item.caps).map((cap) => badge(capLabel(cap), 'accent')))
           : null,
@@ -240,6 +249,49 @@ function openServerForm(existing, reload) {
   // 첫 DB는 서버를 만들 때 함께 등록한다. 서버만 있고 DB가 없는 상태는
   // 화면에서 아무것도 할 수 없는 껍데기이기 때문이다.
   const firstDB = input({ placeholder: 'appdb' });
+
+  // 담당 노드.
+  //
+  // ── 왜 서버에 있는가 ────────────────────────────────────────────
+  // "이 DB가 어느 사설망 안에 있는가"는 호스트·포트와 같은 급의 접속 사실이다. 그
+  // 값이 DB마다 따로 있으면 서버 하나에 DB 다섯 개일 때 다섯 번 입력해야 하고,
+  // 하나만 빠뜨리면 그 DB만 조용히 실패한다.
+  //
+  // 여기서 고른 값은 소속 DB가 **따라간다.** DB 수정 화면에 "서버를 따름"이 기본으로
+  // 있고, 거기서 따로 고른 DB만 예외가 된다.
+  const nodes = await clusterNodes();
+  const nodeSelect = nodes.length
+    ? select([{ value: '', label: '(요청을 받은 노드에서 접속)' },
+      ...nodes.map((n) => ({ value: n.id, label: `${n.name}${n.role === 'master' ? ' (마스터)' : ''}` }))],
+    { value: existing?.nodeId ?? '' })
+    : null;
+  const nodeImpact = h('p.field-help');
+
+  // 담당 노드를 바꾸면 무엇이 함께 움직이는지 미리 보여준다.
+  //
+  // ── 왜 물어보는가 ───────────────────────────────────────────────
+  // 이 설정 하나로 **그 서버의 DB 전부**의 접속 경로가 바뀐다. 숫자 없이 저장하면
+  // 사람은 예전 감각(DB 하나 바꾸는 일)으로 누른다. 그리고 그 노드에 실제로 닿는지도
+  // 여기서 확인한다 — 저장한 뒤에 알면 그 서버의 요청이 전부 502로 떨어진 것을
+  // 한참 뒤에 발견한다.
+  const refreshImpact = async () => {
+    if (!isEdit || !nodeSelect) return;
+    const want = nodeSelect.value;
+    try {
+      const res = await api.get(`/servers/${encodeURIComponent(existing.id)}/node-impact`
+        + `?nodeId=${encodeURIComponent(want)}`);
+      const parts = [res.message];
+      if (res.reach?.ok === true) parts.push(`· "${res.reach.node}" 에서 접속 확인됨`);
+      if (res.reach?.ok === false) parts.push(`· "${res.reach.node}" 에서 접속 실패: ${res.reach.message}`);
+      mount(nodeImpact, parts.filter(Boolean).join(' '));
+    } catch {
+      // 미리보기를 못 받아도 저장은 되어야 한다. 여기서 막으면 확인 창이
+      // 없어진 것이 아니라 저장 자체가 막힌 것이 된다.
+      mount(nodeImpact, '');
+    }
+  };
+  if (nodeSelect) nodeSelect.addEventListener('change', refreshImpact);
+  if (isEdit) setTimeout(refreshImpact, 0);
 
   const hostField = field('호스트', host);
   const portField = field('포트', port, '비워두면 기본 포트를 사용합니다');
@@ -295,6 +347,9 @@ function openServerForm(existing, reload) {
       note: note.value.trim(),
       enabled: enabled.querySelector('input').checked,
       username: username.value.trim(),
+      // 담당 노드는 서버의 접속 사실이다. 소속 DB가 이 값을 따른다.
+      // 고르개가 없으면(단일 서버) 보내지 않는다 — 빈 값으로 덮으면 안 된다.
+      nodeId: nodeSelect ? nodeSelect.value : (existing?.nodeId ?? ''),
     };
     if (password.value || !isEdit) payload.password = password.value;
     return payload;
@@ -313,8 +368,12 @@ function openServerForm(existing, reload) {
         isEdit ? { ...body, serverId: existing.id } : body);
       mount(testResult, res.ok
         ? h('span.ok-text', {}, icon('check'),
-            `연결 성공 — ${res.server?.version ?? ''} (${res.server?.latencyMs?.toFixed(1) ?? '?'}ms)`)
-        : h('span.err-text', {}, icon('alert'), res.message));
+            `연결 성공 — ${res.server?.version ?? ''} (${res.server?.latencyMs?.toFixed(1) ?? '?'}ms)`
+            // 담당 노드가 시험한 경우 그 사실을 적는다. "테스트는 되는데 등록하니 안 된다"를
+            // 겪은 사람이 가장 먼저 확인해야 하는 것이 어느 노드가 시험했는가다.
+            + (res.testedBy ? ` · ${res.testedBy} 에서 확인` : ''))
+        : h('span.err-text', {}, icon('alert'), res.message
+            + (res.testedBy ? ` (${res.testedBy} 에서 확인)` : '')));
     } catch (err) {
       mount(testResult, h('span.err-text', {}, icon('alert'), err.message));
     } finally {
@@ -364,6 +423,12 @@ function openServerForm(existing, reload) {
       h('div.form-grid', {}, hostField, portField),
       isEdit ? null : firstDBField,
       h('div.form-grid', {}, field('계정', username), field('비밀번호', password)),
+      nodeSelect
+        ? field('담당 노드', nodeSelect,
+          '이 서버에 접속할 노드입니다. 사설망 안에 있어 특정 서버에서만 닿는 DB에 지정하세요. '
+          + '이 서버의 DB들이 이 값을 따릅니다 — DB 하나만 다르면 DB 수정에서 따로 고르세요.')
+        : null,
+      nodeSelect ? nodeImpact : null,
       optionInputs.size
         ? h('details.form-section', { open: true }, h('summary', {}, '접속 옵션'), optionsBox)
         : optionsBox,
@@ -402,6 +467,10 @@ function openAddDatabases(item, reload) {
 
   async function load() {
     loadBtn.disabled = true;
+    // 어느 노드가 읽는지 버튼 옆에 적는다. 담당 노드가 있는 서버는 **그 노드가**
+    // 접속해 목록을 읽는다 — 마스터가 닿지 못하는 사설망 DB에서 이 한 줄이
+    // "왜 이건 되지"의 답이 된다.
+    if (srv.nodeId) loadBtn.title = `담당 노드 "${nodeName(srv.nodeId)}" 에서 읽습니다`;
     mount(listBox, spinner('서버에서 DB 목록을 읽는 중…'));
     try {
       const res = await api.get(`/servers/${srv.id}/databases`);
@@ -578,12 +647,46 @@ async function openConnForm(existing, srv, reload) {
   const name = input({ value: existing.name });
   // 담당 노드 고르개는 클러스터일 때만 나타난다. 단일 서버에서는 물어볼 것이 없고,
   // 빈 고르개 하나가 "내가 뭔가 설정해야 하나"라는 질문을 만든다.
+  //
+  // ── 기본값은 "서버를 따름"이다 ──────────────────────────────────
+  // 담당 노드는 서버의 접속 사실이고, 이 DB에 담긴 값은 그것을 덮는 **예외**다.
+  // 그래서 (1) 서버를 따르는 것이 기본이고 (2) 예외인 DB는 그 사실이 드러나야 한다 —
+  // 드러나지 않으면 서버의 담당 노드를 바꿔도 안 따라가는 이유를 아무도 모른다.
   const nodes = await clusterNodes();
-  const nodeSelect = nodes.length
-    ? select([{ value: '', label: '(요청을 받은 노드에서 접속)' },
-      ...nodes.map((n) => ({ value: n.id, label: `${n.name}${n.role === 'master' ? ' (마스터)' : ''}` }))],
-    { value: existing.nodeId ?? '' })
-    : null;
+  const inherited = srv.nodeId ?? '';
+  const inheritedName = nodes.find((n) => n.id === inherited)?.name ?? inherited;
+  const nodeOptions = [{ value: '', label: '(요청을 받은 노드에서 접속)' }];
+  if (inherited) {
+    nodeOptions.unshift({ value: inherited, label: `(서버를 따름) ${inheritedName}` });
+  }
+  nodeOptions.push({ value: '__other__', label: '다른 노드를 직접 지정…' });
+  nodeOptions.push(...nodes
+    .filter((n) => n.id !== inherited)
+    .map((n) => ({ value: n.id, label: `${n.name}${n.role === 'master' ? ' (마스터)' : ''}` })));
+
+  // 저장된 값이 서버 값과 같으면 "서버를 따름"으로 보여준다. DB에 값이 남아 있어도
+  // 실효 담당 노드는 같으므로, 여기서 구분해 보여주면 같은 결과가 두 가지로 보인다.
+  const stored = existing.nodeId ?? '';
+  const nodeValue = stored === inherited ? inherited : stored;
+  const nodeSelect = nodes.length ? select(nodeOptions, { value: nodeValue }) : null;
+  const nodeNote = h('p.field-help');
+  const syncNodeNote = () => {
+    if (!nodeSelect) return;
+    if (nodeSelect.value === inherited) {
+      mount(nodeNote, srv.nodeId
+        ? '' // 서버를 따르고 있고 서버에 값이 있으면 설명할 것이 없다
+        : '이 서버에는 담당 노드가 없습니다. 서버 수정에서 지정하면 이 DB가 따라갑니다.');
+      return;
+    }
+    if (nodeSelect.value === '') {
+      mount(nodeNote, '서버를 따르지 않고 요청을 받은 노드가 접속합니다.'
+        + (inherited ? ` (서버는 "${inheritedName}" 로 지정되어 있습니다)` : ''));
+      return;
+    }
+    mount(nodeNote, '서버와 다른 노드를 이 DB만 따로 씁니다(예외).');
+  };
+  if (nodeSelect) nodeSelect.addEventListener('change', syncNodeNote);
+  syncNodeNote();
   const environment = select(
     [{ value: 'dev', label: '개발' }, { value: 'prod', label: '운영' }],
     { value: existing.environment },
@@ -595,6 +698,17 @@ async function openConnForm(existing, srv, reload) {
 
   const submit = async (close) => {
     try {
+      // 고르개가 '__other__'(다른 노드를 직접 지정…)에 머물러 있으면 저장하지 않는다.
+      // 그 값은 목록을 펼치는 자리일 뿐 실제 노드가 아니다 — 그대로 보내면 서버가
+      // "그런 노드가 없다"로 거절하고, 사람은 목록에서 고르라는 말을 듣지 못한다.
+      let picked = nodeSelect ? nodeSelect.value : (existing.nodeId ?? '');
+      if (picked === '__other__') {
+        toast('담당 노드를 목록에서 고르세요', 'error');
+        return;
+      }
+      // 서버를 따르는 경우에는 **빈 값을 보낸다.** 저장된 값을 그대로 되돌려 보내면
+      // 그 DB가 예외로 굳어 버리고, 나중에 서버의 담당 노드를 바꿔도 따라가지 않는다.
+      if (picked === inherited) picked = '';
       await api.put(`/connections/${existing.id}`, {
         name: name.value.trim(),
         environment: environment.value,
@@ -602,7 +716,7 @@ async function openConnForm(existing, srv, reload) {
         tags: tags.value.split(',').map((t) => t.trim()).filter(Boolean),
         note: note.value.trim(),
         enabled: enabled.querySelector('input').checked,
-        nodeId: nodeSelect ? nodeSelect.value : (existing.nodeId ?? ''),
+        nodeId: picked,
         // 접속 정보는 서버의 것이다. 여기서 보내지 않으면 서버는 손대지 않는다.
       });
       toast('DB를 수정했습니다', 'success');
@@ -636,6 +750,7 @@ async function openConnForm(existing, srv, reload) {
           + '조회·질의·데이터 수정·SQL 실행이 그 노드에서 실행됩니다. '
           + '지표 수집과 백업·마이그레이션은 마스터가 하므로 마스터도 그 DB에 닿아야 합니다.')
         : null,
+      nodeSelect ? nodeNote : null,
       field('메모', note),
     ],
     footer: (close) => [
@@ -759,15 +874,40 @@ async function deleteServer(srv, dbs, reload) {
 }
 
 
+// nodeName은 노드 ID를 화면에 보일 이름으로 바꾼다.
+//
+// 캐시에 없으면 ID를 그대로 보여준다. 이름을 못 찾았다고 빈 칸을 남기면 "담당이
+// 없다"로 읽히는데, 담당이 있는 것과 이름을 모르는 것은 전혀 다르다.
+function nodeName(id) {
+  if (!id) return '';
+  return nodeCache.nodes.find((n) => n.id === id)?.name ?? id;
+}
+
 // clusterNodes는 담당 노드로 고를 수 있는 노드 목록이다.
 //
+// ── 왜 캐시하는가 ──────────────────────────────────────────────────
+// 이 함수는 서버 수정 창과 DB 수정 창이 열릴 때마다, 그리고 목록의 DB 줄마다 불린다.
+// 담당 노드가 서버 등급이 되면서 부르는 자리가 크게 늘었는데, 노드 목록은 몇 분에
+// 한 번 바뀌는 값이다 — 창 하나 열 때마다 클러스터 API를 부르면 그만큼 화면이 늦게 뜬다.
+//
+// 캐시가 틀렸을 때의 결과는 "새로 뜬 노드가 목록에 없다"이지, 잘못된 저장이 아니다
+// (저장 시 서버가 노드 존재를 다시 본다). 그래서 짧게(30초)만 들고 있는다.
+let nodeCache = { at: 0, nodes: [] };
+const NODE_CACHE_MS = 30_000;
+
 // 실패를 삼키는 이유: 클러스터가 아니거나 이 사람에게 클러스터 조회 권한이 없으면
 // 목록이 없을 뿐이고, 그 경우 DB 수정은 지금까지처럼 동작해야 한다.
 async function clusterNodes() {
+  if (Date.now() - nodeCache.at < NODE_CACHE_MS) return nodeCache.nodes;
   try {
     const res = await api.get('/cluster/');
-    if (!res?.status?.enabled) return [];
-    return (res.nodes ?? []).filter((n) => n.status === 'active');
+    if (!res?.status?.enabled) {
+      nodeCache = { at: Date.now(), nodes: [] };
+      return [];
+    }
+    const nodes = (res.nodes ?? []).filter((n) => n.status === 'active');
+    nodeCache = { at: Date.now(), nodes };
+    return nodes;
   } catch {
     return [];
   }

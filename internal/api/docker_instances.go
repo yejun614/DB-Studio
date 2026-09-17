@@ -303,6 +303,17 @@ func (s *Server) registerInstanceWith(instanceID, actorID string,
 		Tags: []string{"docker"}, Note: note, Enabled: true,
 		Username: recipe.AdminAccount(in.Values), Password: &pw,
 		ActorID: actorID,
+		// 담당 노드를 만든 노드로 적는다.
+		//
+		// ── 왜 반드시 필요한가 ───────────────────────────────────────
+		// connectTarget이 정하는 주소는 **그 프로세스에서만** 유효하다 —
+		// 호스트에서 돌면 127.0.0.1:<도커가 고른 포트>, 컨테이너 안이면
+		// <컨테이너 이름>:<안쪽 포트>. 둘 다 그 노드 밖에서는 아무것도 가리키지 않는다.
+		//
+		// 비워 두면 다른 노드에서 그 DB를 열 때 "connection refused"만 뜨고, 원인이
+		// 화면 어디에도 없다(주소는 멀쩡해 보인다). 그리고 서버 등급 담당 노드가
+		// 생기면서 이 값은 그 DB 하나가 아니라 **그 서버의 전부**에 걸린다.
+		NodeID: s.clusterNodeID(),
 	}
 	cp := store.SaveConnectionParams{
 		ProjectID: in.ProjectID, Name: in.Name, Environment: env,
@@ -383,6 +394,18 @@ func connectTarget(in *store.DBInstance, inContainer bool) (host string, port in
 				" 네트워크에 붙어 있는지 확인하세요"
 	}
 	return "127.0.0.1", in.HostPort, "DB Studio 가 도커로 만든 DB 입니다"
+}
+
+// clusterNodeID는 이 프로세스의 클러스터 노드 ID다. 단일 서버면 빈 문자열이다.
+//
+// ── 빈 값이 정답인 경우 ────────────────────────────────────────────
+// 단일 서버에서는 담당 노드라는 개념 자체가 없다(노드 목록이 없다). ""로 두면
+// "요청을 받은 노드가 직접 접속"이 되고, 그것이 단일 서버의 유일한 답이다.
+func (s *Server) clusterNodeID() string {
+	if s.cluster == nil || !s.cluster.Enabled() {
+		return ""
+	}
+	return s.cluster.NodeID()
 }
 
 // inContainer는 이 프로세스가 컨테이너 안인지 본다.

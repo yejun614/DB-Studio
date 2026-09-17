@@ -17,11 +17,25 @@ import (
 // 여기서는 조인으로 채운다 — 이 구조체를 쓰는 쪽(권한·지표·ERD·마이그레이션·백업)은
 // 서버가 생긴 것을 몰라도 된다.
 
+// 노드(담당 노드) 칸은 **실효값**을 준다.
+//
+// ── 왜 조인에서 합치는가 ────────────────────────────────────────────
+// 담당 노드는 서버에 있는 사실이고(host·port와 같은 급이다), connections.node_id는
+// 그것을 덮는 예외다. 그 우선순위를 읽는 쪽마다 다시 적으면 반드시 한 곳이 빠진다 —
+// 라우팅은 서버 값을 보고 지표 수집은 DB 값을 보는 식으로 갈라지고, 증상은 "어떤
+// 화면에서만 안 된다"로 나타난다. 그래서 조회 한 곳에서만 합친다.
+//
+// COALESCE(NULLIF(c.node_id,''), s.node_id, '') 의 뜻:
+//   DB에 값이 있으면 그 값 → 없으면 서버 값 → 둘 다 없으면 ''(요청을 받은 노드가 접속)
+//
+// 이 덕분에 이 값을 읽는 쪽(clusterRoute, 지표 묶음 키, 화면)은 서버가 생긴 것을
+// 몰라도 된다 — model.Connection만 보면 된다.
 const connColumns = `c.id, c.name, s.kind, c.environment, s.host, s.port, c.database_name,
 	s.options, c.tags, c.note, c.enabled, s.enabled,
 	c.last_check_at, c.last_check_ok, c.last_check_msg,
 	c.created_by, c.created_at, c.updated_at, COALESCE(sec.username, ''),
-	c.server_id, s.name, c.node_id, c.project_id, COALESCE(pj.name, '')`
+	c.server_id, s.name, COALESCE(NULLIF(c.node_id, ''), s.node_id, ''),
+	c.project_id, COALESCE(pj.name, '')`
 
 const connFrom = ` FROM connections c
 	JOIN servers s ON s.id = c.server_id

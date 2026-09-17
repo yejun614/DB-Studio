@@ -23,7 +23,8 @@ const serverColumns = `s.id, s.project_id, COALESCE(pj.name, ''),
 	s.default_environment, s.tags, s.note, s.enabled,
 	s.created_by, s.created_at, s.updated_at,
 	COALESCE(sec.username, ''),
-	(SELECT COUNT(*) FROM connections c WHERE c.server_id = s.id)`
+	(SELECT COUNT(*) FROM connections c WHERE c.server_id = s.id),
+	s.node_id`
 
 const serverFrom = ` FROM servers s
 	LEFT JOIN server_secrets sec ON sec.server_id = s.id
@@ -37,7 +38,8 @@ func scanServer(row interface{ Scan(...any) error }) (*model.Server, error) {
 	if err := row.Scan(&v.ID, &v.ProjectID, &v.ProjectName,
 		&v.Name, &v.Kind, &v.Host, &v.Port, &options,
 		&v.DefaultEnvironment, &tags, &v.Note, &enabled,
-		&createdBy, &createdAt, &updatedAt, &v.Username, &v.DatabaseCount); err != nil {
+		&createdBy, &createdAt, &updatedAt, &v.Username, &v.DatabaseCount,
+		&v.NodeID); err != nil {
 		return nil, err
 	}
 	v.Options = model.UnmarshalOptions(options)
@@ -67,6 +69,10 @@ type SaveServerParams struct {
 	Password           *string
 	Extra              map[string]string
 	ActorID            string
+
+	// NodeID는 이 서버의 담당 노드다(클러스터). 비어 있으면 요청을 받은 노드가 직접
+	// 접속한다. 소속 DB는 이 값을 따르고, DB에 값이 있으면 그쪽이 우선한다.
+	NodeID string
 }
 
 func (s *Store) CreateServer(ctx context.Context, p SaveServerParams) (*model.Server, error) {
@@ -104,11 +110,11 @@ func (s *Store) CreateServer(ctx context.Context, p SaveServerParams) (*model.Se
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO servers
 		(id, project_id, name, name_lower, kind, host, port, options, default_environment,
-		 tags, note, enabled, created_by, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 tags, note, enabled, created_by, created_at, updated_at, node_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, p.ProjectID, p.Name, strings.ToLower(p.Name), string(p.Kind), p.Host, p.Port, optJSON,
 		string(p.DefaultEnvironment), model.TagsToString(p.Tags), p.Note,
-		boolInt(p.Enabled), createdBy, now, now); err != nil {
+		boolInt(p.Enabled), createdBy, now, now, p.NodeID); err != nil {
 		if isUniqueViolation(err) {
 			return nil, ErrDuplicateName
 		}
@@ -151,6 +157,100 @@ func (s *Store) SetServerAddress(ctx context.Context, id, host string, port int)
 	return nil
 }
 
+// SetServerNode는 서버의 담당 노드만 바꾼다.
+//
+// SetServerAddress와 같은 이유로 UpdateServer를 쓰지 않는다: 그쪽은 이름·종류·태그·
+// 자격증명까지 함께 덮어쓴다. 담당 노드 하나를 고치려고 나머지를 읽어 되돌려 쓰면,
+// 그 사이에 사람이 화면에서 고친 것이 조용히 되돌아간다.
+//
+// 어디에 쓰는가:
+//   - 도커로 DB를 만들 때. 그 컨테이너의 주소(127.0.0.1:포트 또는 컨테이너 이름)는
+//     **만든 노드에서만** 유효하므로, 담당 노드를 그 노드로 적어야 다른 노드에서 열어도
+//     같은 DB를 본다.
+func (s *Store) SetServerNode(ctx context.Context, id, nodeID string) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE servers SET node_id = ?, updated_at = ? WHERE id = ?`,
+		nodeID, nowString(), id)
+	if err != nil {
+		return fmt.Errorf("set server node: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ServerNodeChange는 서버의 담당 노드를 바꿨을 때 무엇이 함께 움직이는지다.
+type ServerNodeChange struct {
+	// Databases는 그 서버 아래 DB 수다. 담당 노드가 바뀌면 이 DB들의 접속 경로가 바뀐다.
+	Databases int
+	// Overridden은 그중 자기 담당 노드를 따로 지정한(예외) DB 수다. 이들은 따라가지 않는다.
+	Overridden int
+}
+
+// DescribeServerNodeChange는 담당 노드를 바꾸기 전에 영향 범위를 센다.
+//
+// 세어 보여주는 이유: 확인 창에 숫자가 없으면 사람은 "서버 설정 하나 바꿨다"로 읽는다.
+// 실제로는 그 서버의 DB 전부의 접속 경로가 바뀌고, 예외로 지정해 둔 DB는 따라가지
+// 않는다는 사실이 목록에 없다.
+func (s *Store) DescribeServerNodeChange(ctx context.Context, serverID string) (ServerNodeChange, error) {
+	var out ServerNodeChange
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*), COALESCE(SUM(CASE WHEN node_id <> '' THEN 1 ELSE 0 END), 0)
+		FROM connections WHERE server_id = ?`, serverID).Scan(&out.Databases, &out.Overridden)
+	if err != nil {
+		return out, fmt.Errorf("describe server node change: %w", err)
+	}
+	return out, nil
+}
+
+// ServersOnNode는 그 노드가 담당인 서버 수를 센다.
+//
+// 노드를 목록에서 내리기 전에 쓰는 값이다. 담당 노드가 서버 등급이 되면서 노드 하나가
+// 빠질 때 잃는 것이 "DB 하나"가 아니라 "그 서버의 DB 전부"가 되었다 — 확인 창의 숫자가
+// 그 차이를 말해 주지 않으면 사람은 예전 감각으로 누른다.
+func (s *Store) ServersOnNode(ctx context.Context, nodeID string) (int, error) {
+	var n int
+	if strings.TrimSpace(nodeID) == "" {
+		return 0, nil
+	}
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM servers WHERE node_id = ?`, nodeID).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count servers on node: %w", err)
+	}
+	return n, nil
+}
+
+// ServersOnNodeAll은 노드마다 담당인 서버 수를 한 번에 센다.
+//
+// 노드 목록 화면이 쓰는 값이다. 노드마다 ServersOnNode를 부르면 노드 수만큼 질의가
+// 나가는데, 이 화면은 클러스터 화면이 열릴 때마다 그려진다.
+//
+// 담당이 없는 서버(node_id = '')는 어느 노드에도 세지 않는다 — 그 줄은 "요청을 받은
+// 노드가 접속"이므로 특정 노드가 빠져도 영향받지 않는다.
+func (s *Store) ServersOnNodeAll(ctx context.Context) (map[string]int, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT node_id, COUNT(*) FROM servers WHERE node_id <> '' GROUP BY node_id`)
+	if err != nil {
+		return nil, fmt.Errorf("count servers by node: %w", err)
+	}
+	defer rows.Close()
+
+	out := map[string]int{}
+	for rows.Next() {
+		var id string
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, fmt.Errorf("scan server count: %w", err)
+		}
+		out[id] = n
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate server counts: %w", err)
+	}
+	return out, nil
+}
+
 func (s *Store) UpdateServer(ctx context.Context, id string, p SaveServerParams) (*model.Server, error) {
 	now := nowString()
 	optJSON, err := p.Options.MarshalDB()
@@ -166,11 +266,12 @@ func (s *Store) UpdateServer(ctx context.Context, id string, p SaveServerParams)
 
 	res, err := tx.ExecContext(ctx, `UPDATE servers SET
 		name = ?, name_lower = ?, kind = ?, host = ?, port = ?, options = ?,
-		default_environment = ?, tags = ?, note = ?, enabled = ?, updated_at = ?
+		default_environment = ?, tags = ?, note = ?, enabled = ?, updated_at = ?,
+		node_id = ?
 		WHERE id = ?`,
 		p.Name, strings.ToLower(p.Name), string(p.Kind), p.Host, p.Port, optJSON,
 		string(p.DefaultEnvironment), model.TagsToString(p.Tags), p.Note,
-		boolInt(p.Enabled), now, id)
+		boolInt(p.Enabled), now, p.NodeID, id)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, ErrDuplicateName

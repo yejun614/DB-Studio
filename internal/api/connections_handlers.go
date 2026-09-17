@@ -168,6 +168,14 @@ func (r *connectionRequest) serverPart() serverRequest {
 		Options: r.Options, DefaultEnvironment: r.Environment,
 		Tags: r.Tags, Enabled: r.Enabled,
 		Username: r.Username, Password: r.Password, Extra: r.Extra,
+		// 담당 노드를 함께 옮긴다.
+		//
+		// ── 왜 필요한가 ─────────────────────────────────────────────
+		// 서버를 등록할 때 담당 노드를 고르는데(사설망 DB), 이 값이 여기서 빠지면
+		// 만들어진 서버는 담당이 비어 있게 된다. 그러면 저장은 성공하는데 그 직후의
+		// 검증(접속 테스트·DB 목록)이 **마스터에서** 실행되어 실패한다 — 사용자에게는
+		// "담당 노드를 골랐는데 왜 안 되지"로 나타나고, 원인은 화면에 없다.
+		NodeID: r.NodeID,
 	}
 }
 
@@ -523,6 +531,40 @@ func (s *Server) handleTestAdhoc(c *fiber.Ctx) error {
 		password = secret.Password
 		if params.Username == "" {
 			params.Username = secret.Username
+		}
+	}
+
+	// 담당 노드가 있는 서버를 시험할 때는 **그 노드에 맡긴다.**
+	//
+	// ── 왜 여기서 갈라지는가 ────────────────────────────────────────
+	// 이 시험의 답이 "담당 노드에서 이 DB에 닿는가"여야 하기 때문이다. 마스터에서
+	// 성공하면 그 사실은 아무것도 말해 주지 않는다 — 실제로 요청을 실행할 노드가
+	// 닿지 못하면 등록해도 영원히 접속 실패다. 사설망 DB에서 "테스트는 되는데
+	// 등록하니 안 된다"가 정확히 이 자리에서 나온다.
+	//
+	// 저장된 서버를 시험할 때는 비밀번호를 넘기지 않는다(노드가 복제본에서 꺼낸다).
+	// 아직 저장되지 않은 서버(등록 화면의 시험)는 폼이 들고 온 담당 노드를 쓴다.
+	if nodeID := s.testNodeFor(c, req.ServerID, params.NodeID); nodeID != "" {
+		nodeReq := nodeServerTestRequest{
+			ServerID:     strings.TrimSpace(req.ServerID),
+			Kind:         params.Kind,
+			Host:         params.Host,
+			Port:         params.Port,
+			Options:      params.Options,
+			DatabaseName: strings.TrimSpace(req.DatabaseName),
+			Username:     params.Username,
+			Environment:  req.Environment,
+		}
+		// 아직 저장되지 않은 값일 때만 비밀번호를 싣는다.
+		if nodeReq.ServerID == "" {
+			nodeReq.Password = password
+		}
+		out, err := s.testOnNode(c, nodeID, nodeReq)
+		if err != nil {
+			return err
+		}
+		if out != nil {
+			return c.JSON(out)
 		}
 	}
 

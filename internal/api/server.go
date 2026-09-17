@@ -179,6 +179,10 @@ func (s *Server) routes() {
 	// 담당 노드 라우팅이 쓰기 전달보다 앞이다. 그 DB에 닿을 수 있는 노드가 먼저
 	// 정해져야 하고, 그 노드가 자기 몫의 쓰기를 어떻게 처리할지는 그다음 문제다.
 	v1.Use(s.clusterRoute)
+	// 서버 라우팅도 쓰기 전달보다 앞이다. 서버의 DB 목록은 그 서버에 **실제로 닿는**
+	// 노드에서만 읽을 수 있는데, 담당 노드가 리플리카면 뒤에 둔 순간 요청이 먼저
+	// 마스터로 넘어가 닿지도 못하는 마스터가 읽으려 한다.
+	v1.Use(s.clusterRouteServer)
 	v1.Use(s.clusterForward)
 
 	// 노드끼리 부르는 경로. 사람의 세션이 아니라 공용 비밀로 인증한다.
@@ -192,6 +196,10 @@ func (s *Server) routes() {
 	nodes.Get("/changes", s.requireMaster, s.handleClusterChanges)
 	nodes.Get("/snapshot", s.requireMaster, s.handleClusterSnapshot)
 	nodes.Post("/audit", s.requireMaster, s.handleClusterAudit)
+	// 이 둘만 requireMaster가 없다. 담당 노드는 리플리카일 수 있고, "그 DB에 실제로
+	// 닿는 노드가 접속한다"가 이 경로들의 존재 이유이기 때문이다.
+	nodes.Post("/server-databases", s.handleNodeServerDatabases)
+	nodes.Post("/server-test", s.handleNodeServerTest)
 
 	// 인증 불필요
 	v1.Get("/health", s.handleHealth)
@@ -299,6 +307,8 @@ func (s *Server) routes() {
 	// DB 목록 조회는 서버에 실제로 접속한다. 등록 전 단계이므로 관리자만 부를 수 있다.
 	servers.Get("/:id/databases", s.requireConnManager, s.handleListServerDatabases)
 	servers.Post("/:id/databases", s.requireConnManager, s.handleAddServerDatabases)
+	// 담당 노드를 바꾸기 전에 영향 범위를 본다. 저장한 뒤에 알면 늦다.
+	servers.Get("/:id/node-impact", s.requireConnManager, s.handleServerNodeImpact)
 	servers.Post("/:id/merge", s.requireConnManager, s.handleMergeServers)
 
 	// 백업(논리 덤프)과 복구.

@@ -132,6 +132,9 @@ function nodeCard(node, reload) {
       node.isMe ? badge('이 노드', 'success') : null,
       node.status === 'left' ? badge('내려감', 'neutral') : null,
       node.stale ? badge('소식 끊김', 'danger') : null,
+      // 담당 서버가 있는 노드에는 그 사실을 머리에 붙인다. 목록에서 내리기 전에
+      // "무엇이 멈추는가"가 보여야 한다.
+      node.servers > 0 ? badge(`담당 서버 ${node.servers}`, 'warn') : null,
     ),
     h('dl.cluster-meta', {},
       metaRow('주소', node.address || '(알리지 않음)'),
@@ -139,6 +142,9 @@ function nodeCard(node, reload) {
       metaRow('마지막 연락', node.lastSeenAt
         ? `${formatDate(node.lastSeenAt)} (${relativeTime(node.lastSeenAt)})` : '-'),
       isMaster ? null : metaRow('복제 지연', node.lag > 0 ? `${node.lag}건` : '없음'),
+      // 담당 서버 수. 이 노드를 내리면 그 서버들의 DB 전부가 접속하지 못한다 —
+      // 노드를 고르는 판단("어느 것을 내릴 수 있는가")에 필요한 숫자다.
+      node.servers > 0 ? metaRow('담당 서버', `${node.servers}개`) : null,
     ),
     host ? hostLine(host) : h('p.field-help', {}, '이 노드의 컴퓨터 상태가 아직 오지 않았습니다.'),
     // 마스터는 목록에서 내릴 수 없다. 내리는 순간 이 클러스터에는 쓰기를 받을 노드가
@@ -148,10 +154,18 @@ function nodeCard(node, reload) {
       h('button.btn.btn-sm.btn-danger', {
         type: 'button',
         onclick: async () => {
+          // 무엇이 멈추는지 숫자로 말한다. 담당 노드가 서버 등급이 되면서 노드 하나를
+          // 내릴 때 잃는 것이 "DB 하나"가 아니라 "그 서버의 DB 전부"가 되었다 —
+          // 숫자 없는 경고는 예전 감각으로 누르게 만든다.
+          const msg = node.servers > 0
+            ? `"${node.name}" 를 목록에서 내립니다. 이 노드가 담당인 서버 ${node.servers}개의 `
+              + 'DB 전부가 접속하지 못하게 됩니다 — 각 서버의 담당 노드를 다른 곳으로 '
+              + '바꾸거나 비워야 합니다.'
+            : `"${node.name}" 를 목록에서 내립니다. 그 노드가 담당하던 DB는 `
+              + '다른 노드에서 다시 지정해야 합니다.';
           const ok = await confirmDialog({
             title: '노드 내리기',
-            message: `"${node.name}" 를 목록에서 내립니다. 그 노드가 담당하던 DB는 `
-              + '다른 노드에서 다시 지정해야 합니다.',
+            message: msg,
             confirmLabel: '내리기',
             danger: true,
           });
