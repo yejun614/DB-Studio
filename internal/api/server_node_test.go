@@ -143,4 +143,3 @@ func TestServerNodeRouteRequiresAddress(t *testing.T) {
 
 // contains는 짧은 부분 문자열 확인이다.
 func contains(s, sub string) bool { return strings.Contains(s, sub) }
-

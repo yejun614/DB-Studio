@@ -226,7 +226,7 @@ func (s *Store) ServersOnNode(ctx context.Context, nodeID string) (int, error) {
 // 노드 목록 화면이 쓰는 값이다. 노드마다 ServersOnNode를 부르면 노드 수만큼 질의가
 // 나가는데, 이 화면은 클러스터 화면이 열릴 때마다 그려진다.
 //
-// 담당이 없는 서버(node_id = '')는 어느 노드에도 세지 않는다 — 그 줄은 "요청을 받은
+// 담당이 없는 서버(담당 노드가 빈 값)는 어느 노드에도 세지 않는다 — 그 줄은 "요청을 받은
 // 노드가 접속"이므로 특정 노드가 빠져도 영향받지 않는다.
 func (s *Store) ServersOnNodeAll(ctx context.Context) (map[string]int, error) {
 	rows, err := s.db.QueryContext(ctx,
