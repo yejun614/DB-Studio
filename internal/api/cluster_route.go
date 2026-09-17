@@ -174,6 +174,29 @@ var serverRouteableSuffix = map[string]bool{
 	"/databases": true,
 }
 
+// serverRouteProxies는 이 요청을 담당 노드로 **넘길지** 답한다.
+//
+// ── 왜 쓰기는 넘기지 않는가 (실제 버그였다) ─────────────────────────
+// 서버 하위 경로에서 담당 노드가 해야 하는 일은 **읽기뿐**이다: 그 DB에 실제로 닿아야
+// 목록을 읽을 수 있고, 그 노드만 닿는다. 쓰기(DB 추가)는 메타 DB에 행을 남기는 일이라
+// 마스터가 해야 한다.
+//
+// 쓰기까지 넘기면 고리가 생기고, 그 고리의 끝은 조용한 데이터 손실이다:
+//
+//	리플리카 → (전달) → 마스터 → (담당 노드로 프록시) → 리플리카
+//	리플리카는 "네가 실행하라"는 표시를 보고 자기 메타 DB에 행을 만든다
+//	→ 다음 복제에서 그 행이 사라진다 (마스터에는 없으므로)
+//
+// 화면에는 201이 돌아오고 목록을 새로 고치면 없다. 두 노드로 실제 요청을 태워 보기
+// 전에는 드러나지 않았다 — 미들웨어 하나만 보면 각각 옳아 보인다.
+//
+// 쓰기는 넘기지 않고 여기서 처리하되, **검증에 필요한 접속은 담당 노드에게 물어본다**
+// (servers_handlers.go의 serverDatabases). 그래서 두 노드가 나눠 하는 구조는 그대로
+// 유지된다 — 나뉘는 자리가 미들웨어가 아니라 핸들러 안이다.
+func serverRouteProxies(method string) bool {
+	return !isStateChanging(method)
+}
+
 // clusterRouteServer는 담당 노드가 따로 있는 서버의 요청을 그 노드로 넘긴다.
 func (s *Server) clusterRouteServer(c *fiber.Ctx) error {
 	if s.cluster == nil || !s.cluster.Enabled() || c.Get(execHeader) != "" {
@@ -183,10 +206,15 @@ func (s *Server) clusterRouteServer(c *fiber.Ctx) error {
 	if !ok || !serverRouteableSuffix[suffix] {
 		return c.Next()
 	}
+	// 쓰기는 넘기지 않는다. 이유는 serverRouteProxies의 주석에 있다.
+	if !serverRouteProxies(c.Method()) {
+		return c.Next()
+	}
 	srv, err := s.st.GetServer(c.Context(), id)
 	if err != nil || srv.NodeID == "" || srv.NodeID == s.cluster.NodeID() {
 		// 담당이 없거나 나라면 여기서 실행한다. 커넥션 라우팅과 같은 판단이며,
 		// 내가 담당이면 이 요청이 마스터로 다시 넘어가지 않게 표시만 남긴다.
+		// (여기 오는 것은 읽기뿐이다 — 위에서 쓰기를 걸렀다.)
 		if err == nil && srv.NodeID != "" && srv.NodeID == s.cluster.NodeID() {
 			c.Locals(localClusterExec, true)
 		}

@@ -83,6 +83,25 @@ func newClusterNode(t *testing.T, role, masterURL string, listen bool) *clusterE
 	ccfg.NodeName = role
 	ccfg.SyncInterval = 50 * time.Millisecond
 	ccfg.HeartbeatInterval = 200 * time.Millisecond
+
+	// 리스너를 클러스터보다 먼저 띄운다. 주소를 알아야 -cluster-advertise 를 줄 수 있고,
+	// **담당 노드를 시험하려면 그 주소가 있어야 한다** — 주소가 없으면 요청을 넘길 수
+	// 없어("담당 노드 ... 의 주소를 알 수 없어") 담당 노드 기능 자체가 시험되지 않는다.
+	// 실제 노드도 항상 자기 주소를 준다.
+	var url string
+	if listen {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("listen: %v", err)
+		}
+		url = "http://" + ln.Addr().String()
+		ccfg.Advertise = url
+		// 노드 ID는 데이터 디렉터리 파일에서 온다(cluster.New). 리스너를 먼저 띄웠으므로
+		// 실패하면 그대로 정리한다.
+		t.Cleanup(func() { _ = ln.Close() })
+		defer func() { go srv.App().Listener(ln) }()
+	}
+
 	node, err := cluster.New(ccfg, st, dir, nil)
 	if err != nil {
 		t.Fatalf("cluster: %v", err)
@@ -92,14 +111,8 @@ func newClusterNode(t *testing.T, role, masterURL string, listen bool) *clusterE
 	}
 	srv.SetCluster(node)
 
-	env := &clusterEnv{srv: srv, st: st, node: node}
+	env := &clusterEnv{srv: srv, st: st, node: node, url: url}
 	if listen {
-		ln, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatalf("listen: %v", err)
-		}
-		env.url = "http://" + ln.Addr().String()
-		go srv.App().Listener(ln)
 		t.Cleanup(func() { srv.App().Shutdown() })
 	}
 	return env
