@@ -787,10 +787,6 @@ func toolSearchLogs(tc *toolContext, args json.RawMessage) (string, error) {
 	if !adapter.Capabilities().Logs {
 		return "", fmt.Errorf("%s 는 로그 조회를 지원하지 않습니다", conn.Kind)
 	}
-	secret, err := tc.srv.st.GetSecret(tc.ctx, conn.ID)
-	if err != nil {
-		return "", err
-	}
 	limit := in.Limit
 	if limit <= 0 || limit > 50 {
 		limit = 20
@@ -803,13 +799,41 @@ func toolSearchLogs(tc *toolContext, args json.RawMessage) (string, error) {
 	}
 	f.Normalize()
 
-	ctx, cancel := context.WithTimeout(tc.ctx, logQueryTimeout)
-	defer cancel()
-	res, err := adapter.Logs(ctx, dbx.Target{Conn: conn, Secret: secret}, f)
+	// 담당 노드가 있으면 그 노드가 읽는다(화면과 같은 원칙 — 도구만 마스터에서 돌면
+	// "슬로우 쿼리 화면은 되는데 어시스턴트는 안 된다"가 된다).
+	res, handedOff, err := tc.srv.relayLogs(tc.ctx, conn, f)
+	if handedOff {
+		if err != nil {
+			return "", tc.srv.annotateOrigin(tc.ctx, conn, err)
+		}
+		return summarizeLogs(conn, res)
+	}
+
+	secret, err := tc.srv.st.GetSecret(tc.ctx, conn.ID)
 	if err != nil {
 		return "", err
 	}
+	ctx, cancel := context.WithTimeout(tc.ctx, logQueryTimeout)
+	defer cancel()
+	res, err = adapter.Logs(ctx, dbx.Target{Conn: conn, Secret: secret}, f)
+	if err != nil {
+		return "", tc.srv.annotateOrigin(tc.ctx, conn, err)
+	}
+	return summarizeLogs(conn, res)
+}
 
+// summarizeLogs는 로그 결과를 모델이 판단에 쓸 만한 크기로 접는다.
+//
+// 담당 노드를 지난 경우와 여기서 읽은 경우가 **같은 모양**이어야 하므로 한 곳에 모은다.
+// 갈라 두면 노드가 읽었을 때만 요약이 달라져, 같은 질문이 어느 노드에서 실행되느냐에 따라
+// 다른 답을 받는다 — 이번 장애에서 화면별로 갈린 것과 같은 종류의 혼란이다.
+//
+// 전체 결과를 그대로 주면 컨텍스트를 다 먹으므로 항목 수와 길이를 자른다.
+func summarizeLogs(conn *model.Connection, res *dblog.Result) (string, error) {
+	if res == nil {
+		res = &dblog.Result{}
+	}
+	limit := 20
 	type entry struct {
 		Time     string  `json:"time"`
 		Severity string  `json:"severity"`
@@ -894,6 +918,13 @@ func toolIntrospectSchema(tc *toolContext, args json.RawMessage) (string, error)
 }
 
 // introspect는 대상 DB의 스키마를 읽는다.
+//
+// 담당 노드가 있으면 그 노드가 읽는다. 화면은 라우팅 미들웨어를 지나 담당 노드로 넘어가지만
+// **도구는 핸들러 안에서 어댑터를 직접 부른다** — 그래서 이 한 줄이 없으면 화면은 멀쩡한데
+// 어시스턴트의 introspect_schema만 1045로 실패한다. 원인을 도구 쪽에서 찾게 되는 모양이다.
+//
+// 실패 문구에 실행 노드와 MySQL이 본 접속 주소를 붙이는 이유도 같다: 이 문구를 읽는 것은
+// 사람만이 아니라 **모델**이다. 출처가 없으면 모델도 계정 범위를 의심하지 못한다.
 func (tc *toolContext) introspect(conn *model.Connection) (*schema.Schema, error) {
 	adapter, err := dbx.Get(conn.Kind)
 	if err != nil {
@@ -902,13 +933,23 @@ func (tc *toolContext) introspect(conn *model.Connection) (*schema.Schema, error
 	if !adapter.Capabilities().Introspect {
 		return nil, fmt.Errorf("%s 는 스키마 조회를 지원하지 않습니다", conn.Kind)
 	}
+	if sc, handedOff, err := tc.srv.introspectOnNode(tc.ctx, conn); handedOff {
+		if err != nil {
+			return nil, tc.srv.annotateOrigin(tc.ctx, conn, err)
+		}
+		return sc, nil
+	}
 	secret, err := tc.srv.st.GetSecret(tc.ctx, conn.ID)
 	if err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(tc.ctx, introspectTimeout)
 	defer cancel()
-	return adapter.Introspect(ctx, dbx.Target{Conn: conn, Secret: secret})
+	sc, err := adapter.Introspect(ctx, dbx.Target{Conn: conn, Secret: secret})
+	if err != nil {
+		return nil, tc.srv.annotateOrigin(tc.ctx, conn, err)
+	}
+	return sc, nil
 }
 
 // toolExploreNoSQL은 Mongo/Redis 특화 조회 결과를 요약해 돌려준다.
@@ -933,16 +974,31 @@ func toolExploreNoSQL(tc *toolContext, args json.RawMessage) (string, error) {
 	if !adapter.Capabilities().Explore {
 		return "", fmt.Errorf("%s 는 전용 탐색을 지원하지 않습니다. introspect_schema를 쓰세요", conn.Kind)
 	}
-	secret, err := tc.srv.st.GetSecret(tc.ctx, conn.ID)
-	if err != nil {
-		return "", err
-	}
-	ctx, cancel := context.WithTimeout(tc.ctx, exploreTimeout)
-	defer cancel()
 
-	res, err := dbx.DoExplore(ctx, dbx.Target{Conn: conn, Secret: secret})
-	if err != nil {
-		return "", err
+	// 담당 노드가 있으면 그 노드가 탐색한다(화면의 /explore 는 라우팅 허용 목록에 있어
+	// 이미 담당 노드를 지나지만, 도구는 핸들러 안에서 어댑터를 직접 부른다).
+	var res *dbx.Explore
+	relayed, handedOff, rerr := tc.srv.relayExplore(tc.ctx, conn)
+	if handedOff {
+		if rerr != nil {
+			return "", tc.srv.annotateOrigin(tc.ctx, conn, rerr)
+		}
+		res = relayed
+	} else {
+		secret, err := tc.srv.st.GetSecret(tc.ctx, conn.ID)
+		if err != nil {
+			return "", err
+		}
+		ctx, cancel := context.WithTimeout(tc.ctx, exploreTimeout)
+		defer cancel()
+
+		res, err = dbx.DoExplore(ctx, dbx.Target{Conn: conn, Secret: secret})
+		if err != nil {
+			return "", tc.srv.annotateOrigin(tc.ctx, conn, err)
+		}
+	}
+	if res == nil {
+		res = &dbx.Explore{}
 	}
 	out := map[string]any{
 		"connection": conn.Name, "kind": conn.Kind,

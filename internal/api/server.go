@@ -216,6 +216,10 @@ func (s *Server) routes() {
 	// 담당 노드가 기록하지는 않는다 — 적는 것은 마스터의 일이다.
 	nodes.Post("/collect", s.handleNodeCollect)
 	nodes.Post("/introspect", s.handleNodeIntrospect)
+	// 어시스턴트의 도구가 부르는 자리. 화면은 라우팅 미들웨어를 지나지만 도구는
+	// 핸들러 안에서 어댑터를 직접 부르므로, 이 경로들이 없으면 담당 노드를 지나지 않는다.
+	nodes.Post("/logs", s.handleNodeLogs)
+	nodes.Post("/explore", s.handleNodeExplore)
 
 	// 인증 불필요
 	v1.Get("/health", s.handleHealth)

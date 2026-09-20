@@ -471,7 +471,15 @@ func (s *Server) handleTestConnection(c *fiber.Ctx) error {
 	ok := pingErr == nil
 	msg := ""
 	if pingErr != nil {
-		msg = pingErr.Error()
+		// 실패 문구에 **어느 노드가 어느 주소로 시도했는지**를 붙인다.
+		//
+		// 이 경로는 담당 노드가 있으면 라우팅 허용 목록(/test)을 통해 그 노드로 넘어가므로,
+		// 여기 도달했다는 것은 **이 노드가 실행했다**는 뜻이다(프록시된 요청에는
+		// X-Cluster-Exec 표시가 붙어 그대로 실행된다). 그래서 실행 노드는 이 노드다.
+		//
+		// 이 한 줄이 없으면 화면에는 "Access denied"만 뜬다. 사용자는 커넥션 설정을
+		// 의심하고, 실제 원인(계정 user@host 범위)에 도달하지 못한다.
+		msg = s.annotateOrigin(c.Context(), conn, pingErr).Error()
 	}
 	if err := s.st.RecordConnectionCheck(c.Context(), id, ok, msg); err != nil {
 		return err

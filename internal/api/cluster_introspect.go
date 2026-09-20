@@ -102,8 +102,7 @@ func (s *Server) handleNodeIntrospect(c *fiber.Ctx) error {
 // 없어 여기서 할 차례"를 구분해야 한다. 맡길 곳이 없으면 여기서 읽어야 하므로 그 판단을
 // 부르는 쪽에 남긴다(이 함수가 스스로 읽기 시작하면 호출 방향이 뒤집혀 순환이 된다).
 func (s *Server) introspectOnNode(ctx context.Context, conn *model.Connection) (*schema.Schema, bool, error) {
-	if s.cluster == nil || !s.cluster.Enabled() || conn.NodeID == "" ||
-		conn.NodeID == s.cluster.NodeID() {
+	if !s.relayNeeded(conn) {
 		return nil, false, nil
 	}
 	out, err := s.callNode(ctx, conn.NodeID, "/api/v1/node/introspect",
