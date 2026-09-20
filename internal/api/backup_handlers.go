@@ -115,7 +115,8 @@ func (s *Server) handleCreateBackup(c *fiber.Ctx) error {
 			return failDetail(c, fiber.StatusBadGateway, "backup_failed",
 				"백업을 시작하지 못했습니다", derr.Error())
 		}
-		if err := s.recordNodeBackup(c, target, req, saved); err != nil {
+		newID, err := s.recordNodeBackup(c, target, req, saved)
+		if err != nil {
 			return err
 		}
 		s.audit(c, store.AuditParams{
@@ -125,7 +126,9 @@ func (s *Server) handleCreateBackup(c *fiber.Ctx) error {
 				"file": saved, "viaNode": target.Conn.NodeID,
 			},
 		})
-		return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"fileName": saved})
+		return c.Status(fiber.StatusAccepted).JSON(fiber.Map{
+			"backupId": newID, "fileName": saved,
+		})
 	}
 
 	id, err := s.backups.StartBackup(c.Context(), backup.StartBackupParams{
@@ -158,10 +161,10 @@ func (s *Server) handleCreateBackup(c *fiber.Ctx) error {
 //
 // 걸린 시간·테이블 수·행 수는 알 수 없으므로 비워 둔다 — 노드가 그 값을 알려주지 않는다.
 // 모르는 값을 그럴듯하게 채우면 "덤프가 3초 걸렸다"처럼 사실이 아닌 정보가 남는다.
-func (s *Server) recordNodeBackup(c *fiber.Ctx, target *backup.Target, req createBackupRequest, fileName string) error {
+func (s *Server) recordNodeBackup(c *fiber.Ctx, target *backup.Target, req createBackupRequest, fileName string) (string, error) {
 	path, err := s.backups.FilePath(fileName)
 	if err != nil {
-		return err
+		return "", err
 	}
 	var size int64
 	if info, serr := os.Stat(path); serr == nil {
@@ -186,11 +189,16 @@ func (s *Server) recordNodeBackup(c *fiber.Ctx, target *backup.Target, req creat
 		ActorID: actorID, ActorName: actorName, Trigger: "manual",
 	})
 	if err != nil {
-		return err
+		return "", err
 	}
-	return s.st.FinishBackup(c.Context(), id, store.FinishBackupParams{
+	if err := s.st.FinishBackup(c.Context(), id, store.FinishBackupParams{
 		Status: "success", FileName: fileName, SizeBytes: size,
-	})
+	}); err != nil {
+		return "", err
+	}
+	// id 를 돌려주는 이유: 로컬 경로(StartBackup)는 backupId 를 준다. 위임 경로만 주지
+	// 않으면 화면이 그 id 로 결과를 조회하지 못해 **같은 API 가 두 모양**이 된다.
+	return id, nil
 }
 
 // handleListBackups는 백업 목록을 반환한다.
@@ -454,6 +462,43 @@ func (s *Server) handleRestoreBackup(c *fiber.Ctx) error {
 		return err
 	}
 
+	// 담당 노드가 있으면 그 노드가 복구한다.
+	//
+	// 복구는 백업의 역방향이고 같은 문제를 갖는다: 요청이 쓰기라 마스터로 넘어오는데,
+	// 담당 노드가 지정된 DB는 마스터가 닿지 못할 수 있다. 그래서 마스터가 파일을 그
+	// 노드로 밀어 넣고, 노드가 자기 DB에 적용한다.
+	//
+	// 실패도 결과 안에 담겨 온다 — 노드가 실행까지 갔기 때문이고, **어디까지 적용됐는지**가
+	// 복구에서 가장 중요한 정보라 상태 코드로 뭉개지 않는다.
+	if res, handled, rerr := s.restoreOnNode(c, b, conn); handled {
+		if rerr != nil {
+			s.audit(c, store.AuditParams{
+				Action: "backup.restore", TargetType: "connection", TargetID: conn.ID,
+				Result: "error",
+				Detail: map[string]any{"name": conn.Name, "error": rerr.Error()},
+			})
+			return failDetail(c, fiber.StatusBadGateway, "restore_failed",
+				"복구하지 못했습니다", rerr.Error())
+		}
+		id, err := s.recordNodeRestore(c, b, conn, res)
+		if err != nil {
+			return err
+		}
+		s.audit(c, store.AuditParams{
+			Action: "backup.restore", TargetType: "connection", TargetID: conn.ID,
+			Result: resultOf(res.Error == ""),
+			Detail: map[string]any{
+				"name": conn.Name, "backupId": b.ID, "restoreId": id,
+				"done": res.Done, "total": res.Total, "viaNode": conn.NodeID,
+				"crossConnection": b.ConnectionID != conn.ID,
+				"error":           res.Error,
+			},
+		})
+		return c.Status(fiber.StatusAccepted).JSON(fiber.Map{
+			"restoreId": id, "done": res.Done, "total": res.Total, "error": res.Error,
+		})
+	}
+
 	id, err := s.backups.StartRestore(c.Context(), backup.StartRestoreParams{
 		Backup: b,
 		Target: backup.Target{Conn: conn, Secret: secret},
@@ -473,6 +518,40 @@ func (s *Server) handleRestoreBackup(c *fiber.Ctx) error {
 		},
 	})
 	return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"restoreId": id})
+}
+
+// recordNodeRestore는 담당 노드가 실행한 복구의 기록을 남긴다.
+//
+// ── 왜 상태 코드로 실패를 알리지 않는가 ───────────────────────────
+// 노드가 실행까지 갔으므로 "어디까지 적용됐는지"가 남아 있다. 그것을 502로 뭉개면
+// 사람은 복구가 시작도 안 된 줄 알고 다시 실행한다 — 이미 절반이 적용된 DB에 다시
+// 부으면 중복 키가 쏟아진다. 그래서 기록에 그 숫자를 그대로 적는다.
+func (s *Server) recordNodeRestore(c *fiber.Ctx, b *store.Backup, conn *model.Connection, res *backup.RestoreResult) (string, error) {
+	label := fmt.Sprintf("%s · %s", b.ConnectionName,
+		b.StartedAt.Local().Format("2006-01-02 15:04"))
+	u := currentUser(c)
+	actorID, actorName := "", ""
+	if u != nil {
+		actorID, actorName = u.ID, u.Username
+	}
+
+	id, err := s.st.CreateRestore(c.Context(), store.CreateRestoreParams{
+		BackupID: b.ID, BackupLabel: label,
+		ConnectionID: conn.ID, ConnectionName: conn.Name,
+		ActorID: actorID, ActorName: actorName,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	status := "success"
+	if res.Error != "" {
+		status = "failed"
+	}
+	return id, s.st.FinishRestore(c.Context(), id, store.FinishRestoreParams{
+		Status: status, Error: res.Error, FailedStatement: res.FailedStatement,
+		StatementsDone: res.Done, StatementsTotal: res.Total,
+	})
 }
 
 func (s *Server) handleGetRestore(c *fiber.Ctx) error {

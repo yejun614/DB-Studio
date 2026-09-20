@@ -1,17 +1,13 @@
 package backup
 
 import (
-	"bufio"
-	"compress/gzip"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 	"time"
 
-	"dbstudio/internal/dbx"
 	"dbstudio/internal/model"
 	"dbstudio/internal/store"
 )
@@ -76,6 +72,31 @@ func (s *Service) StartRestore(ctx context.Context, p StartRestoreParams) (strin
 	return id, nil
 }
 
+// applyDump는 덤프를 대상에 적용한다.
+// 반환값은 (실행한 문장 수, 전체 문장 수, 실패한 문장, 오류)다.
+//
+// 마스터가 로컬에서 복구하는 경로다(담당 노드가 없거나 이 노드가 담당). 담당 노드가 따로
+// 있으면 그 노드가 같은 적용 로직을 돌린다 — 그래서 적용 코드는 restore_stream.go 한 곳에
+// 있고, 여기서는 진행률을 **복구 행에 적는** 함수만 넘긴다.
+func (s *Service) applyDump(ctx context.Context, id string, p StartRestoreParams) (int, int, string, error) {
+	return s.RestoreFromBackup(ctx, p.Backup,
+		RestoreParams{Kind: string(p.Target.Conn.Kind), Target: p.Target},
+		s.progressWriter(id))
+}
+
+// progressWriter는 진행 상황을 복구 행에 적는 함수를 만든다.
+//
+// 로컬 복구에서만 쓴다. 담당 노드에는 복구 행이 없으므로(기록은 마스터의 일이다) 그쪽은
+// nil을 넘긴다 — 그 차이가 이 함수의 존재 이유다.
+func (s *Service) progressWriter(id string) ProgressFunc {
+	return func(done, total int, message string) {
+		if uerr := s.st.UpdateRestoreProgress(
+			context.WithoutCancel(context.Background()), id, done, total, message); uerr != nil {
+			s.log.Debug("복구 진행 상황 갱신 실패", "id", id, "err", uerr)
+		}
+	}
+}
+
 func (s *Service) runRestore(ctx context.Context, id string, p StartRestoreParams) {
 	start := time.Now()
 
@@ -91,190 +112,12 @@ func (s *Service) runRestore(ctx context.Context, id string, p StartRestoreParam
 	}
 }
 
-// openDump은 gzip 덤프를 읽기 위한 리더를 연다.
+// openDump은 이 노드의 디스크에 있는 백업 파일을 열어 푼다.
+//
+// 경로 조립과 gzip 열기는 OpenDumpFile 한 곳에 있다 — 마스터가 담당 노드로 밀어 넣을 때도
+// 같은 함수를 쓰므로, 경로 검사(FilePath)가 두 경로 모두에 적용된다.
 func (s *Service) openDump(b *store.Backup) (io.ReadCloser, func(), error) {
-	path, err := s.FilePath(b.FileName)
-	if err != nil {
-		return nil, nil, err
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, nil, fmt.Errorf("백업 파일을 열 수 없습니다: %w", err)
-	}
-	gz, err := gzip.NewReader(f)
-	if err != nil {
-		f.Close()
-		return nil, nil, fmt.Errorf("백업 파일이 손상되었습니다: %w", err)
-	}
-	return gz, func() { gz.Close(); f.Close() }, nil
-}
-
-// applyDump는 덤프를 대상에 적용한다.
-// 반환값은 (실행한 문장 수, 전체 문장 수, 실패한 문장, 오류)다.
-func (s *Service) applyDump(ctx context.Context, id string, p StartRestoreParams) (int, int, string, error) {
-	switch p.Backup.Format {
-	case FormatJSONL:
-		return s.restoreMongo(ctx, id, p)
-	case FormatRedis:
-		return s.restoreRedis(ctx, id, p)
-	default:
-		return s.restoreSQL(ctx, id, p)
-	}
-}
-
-// restoreSQL은 SQL 덤프를 실행한다.
-//
-// 전체를 한 트랜잭션으로 감싸지 않는다. 이유는 마이그레이션 실행기와 같다:
-// MySQL·Oracle은 DDL이 암묵적 커밋이라 애초에 트랜잭션이 성립하지 않고, 그렇다고
-// 수십만 문장을 메모리에 들고 있을 수도 없다. 대신 **어디까지 갔는지**를 남긴다.
-func (s *Service) restoreSQL(ctx context.Context, id string, p StartRestoreParams) (int, int, string, error) {
-	reader, closeFn, err := s.openDump(p.Backup)
-	if err != nil {
-		return 0, 0, "", err
-	}
-	defer closeFn()
-
-	script, err := io.ReadAll(reader)
-	if err != nil {
-		return 0, 0, "", fmt.Errorf("백업 파일을 읽지 못했습니다: %w", err)
-	}
-	stmts := dbx.SplitStatements(p.Target.Conn.Kind, string(script))
-	if len(stmts) == 0 {
-		return 0, 0, "", fmt.Errorf("실행할 문장이 없습니다")
-	}
-
-	total := len(stmts)
-	last := time.Now()
-	done, failedStmt, execErr := dbx.ExecScript(ctx, p.Target.dbx(), stmts,
-		func(i int, current string) bool {
-			// 진행 상황은 1초에 한 번만 쓴다. 문장마다 쓰면 메타 DB 쓰기가
-			// 복구 자체보다 오래 걸린다.
-			if time.Since(last) < time.Second {
-				return ctx.Err() == nil
-			}
-			last = time.Now()
-			if uerr := s.st.UpdateRestoreProgress(context.WithoutCancel(ctx), id, i, total,
-				fmt.Sprintf("%s / %s 문장", formatCount(int64(i)), formatCount(int64(total)))); uerr != nil {
-				s.log.Debug("복구 진행 상황 갱신 실패", "id", id, "err", uerr)
-			}
-			return ctx.Err() == nil
-		})
-	return done, total, truncate(failedStmt, 2000), execErr
-}
-
-// restoreMongo는 줄 단위 확장 JSON을 되먹인다.
-//
-// InsertOne이 아니라 _id 기준 upsert(ReplaceOne)를 쓴다. 복구는 실패한 뒤 다시
-// 실행되는 일이 잦은데, insert만 하면 두 번째 시도가 중복 키로 전부 실패한다.
-func (s *Service) restoreMongo(ctx context.Context, id string, p StartRestoreParams) (int, int, string, error) {
-	reader, closeFn, err := s.openDump(p.Backup)
-	if err != nil {
-		return 0, 0, "", err
-	}
-	defer closeFn()
-
-	scanner := bufio.NewScanner(reader)
-	// 문서 하나가 16MB까지 갈 수 있다(MongoDB의 상한). 기본 버퍼(64KB)로는 끊긴다.
-	scanner.Buffer(make([]byte, 0, 1<<20), 17<<20)
-
-	collection := ""
-	done := 0
-	total := 0
-	last := time.Now()
-
-	for scanner.Scan() {
-		if err := ctx.Err(); err != nil {
-			return done, total, "", err
-		}
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "//") {
-			continue
-		}
-		total++
-
-		if strings.HasPrefix(line, mongoHeaderPrefix) {
-			var head struct {
-				Collection string `json:"$collection"`
-			}
-			if jerr := json.Unmarshal([]byte(line), &head); jerr != nil || head.Collection == "" {
-				return done, total, line, fmt.Errorf("컬렉션 머리글을 읽지 못했습니다: %s", truncate(line, 200))
-			}
-			collection = head.Collection
-			continue
-		}
-		if collection == "" {
-			return done, total, line, fmt.Errorf("컬렉션이 정해지기 전에 문서가 나왔습니다")
-		}
-
-		if _, err := dbx.DoMutateRow(ctx, p.Target.dbx(), dbx.RowMutation{
-			Table:  dbx.TableRef{Name: collection},
-			Action: "restore",
-			Values: map[string]any{"$document": line},
-		}); err != nil {
-			return done, total, truncate(line, 2000), fmt.Errorf("%s 복구 실패: %w", collection, err)
-		}
-		done++
-
-		if time.Since(last) >= time.Second {
-			last = time.Now()
-			if uerr := s.st.UpdateRestoreProgress(context.WithoutCancel(ctx), id, done, 0,
-				fmt.Sprintf("%s — %s개 문서", collection, formatCount(int64(done)))); uerr != nil {
-				s.log.Debug("복구 진행 상황 갱신 실패", "id", id, "err", uerr)
-			}
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return done, total, "", fmt.Errorf("백업 파일을 읽지 못했습니다: %w", err)
-	}
-	return done, total, "", nil
-}
-
-// restoreRedis는 줄 단위 명령을 실행한다.
-func (s *Service) restoreRedis(ctx context.Context, id string, p StartRestoreParams) (int, int, string, error) {
-	reader, closeFn, err := s.openDump(p.Backup)
-	if err != nil {
-		return 0, 0, "", err
-	}
-	defer closeFn()
-
-	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 0, 1<<20), 8<<20)
-
-	done, total := 0, 0
-	last := time.Now()
-	for scanner.Scan() {
-		if err := ctx.Err(); err != nil {
-			return done, total, "", err
-		}
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		total++
-
-		results, err := dbx.DoRunStatements(ctx, p.Target.dbx(), dbx.StatementRequest{
-			Statement: line, MaxRows: 1,
-		})
-		if err != nil {
-			return done, total, truncate(line, 2000), err
-		}
-		if len(results) > 0 && results[0].Error != "" {
-			return done, total, truncate(line, 2000), fmt.Errorf("%s", results[0].Error)
-		}
-		done++
-
-		if time.Since(last) >= time.Second {
-			last = time.Now()
-			if uerr := s.st.UpdateRestoreProgress(context.WithoutCancel(ctx), id, done, 0,
-				fmt.Sprintf("%s개 명령", formatCount(int64(done)))); uerr != nil {
-				s.log.Debug("복구 진행 상황 갱신 실패", "id", id, "err", uerr)
-			}
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return done, total, "", fmt.Errorf("백업 파일을 읽지 못했습니다: %w", err)
-	}
-	return done, total, "", nil
+	return s.OpenDumpFile(b.FileName)
 }
 
 // Preview는 백업 파일의 앞부분을 돌려준다.

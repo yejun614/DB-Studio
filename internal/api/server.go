@@ -224,6 +224,10 @@ func (s *Server) routes() {
 	// 다른 /node/* 읽기 경로와 같은 이유로 requireMaster를 붙이지 않는다 — 담당 노드는
 	// 리플리카일 수 있고, 그 노드만 그 DB에 닿는다.
 	nodes.Post("/dump", s.handleNodeDump)
+	// 복구. 노드가 마스터에서 파일을 받아 자기 DB 에 적용한다(당겨 오는 방향 —
+	// 밀어 넣으려면 요청 본문 스트리밍과 크기 상한을 전역으로 바꿔야 한다).
+	nodes.Post("/restore", s.handleNodeRestore)
+	nodes.Get("/dump-file", s.requireMaster, s.handleNodeDumpFile)
 
 	// 인증 불필요
 	v1.Get("/health", s.handleHealth)

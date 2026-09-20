@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -133,5 +134,79 @@ func TestSeedBackupTargetIsReachable(t *testing.T) {
 	// 담당이 남이므로 맡겨야 한다.
 	if !master.srv.relayNeeded(conn) {
 		t.Error("담당이 남인데 맡기지 않는다")
+	}
+}
+
+// TestRestoreDelegationDecision은 복구도 담당 노드로 가는지 본다 (P33-2).
+//
+// 복구는 백업의 역방향이고 같은 문제를 갖는다: 요청이 쓰기라 마스터로 넘어오는데,
+// 담당 노드가 지정된 DB는 마스터가 닿지 못할 수 있다. 복구는 되돌릴 수 없는 일이라
+// (운영 DB에 덮어쓴다) 여기서 틀리면 피해가 백업 실패보다 크다.
+func TestRestoreDelegationDecision(t *testing.T) {
+	master, replica := startCluster(t)
+
+	t.Run("담당이 남이면 그 노드가 복구한다", func(t *testing.T) {
+		conn := &model.Connection{NodeID: replica.node.NodeID()}
+		if !master.srv.relayNeeded(conn) {
+			t.Error("맡기지 않았다 — 닿지도 못하는 마스터가 복구를 시도하게 된다")
+		}
+	})
+	t.Run("담당이 나면 여기서 복구한다", func(t *testing.T) {
+		conn := &model.Connection{NodeID: master.node.NodeID()}
+		if master.srv.relayNeeded(conn) {
+			t.Error("맡겼다 — 자기 자신을 부르는 모양이 된다")
+		}
+	})
+}
+
+// TestDumpFileIsServedFromMaster는 노드가 파일을 당겨 올 수 있는지 본다.
+//
+// ── 방향이 한 번 뒤집혔다 (기록해 둔다) ────────────────────────────
+// 처음에는 마스터가 파일을 노드의 요청 **본문**에 실어 밀어 넣으려 했다. 그 방법은
+// Fiber의 요청 본문 스트리밍과 크기 상한(BodyLimit, 8MB)을 **전역으로** 바꿔야 했다 —
+// 모든 POST에 영향이 가고, 아무 엔드포인트나 큰 본문을 받게 된다.
+//
+// 그래서 뒤집었다: 노드가 마스터에서 파일을 **받아 온다**. 노드는 이미 마스터 주소와
+// 클러스터 비밀을 알고 있고(복제·하트비트가 그 길을 쓴다), 마스터가 파일을 흘려보내는
+// 것은 스냅샷 경로에 선례가 있다(SetBodyStream).
+//
+// 이 시험은 그 경로가 **마스터 전용**인지 본다 — 리플리카가 받아도 그 파일은 거기 없다.
+func TestDumpFileIsServedFromMaster(t *testing.T) {
+	master, replica := startCluster(t)
+
+	// 리플리카는 이 경로를 부를 수 없다. requireMaster가 409(not_master)로 막는다 —
+	// 백업은 마스터에 보관되므로(P33-1) 리플리카에는 내줄 파일이 없다.
+	// 401/403이 아니라 409인 이유: 인증은 통과했다(공용 비밀은 맞다). **역할**이 아니라는
+	// 뜻이고, 그래서 화면이 "노드로 복구를 넘길 수 없다"를 정확히 설명할 수 있다.
+	status, body := replica.client(t).doAsNode("GET", "/api/v1/node/dump-file?name=x.sql.gz", nil)
+	if status != 409 {
+		t.Errorf("리플리카가 이 경로를 부를 수 있다 = %d (기대 409 not_master): %v", status, body)
+	}
+	if code, _ := body["error"].(string); code != "not_master" {
+		t.Errorf("거절 이유가 다르다(역할 문제임을 알려야 한다): %v", body)
+	}
+
+	// 마스터에서 부르면 "파일 없음"이 정직하게 온다(빈 본문이면 복구가 문장 0개로 끝난다).
+	status, body = master.client(t).doAsNode("GET", "/api/v1/node/dump-file?name=없는파일.sql.gz", nil)
+	if status != 404 {
+		t.Errorf("없는 파일 = %d (기대 404): %v", status, body)
+	}
+	msg, _ := body["message"].(string)
+	if !strings.Contains(msg, "없") {
+		t.Errorf("이유가 무엇인지 알려주지 않는다: %q", msg)
+	}
+}
+
+// TestDumpFileValidatesName은 이름으로 경로를 조작하지 못하는지 본다.
+//
+// 이름은 마스터가 만든 것이지만, 경로를 조립하는 곳에서는 언제나 확인한다는 것이
+// 이 저장소의 규칙이다(FilePath 주석). 그 규칙이 지켜지지 않는 날이 탈출이 되는 날이다.
+func TestDumpFileValidatesName(t *testing.T) {
+	master, _ := startCluster(t)
+
+	status, _ := master.client(t).doAsNode("GET",
+		"/api/v1/node/dump-file?name="+url.QueryEscape("../../../etc/passwd.sql.gz"), nil)
+	if status == 200 {
+		t.Error("경로가 섞인 이름으로 파일을 내줬다")
 	}
 }
