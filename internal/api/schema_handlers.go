@@ -187,7 +187,27 @@ func (s *Server) resolveSchemaAccess(c *fiber.Ctx, connID string) (*model.Connec
 }
 
 // introspectConnection은 커넥션의 스키마를 실제로 읽어온다.
+//
+// ── 담당 노드가 있으면 그 노드가 읽는다 ─────────────────────────────
+// 스키마를 실제로 읽는 자리는 이 앱 전체에서 여기 하나다(핸들러 여섯 곳이 이 함수를 지난다:
+// 버전 캡처·diff·마이그레이션·구조 화면·ERD 편집·설명 수정). 그래서 담당 노드 판단도
+// 여기 한 곳에 둔다 — 핸들러마다 판단하면 반드시 한 곳이 빠지고, 그때 증상은 "이 화면에서만
+// 안 된다"로 나타나 원인을 찾기 어렵게 만든다.
+//
+// 왜 필요한가: 담당 노드가 지정된 DB는 그 노드의 사설망 안에 있어 **마스터가 닿지 못할 수
+// 있다**. 담당 노드를 지정한 이유가 그것이다. 그런데 읽기까지 마스터가 하면, 담당 노드를
+// 제대로 골라 놓고도 버전 캡처·구조 화면만 실패한다 — 실제로 그 증상이 운영에서 났다.
+//
+// 노드는 자기 메타 DB 복제본에서 자격증명을 꺼내 읽고 결과만 돌려준다. 여기서 행을 만들지
+// 않으므로 리플리카의 메타 DB에 남았다가 복제로 사라지는 일도 없다(P32의 조용한 손실).
 func (s *Server) introspectConnection(c *fiber.Ctx, conn *model.Connection, adapter dbx.Adapter) (*schema.Schema, error) {
+	if sc, handedOff, err := s.introspectOnNode(c.Context(), conn); handedOff {
+		if err != nil {
+			return nil, err
+		}
+		return sc, nil
+	}
+
 	secret, err := s.st.GetSecret(c.Context(), conn.ID)
 	if err != nil {
 		return nil, err

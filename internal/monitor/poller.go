@@ -14,6 +14,7 @@ import (
 	"dbstudio/internal/dbx"
 	"dbstudio/internal/metric"
 	"dbstudio/internal/model"
+	"dbstudio/internal/schema"
 	"dbstudio/internal/store"
 )
 
@@ -67,6 +68,43 @@ type EventSink interface {
 	EventOpened(ctx context.Context, ev *store.Event)
 }
 
+// Collector는 담당 노드에 지표 수집을 맡기는 통로다.
+//
+// ── 왜 필요한가 ────────────────────────────────────────────────────
+// 지표를 수집·기록하는 것은 마스터 한 곳이다(리플리카는 폴링하지 않는다 — 같은 DB를 두
+// 노드가 폴링하면 지표가 두 배로 들어오고, 리플리카가 쓴 행은 다음 복제에서 사라진다).
+// 그런데 "기록하는 곳이 마스터"라는 규칙이 "접속하는 곳도 마스터"라는 뜻은 아니었다.
+// 담당 노드가 따로 있는 DB에서 마스터는 **닿지 못할 수 있다** — 그 DB가 담당 노드의
+// 사설망 안에 있기 때문이고, 그것이 담당 노드를 지정한 이유 그 자체다.
+//
+// 그래서 일을 나눈다: **담당 노드가 읽고, 마스터가 적는다.** 노드는 자기 메타 DB
+// 복제본에서 커넥션과 자격증명을 꺼내 읽고 **결과 값만** 돌려준다 — 자격증명은 클러스터
+// 채널로 오가지 않는다(server-test와 같은 판단).
+//
+// 이 인터페이스가 인터페이스인 이유는 EventSink와 같다: 노드와 이야기하는 코드는
+// api 계층에 있고 폴러는 monitor에 있다. 폴러가 api를 직접 알면 두 계층이 서로를
+// 붙잡고, 그러면 폴러를 클러스터 없이 시험할 수 없다.
+type Collector interface {
+	// LocalNodeID는 이 프로세스가 도는 노드의 ID다.
+	//
+	// 담당 노드가 이 값과 같으면 맡기지 않고 여기서 수집한다. 노드 사이를 왕복할
+	// 이유가 없고, 왕복하면 담당 노드가 자기 자신에게 요청을 보내는 모양이 된다.
+	LocalNodeID() string
+	// Collect는 담당 노드에게 그 커넥션의 지표를 물어 온다.
+	//
+	// 담당 노드에 닿지 못한 경우가 에러다. DB 접속 자체의 실패는 에러가 아니라
+	// up=0 샘플로 온다(어댑터의 Metrics와 같은 규칙) — 노드는 "물어봤는데 죽어 있다"를
+	// 그대로 전달해야 하고, 그것을 에러로 바꾸면 왜 죽었는지가 사라진다.
+	Collect(ctx context.Context, conn *model.Connection) (*metric.Set, error)
+	// Introspect는 담당 노드에게 그 커넥션의 스키마를 물어 온다.
+	//
+	// 지표와 같은 이유로 필요하다. 드리프트 확인은 폴러가 주기적으로 하는 일이라
+	// 지표와 같은 자리(마스터 전용 루프)에서 돌고, 같은 이유로 담당 노드의 사설망에
+	// 닿지 못한다. 수동 확인도 같은 통로를 쓴다 — 두 경로가 다른 곳에서 읽으면
+	// "수동으로 확인하면 되는데 자동은 안 된다"가 된다.
+	Introspect(ctx context.Context, conn *model.Connection) (*schema.Schema, error)
+}
+
 // ResolveSink는 "그 문제가 끝났다"까지 알고 싶은 수신자가 함께 구현한다.
 //
 // EventSink에 합치지 않고 선택적 인터페이스로 둔 이유: 매크로 자동 실행은 해소에
@@ -105,6 +143,11 @@ type Manager struct {
 	engine *RuleEngine
 	cfg    Config
 	sink   EventSink
+	// collector는 담당 노드에 수집을 맡기는 통로다.
+	//
+	// nil일 수 있다(단일 서버 모드, 또는 시험에서 클러스터 없이 돌릴 때). nil이면
+	// 예전과 똑같이 여기서 수집한다 — 담당 노드라는 개념 자체가 없기 때문이다.
+	collector Collector
 
 	mu sync.Mutex
 	// counters는 누적 카운터의 이전 값이다. 변화율 계산에 쓴다.
@@ -140,6 +183,12 @@ func (m *Manager) SetEventSink(s EventSink) {
 	m.sink = s
 	m.engine.sink = s
 }
+
+// SetCollector는 담당 노드에 수집을 맡기는 통로를 붙인다. 부팅 시 한 번 부른다.
+//
+// 붙이지 않으면 예전과 같다(여기서 수집). 그래서 클러스터를 쓰지 않는 배포와
+// 기존 시험이 이 변경을 모른 채 그대로 돈다.
+func (m *Manager) SetCollector(c Collector) { m.collector = c }
 
 // notifyEvent는 새 이벤트를 수신자에게 알린다.
 //
@@ -343,7 +392,14 @@ func (m *Manager) pollOne(ctx context.Context, conn *model.Connection, adapter d
 //
 // applyPoll과 나눈 이유: 같은 대상을 여러 커넥션이 가리킬 때 이 부분만 한 번 하고
 // 나머지는 커넥션마다 따로 하기 위해서다.
+//
+// 담당 노드가 따로 있으면 그 노드가 읽는다. 폴러가 도는 곳은 마스터인데, 담당 노드가
+// 지정된 DB는 **마스터가 닿지 못할 수 있다** — 그 DB가 담당 노드의 사설망 안에 있고,
+// 그것이 담당 노드를 지정한 이유다. 그래서 "읽는 곳"과 "기록하는 곳"을 나눈다.
 func (m *Manager) collect(ctx context.Context, conn *model.Connection, adapter dbx.Adapter) (*metric.Set, bool) {
+	if m.collector != nil && conn.NodeID != "" && conn.NodeID != m.collector.LocalNodeID() {
+		return m.collectViaNode(ctx, conn)
+	}
 	secret, err := m.st.GetSecret(ctx, conn.ID)
 	if err != nil {
 		slog.Error("자격증명 복호화 실패", "connection", conn.Name, "err", err)
@@ -361,7 +417,87 @@ func (m *Manager) collect(ctx context.Context, conn *model.Connection, adapter d
 		set.Gauge(metric.NameUp, 0, metric.UnitCount)
 		set.AddNote("지표 수집 불가: %v", err)
 	}
+	// 실패 이유에 이 노드의 이름과 MySQL이 본 접속 주소를 남긴다.
+	//
+	// 클러스터에서 같은 커넥션은 노드에 따라 성공하기도 실패하기도 한다(계정
+	// `user@host`가 모든 노드를 덮지 못하면 그렇다). 그때 "어느 노드가 어느 주소로
+	// 갔는가"가 어디에도 안 남으면 사람은 설정과 노드 목록을 눈으로 대조해야 한다.
+	// 독립 실행 모드에서는 노드 이름이 없어 주소만 남는다.
+	if len(set.Notes) > 0 {
+		origin := dbx.ParseOrigin(set.Notes[0])
+		if m.collector != nil {
+			origin = origin.WithNode(m.localNodeLabel())
+		}
+		set.Notes[0] = origin.Annotate(set.Notes[0])
+	}
 	return set, true
+}
+
+// localNodeLabel은 이 프로세스가 도는 노드의 이름이다(독립 실행이면 빈 값).
+func (m *Manager) localNodeLabel() string {
+	if m.collector == nil {
+		return ""
+	}
+	return m.nodeLabel(context.Background(), m.collector.LocalNodeID())
+}
+
+// collectViaNode는 담당 노드에 수집을 맡기고 그 결과를 그대로 쓴다.
+//
+// 노드에 닿지 못한 경우에도 **수집 실패로 접는다.** 폴링을 건너뛰는 것과 실패로 적는 것은
+// 다르다 — 건너뛰면 상태 화면에는 마지막 성공 값이 남아 있고, 사람은 그것을 "지금도
+// 정상"으로 읽는다. 담당 노드에 못 물어본 것도 그 DB를 볼 수 없는 상태이므로 실패다.
+//
+// 값이 아니라 **이유**를 남기는 것이 중요하다. 이번 장애에서 3시간을 쓴 이유가 그것이다:
+// 화면에는 "지표 수집 불가"만 뜨고 어느 노드에 못 물어봤는지가 없었다.
+func (m *Manager) collectViaNode(ctx context.Context, conn *model.Connection) (*metric.Set, bool) {
+	nodeName := m.nodeLabel(ctx, conn.NodeID)
+
+	pollCtx, cancel := context.WithTimeout(ctx, m.cfg.Timeout)
+	defer cancel()
+
+	set, err := m.collector.Collect(pollCtx, conn)
+	if err != nil {
+		slog.Error("담당 노드에서 지표를 받지 못했습니다",
+			"connection", conn.Name, "node", nodeName, "err", err)
+		out := metric.NewSet()
+		out.Gauge(metric.NameUp, 0, metric.UnitCount)
+		// 노드 이름을 문구에 넣는다. 노드가 사라진 뒤에도 이 문구를 읽는 사람이
+		// "그 노드에 물어보러 갔었다"를 알 수 있어야 조사가 시작된다.
+		out.AddNote("담당 노드 \"%s\" 에서 지표를 받지 못했습니다: %v", nodeName, err)
+		return out, true
+	}
+	if set == nil {
+		// 노드가 빈 답을 준 경우. 정상 경로가 아니므로 실패로 적는다.
+		out := metric.NewSet()
+		out.Gauge(metric.NameUp, 0, metric.UnitCount)
+		out.AddNote("담당 노드 \"%s\" 가 지표를 돌려주지 않았습니다", nodeName)
+		return out, true
+	}
+	if set.CollectedAt.IsZero() {
+		set.CollectedAt = time.Now().UTC()
+	}
+	// 수집에 성공했더라도 **실패 이유**는 남긴다.
+	//
+	// 담당 노드는 접속 실패를 up=0 + note로 돌려준다(어댑터의 규칙). 그 note에 어느
+	// 노드가 어느 주소로 시도했는지가 없으면, 화면에는 "Access denied"만 뜨고 사람은
+	// 커넥션 설정과 노드 목록을 눈으로 대조해야 한다. 이번 장애에서 3시간을 쓴 자리다.
+	if len(set.Notes) > 0 {
+		set.Notes[0] = dbx.ParseOrigin(set.Notes[0]).WithNode(nodeName).Annotate(set.Notes[0])
+	}
+	return set, true
+}
+
+// nodeLabel은 노드의 사람이 읽는 이름을 찾는다. 못 찾으면 ID를 그대로 쓴다.
+//
+// 이름과 ID를 둘 다 두는 이유: 이름은 화면에 익숙한 값이고(담당 노드를 고를 때 본 것이
+// 이름이다), ID는 이름이 바뀌어도 남는 값이다. 조사할 때 필요한 것은 "그때 그 노드"를
+// 가리키는 확실한 값이라 이름을 못 찾으면 ID를 버리지 않는다.
+func (m *Manager) nodeLabel(ctx context.Context, nodeID string) string {
+	node, err := m.st.GetClusterNode(ctx, nodeID)
+	if err != nil || node == nil || strings.TrimSpace(node.Name) == "" {
+		return nodeID
+	}
+	return node.Name
 }
 
 // applyPoll은 수집 결과를 한 커넥션의 이력·상태·룰·드리프트에 반영한다.

@@ -13,6 +13,26 @@ import (
 	"dbstudio/internal/store"
 )
 
+// introspectForDrift는 드리프트 확인에 쓸 스키마를 읽는다.
+//
+// 담당 노드가 따로 있으면 그 노드가 읽는다. 드리프트 확인은 폴러(마스터 전용 루프)가
+// 주기적으로 하는 일이라 지표 수집과 같은 자리에서 돌고, 같은 이유로 담당 노드의
+// 사설망에 닿지 못한다. 여기서 갈라 두면 "지표는 담당 노드를 지나는데 드리프트만
+// 마스터가 읽는다"가 되고, 증상은 다시 **"일부 기능만 안 된다"** 로 나타난다.
+//
+// 노드에 못 물어본 것은 에러로 올린다 — 스키마가 없으면 비교할 것이 없으므로
+// "변경 없음"으로 접으면 조용히 감시가 멈춘다.
+func (m *Manager) introspectForDrift(ctx context.Context, conn *model.Connection, adapter dbx.Adapter, target dbx.Target) (*schema.Schema, error) {
+	// introspect는 지표 수집보다 오래 걸리므로 별도의 넉넉한 상한을 준다.
+	introCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+
+	if m.collector != nil && conn.NodeID != "" && conn.NodeID != m.collector.LocalNodeID() {
+		return m.collector.Introspect(introCtx, conn)
+	}
+	return adapter.Introspect(introCtx, target)
+}
+
 // maybeCheckDrift는 주기가 되었으면 스키마 드리프트를 확인한다.
 //
 // 드리프트 = 이 앱을 거치지 않고 대상 DB의 스키마가 변경된 상태.
@@ -48,11 +68,7 @@ func (m *Manager) maybeCheckDrift(ctx context.Context, conn *model.Connection, a
 // 반환값은 변경이 감지되었는지 여부다. rule이 nil이면 이벤트를 만들지 않고
 // 스냅샷만 갱신한다 (사용자가 수동으로 확인하는 경우).
 func (m *Manager) CheckDrift(ctx context.Context, conn *model.Connection, adapter dbx.Adapter, target dbx.Target, rule *store.Rule) error {
-	// introspect는 지표 수집보다 오래 걸리므로 별도의 넉넉한 상한을 준다.
-	introCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
-	defer cancel()
-
-	current, err := adapter.Introspect(introCtx, target)
+	current, err := m.introspectForDrift(ctx, conn, adapter, target)
 	if err != nil {
 		// 스키마를 못 읽는 것은 드리프트가 아니다. 접속 이벤트가 이미 다룬다.
 		return fmt.Errorf("introspect: %w", err)

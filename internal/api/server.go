@@ -124,9 +124,21 @@ func (s *Server) Macros() *macro.Engine { return s.macros }
 // 화면이 성공으로 보여주는 것보다 낫다.
 func (s *Server) SetNotifier(n *notify.Notifier) { s.notifier = n }
 
-// SetCluster는 클러스터 참여 상태를 붙인다. 붙이지 않으면 단일 서버로 동작한다
+// SetCluster는 이 노드의 클러스터 참여를 붙인다. 붙이지 않으면 단일 서버로 동작한다
 // (쓰기 전달도, 노드 목록도 없다).
 func (s *Server) SetCluster(cl *cluster.Cluster) { s.cluster = cl }
+
+// SetMonitorCollector는 담당 노드에 지표 수집을 맡기는 통로를 폴러에 이어 준다.
+//
+// 부팅이 이어 주는 이유: 폴러(monitor)는 그 통로가 HTTP로 다른 노드에 물어본다는 사실을
+// 몰라야 하고(알면 두 계층이 서로를 붙잡는다), 실제로 물어보는 코드는 여기(api)에 있다.
+// EventSink를 매크로·알림에 이어 주는 것과 같은 자리다.
+func (s *Server) SetMonitorCollector(mon *monitor.Manager) {
+	if mon == nil {
+		return
+	}
+	mon.SetCollector(&nodeCollector{srv: s})
+}
 
 // SetHostMonitor는 호스트 감시자를 붙인다. 붙이지 않으면 호스트 화면은
 // "수집하고 있지 않음"으로 응답한다 — 빈 그래프를 보여주는 것보다 낫다.
@@ -200,6 +212,10 @@ func (s *Server) routes() {
 	// 닿는 노드가 접속한다"가 이 경로들의 존재 이유이기 때문이다.
 	nodes.Post("/server-databases", s.handleNodeServerDatabases)
 	nodes.Post("/server-test", s.handleNodeServerTest)
+	// 읽기 중계. 마스터가 담당 노드에 "네가 읽어 달라"고 부탁하는 자리다.
+	// 담당 노드가 기록하지는 않는다 — 적는 것은 마스터의 일이다.
+	nodes.Post("/collect", s.handleNodeCollect)
+	nodes.Post("/introspect", s.handleNodeIntrospect)
 
 	// 인증 불필요
 	v1.Get("/health", s.handleHealth)

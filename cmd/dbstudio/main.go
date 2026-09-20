@@ -376,6 +376,13 @@ func serve(cfg *config.Config, run *runstate.Run, startupNote string) error {
 	sinks := monitor.FanOut{scheduler, notifier}
 	mon.SetEventSink(sinks)
 	hostMon.SetEventSink(sinks)
+	// 담당 노드에 읽기를 맡기는 통로를 이어 준다.
+	//
+	// 폴러는 마스터에서만 도는데, 담당 노드가 지정된 DB는 마스터가 닿지 못할 수 있다.
+	// 그래서 "담당 노드가 읽고 마스터가 적는다"로 나눈다. 폴러(monitor)는 그 통로가
+	// HTTP로 다른 노드에 물어본다는 사실을 모른 채 인터페이스만 알고, 실제로 물어보는
+	// 코드는 api 계층에 있다 — EventSink를 매크로·알림에 이어 주는 것과 같은 자리다.
+	srv.SetMonitorCollector(mon)
 	go func() {
 		defer applog.Recover("notify.Run")
 		notifier.Run(ctx)
