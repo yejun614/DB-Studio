@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"slices"
 	"strings"
@@ -103,6 +104,7 @@ func (s *Service) runBackup(ctx context.Context, id string, p StartBackupParams,
 	if info, serr := os.Stat(path); serr == nil {
 		stats.Size = info.Size()
 	}
+
 	s.finishBackup(ctx, id, fileName, nil, start, stats)
 
 	// 성공한 뒤에만 오래된 것을 지운다. 실패 직후에 정리를 돌리면 방금 필요해진
@@ -144,7 +146,13 @@ type dumpStats struct {
 }
 
 // writer는 크기 상한을 지키며 gzip으로 쓴다.
+//
+// ── 왜 파일이 아니라 io.Writer를 받는가 ────────────────────────────
+// 클러스터에서 담당 노드는 자기 디스크가 아니라 **마스터로 보내는 스트림**에 덤프를 써야
+// 한다(그 노드에 파일을 남기면 그 노드가 사라질 때 백업도 사라진다). file이 nil이면
+// 스트림으로 쓴다 — 덤프를 만드는 코드는 어디로 가는지 모른 채 그대로 돈다.
 type writer struct {
+	// file은 로컬 파일로 쓸 때만 있다. nil이면 스트림으로 쓴다.
 	file  *os.File
 	gz    *gzip.Writer
 	buf   *bufio.Writer
@@ -161,6 +169,16 @@ func newWriter(path string, max int64) (*writer, error) {
 	return &writer{file: f, gz: gz, buf: bufio.NewWriterSize(gz, 64*1024), max: max}, nil
 }
 
+// newStreamWriter는 로컬에 남기지 않고 곧바로 흘려보낸다.
+//
+// 임시 파일을 만들지 않는 이유: 노드에 그것을 지우는 일이 하나 더 생기고, 지우지 못한
+// 임시 파일이 조용히 디스크를 채운다. 받는 쪽(마스터)이 잘린 것을 구분할 수 있으므로
+// 중간 파일이 없어도 안전하다 — 마스터는 임시 이름에 받고 완성된 뒤에 옮긴다.
+func newStreamWriter(w io.Writer, max int64) *writer {
+	gz := gzip.NewWriter(w)
+	return &writer{gz: gz, buf: bufio.NewWriterSize(gz, 64*1024), max: max}
+}
+
 func (w *writer) WriteString(s string) error {
 	// 상한은 **압축 전 크기**로 잰다. 압축률은 데이터에 따라 10배씩 달라지므로
 	// 압축 후 크기로 재면 어떤 DB는 상한에 영영 닿지 않고 어떤 DB는 금방 걸린다.
@@ -174,15 +192,26 @@ func (w *writer) WriteString(s string) error {
 	return err
 }
 
+// Close는 남은 것을 흘려보내고 (파일이면) 닫는다.
+//
+// 스트림일 때는 gzip 마무리까지만 한다. 닫을 파일이 없으므로 부르는 쪽이 연결을
+// 닫는다 — 여기서 닫으면 부르는 쪽이 그 뒤에 할 일(이름 기록 등)을 못 한다.
 func (w *writer) Close() error {
 	if err := w.buf.Flush(); err != nil {
 		w.gz.Close()
-		w.file.Close()
+		w.closeFile()
 		return err
 	}
 	if err := w.gz.Close(); err != nil {
-		w.file.Close()
+		w.closeFile()
 		return err
+	}
+	return w.closeFile()
+}
+
+func (w *writer) closeFile() error {
+	if w.file == nil {
+		return nil
 	}
 	return w.file.Close()
 }

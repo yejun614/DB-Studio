@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
@@ -73,6 +74,16 @@ type createBackupRequest struct {
 	Note         string   `json:"note"`
 }
 
+// handleCreateBackup은 덤프를 시작한다.
+//
+// 담당 노드가 따로 있으면 그 노드가 덤프한다. 요청이 쓰기라서 리플리카에서 오면 마스터로
+// 넘어오는데, 담당 노드가 지정된 DB는 **마스터가 닿지 못할 수 있다** — 그것이 담당
+// 노드를 지정한 이유다. 그대로 두면 닿지도 못하는 마스터가 덤프를 시도하고 1045로 죽는다
+// (버전 캡처와 같은 원인).
+//
+// 지표·스키마와 다른 점이 하나 있다: 백업은 값이 아니라 **파일이 남는 일**이라 한 단계가
+// 더 필요하다. 노드가 덤프해 마스터가 받아 보관한다 — 파일이 노드에만 있으면 그 노드가
+// 사라질 때 백업도 사라진다.
 func (s *Server) handleCreateBackup(c *fiber.Ctx) error {
 	var req createBackupRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -88,6 +99,33 @@ func (s *Server) handleCreateBackup(c *fiber.Ctx) error {
 	target, err := s.requireDumpAccess(c, c.Params("id"), req.Scope)
 	if err != nil {
 		return err
+	}
+
+	// 담당 노드가 있으면 그 노드가 덤프하고, 기록은 여기서 남긴다.
+	//
+	// 기록을 마스터가 남기는 이유: 노드가 자기 메타 DB에 쓰면 다음 복제에서 사라진다
+	// (P32의 조용한 손실과 같은 자리).
+	if saved, handled, derr := s.backupOnNode(c, target.Conn, req, currentUser(c)); handled {
+		if derr != nil {
+			s.audit(c, store.AuditParams{
+				Action: "backup.start", TargetType: "connection", TargetID: target.Conn.ID,
+				Result: "error",
+				Detail: map[string]any{"name": target.Conn.Name, "error": derr.Error()},
+			})
+			return failDetail(c, fiber.StatusBadGateway, "backup_failed",
+				"백업을 시작하지 못했습니다", derr.Error())
+		}
+		if err := s.recordNodeBackup(c, target, req, saved); err != nil {
+			return err
+		}
+		s.audit(c, store.AuditParams{
+			Action: "backup.start", TargetType: "connection", TargetID: target.Conn.ID,
+			Detail: map[string]any{
+				"name": target.Conn.Name, "scope": req.Scope,
+				"file": saved, "viaNode": target.Conn.NodeID,
+			},
+		})
+		return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"fileName": saved})
 	}
 
 	id, err := s.backups.StartBackup(c.Context(), backup.StartBackupParams{
@@ -111,6 +149,48 @@ func (s *Server) handleCreateBackup(c *fiber.Ctx) error {
 		},
 	})
 	return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"backupId": id})
+}
+
+// recordNodeBackup은 담당 노드가 만든 덤프의 기록을 남긴다.
+//
+// 파일이 **이미 있으므로** 상태를 success로 시작한다. 실행 중으로 두면 끝나지 않는 작업처럼
+// 보이고, 목록에서 사람이 언제 끝났는지 알 수 없다.
+//
+// 걸린 시간·테이블 수·행 수는 알 수 없으므로 비워 둔다 — 노드가 그 값을 알려주지 않는다.
+// 모르는 값을 그럴듯하게 채우면 "덤프가 3초 걸렸다"처럼 사실이 아닌 정보가 남는다.
+func (s *Server) recordNodeBackup(c *fiber.Ctx, target *backup.Target, req createBackupRequest, fileName string) error {
+	path, err := s.backups.FilePath(fileName)
+	if err != nil {
+		return err
+	}
+	var size int64
+	if info, serr := os.Stat(path); serr == nil {
+		size = info.Size()
+	}
+	u := currentUser(c)
+	actorID, actorName := "", ""
+	if u != nil {
+		actorID, actorName = u.ID, u.Username
+	}
+
+	id, err := s.st.CreateBackup(c.Context(), store.CreateBackupParams{
+		ConnectionID: target.Conn.ID, ConnectionName: target.Conn.Name,
+		ConnectionKind: string(target.Conn.Kind),
+		Scope:          req.Scope, Format: backup.FormatFor(target.Conn.Kind),
+		Options: map[string]any{
+			"dropIfExists": req.DropIfExists,
+			"tables":       req.Tables,
+			"viaNode":      target.Conn.NodeID,
+		},
+		Note:    strings.TrimSpace(req.Note),
+		ActorID: actorID, ActorName: actorName, Trigger: "manual",
+	})
+	if err != nil {
+		return err
+	}
+	return s.st.FinishBackup(c.Context(), id, store.FinishBackupParams{
+		Status: "success", FileName: fileName, SizeBytes: size,
+	})
 }
 
 // handleListBackups는 백업 목록을 반환한다.

@@ -220,6 +220,10 @@ func (s *Server) routes() {
 	// 핸들러 안에서 어댑터를 직접 부르므로, 이 경로들이 없으면 담당 노드를 지나지 않는다.
 	nodes.Post("/logs", s.handleNodeLogs)
 	nodes.Post("/explore", s.handleNodeExplore)
+	// 백업. 담당 노드가 덤프를 만들어 본문으로 흘려보내고, 마스터가 받아 보관한다.
+	// 다른 /node/* 읽기 경로와 같은 이유로 requireMaster를 붙이지 않는다 — 담당 노드는
+	// 리플리카일 수 있고, 그 노드만 그 DB에 닿는다.
+	nodes.Post("/dump", s.handleNodeDump)
 
 	// 인증 불필요
 	v1.Get("/health", s.handleHealth)
