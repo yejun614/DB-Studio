@@ -72,9 +72,10 @@ func erdLayoutTools() []*erdTool {
 			Description: "이 초안의 도면 배치를 읽는다. 표·뷰 카드의 좌표와 크기(x, y, w, h — px, 왼쪽 위 기준), " +
 				"그룹의 사각형과 그 안에 든 카드, 메모, 표 사이의 관계(외래키 방향 자식 → 부모), " +
 				"그룹 사이를 넘는 관계(groupFlow), 지금 겹쳐 있는 카드를 반환한다. " +
-				"flow 는 관계선이 얼마나 자연스럽게 흐르는지의 점수다: backward(자식이 부모보다 왼쪽이라 " +
-				"흐름을 거스르는 선), throughCards(다른 카드를 관통하는 선), crossings(서로 교차하는 선 쌍), " +
-				"totalLength(선 길이 합) — 모두 적을수록 좋다. 재배치하기 전에 먼저 부른다. " +
+				"flow 는 관계선이 얼마나 읽기 쉬운지의 점수다: throughCards(다른 카드를 관통하는 선), " +
+				"crossings(서로 교차하는 선 쌍), totalLength(선 길이 합)는 적을수록 좋다. " +
+				"backward(자식이 부모보다 왼쪽)는 참고값이다 — 허브를 가운데 두면 자식이 양쪽에 서므로 " +
+				"0 이 목표가 아니다. 재배치하기 전에 먼저 부른다. " +
 				"카드 높이는 컬럼 수로 정해지므로 바꿀 수 없다(뷰 높이는 어림값이다). " +
 				"표가 많아 한 번에 다 들어가지 않으면 nextOffset 을 알려주므로 offset 을 바꿔 이어서 부른다.",
 			Schema: objectSchema(map[string]any{
@@ -87,8 +88,16 @@ func erdLayoutTools() []*erdTool {
 			Name: "arrange_layout",
 			Description: "표·뷰 카드와 그룹의 자리를 한 번에 바꾼다. 한 번 부른 것 전체가 한 묶음이라 " +
 				"사용자가 Ctrl+Z 한 번으로 통째로 되돌릴 수 있다. 구조(컬럼·키)는 바뀌지 않는다.\n" +
-				"관계선은 **부모(가리켜지는 표)가 왼쪽, 자식이 오른쪽**으로 흐를 때 가장 읽기 쉽다. " +
-				"그 배치를 서버가 계산하므로 표의 x, y 를 직접 계산하지 말고 묶음으로 넘긴다.\n" +
+				"표의 x, y 를 직접 계산하지 말고 묶음으로 넘긴다 — 좌표는 서버가 계산한다.\n" +
+				"- mode=\"organic\" (도면을 보기 좋게 정리할 때 권장): 도면 전체를 사람이 손으로 그린 것처럼 " +
+				"다시 놓는다. 이어진 표끼리 당기고 모든 카드가 서로 밀어내는 힘 배치라, 연결이 많은 표(허브)가 " +
+				"무리 가운데에 서고 자식들이 둘레를 감싸며, 두 무리를 잇는 표는 그 사이에 선다. 그룹은 작게 " +
+				"뭉치고 그룹 사이는 넓게 비우며, 이어진 카드는 줄을 맞추고, 아무와도 이어지지 않은 표는 도면 " +
+				"아래에 모은다. 묶음은 groups[].tables 로만 알려준다(적지 않은 기존 그룹은 지금 든 표를 " +
+				"그대로 데려가고, 어느 그룹에도 없는 표는 그룹 밖 카드로 놓인다). tables·views·blocks·" +
+				"autoPlace 는 함께 쓰지 않는다. 같은 도면·같은 묶음이면 같은 결과가 나온다.\n" +
+				"- mode 생략(manual): 아래 항목으로 원하는 부분만 고친다. 묶음 안 기본 배치는 layout=flow" +
+				"(부모가 왼쪽, 자식이 오른쪽인 열 배치)다.\n" +
 				"- groups[].tables: 그 표들을 그룹 안에 채우고 그룹 크기를 내용에 맞춘다(layout 기본 flow). " +
 				"그룹의 x, y 를 주면 그 자리에서, 생략하면 그룹의 지금 자리에서 채운다.\n" +
 				"- blocks[]: 그룹 테두리 없이 표 묶음을 같은 방식으로 채운다(그룹 밖 표용).\n" +
@@ -99,8 +108,8 @@ func erdLayoutTools() []*erdTool {
 				"- groups[] 에 tables 없이 x, y 만 주면 그룹을 옮기고, 그 안에 통째로 들어 있던 카드·메모도 " +
 				"함께 옮긴다(moveContents=false 면 그룹만).\n" +
 				"- new=true 면 그룹을 새로 만든다(label 필요, autoPlace 로 채우지 않으면 x, y 도 필요).\n" +
-				"결과의 flowBefore·flow 로 관계선 흐름이 나아졌는지 비교하고, overlaps·straddlingGroupEdge·" +
-				"backwardEdges·edgesThroughCards 가 남아 있으면 그 부분을 고쳐 다시 부른다.",
+				"결과의 flowBefore·flow 로 선이 나아졌는지(throughCards·crossings·totalLength) 비교하고, " +
+				"overlaps·straddlingGroupEdge·edgesThroughCards 가 남아 있으면 묶음을 고쳐 다시 부른다.",
 			Schema: objectSchema(map[string]any{
 				"groups": map[string]any{
 					"type":        "array",
@@ -125,6 +134,8 @@ func erdLayoutTools() []*erdTool {
 						"y": num("묶음 왼쪽 위 y (px)"),
 					}),
 				},
+				"mode": str("organic: 도면 전체를 손으로 그린 것처럼 힘 배치로 다시 놓는다(권장). " +
+					"생략하면 manual(아래 항목대로)"),
 				"autoPlace": boolp("true 면 groups[].tables·blocks 로 채운 묶음들을 관계 방향으로 서버가 놓는다"),
 				"origin": objectSchema(map[string]any{
 					"x": num("autoPlace 의 시작 x"),
@@ -471,7 +482,9 @@ type arrangeIn struct {
 		Layout  string   `json:"layout"`
 		Columns int      `json:"columns"`
 	} `json:"blocks"`
-	AutoPlace bool `json:"autoPlace"`
+	// Mode가 organic 이면 도면 전체를 힘 배치로 다시 놓는다(ai_tools_erdorganic.go).
+	Mode      string `json:"mode"`
+	AutoPlace bool   `json:"autoPlace"`
 	Origin    *struct {
 		X *float64 `json:"x"`
 		Y *float64 `json:"y"`
@@ -527,7 +540,8 @@ func erdArrangeLayout(ec *erdToolContext, args json.RawMessage) (string, error) 
 	if err := parseArgs(args, &in); err != nil {
 		return "", err
 	}
-	if len(in.Tables)+len(in.Views)+len(in.Groups)+len(in.Blocks) == 0 {
+	organic := strings.EqualFold(strings.TrimSpace(in.Mode), "organic")
+	if len(in.Tables)+len(in.Views)+len(in.Groups)+len(in.Blocks) == 0 && !organic {
 		return "", fmt.Errorf("옮길 것이 없습니다. tables·views·groups·blocks 중 하나 이상을 적어주세요")
 	}
 	gap := arrangeGapDef
@@ -599,6 +613,18 @@ func erdArrangeLayout(ec *erdToolContext, args json.RawMessage) (string, error) 
 	newGroups := 0
 	edges := flowEdges(sc)
 	flowBefore := flowMetrics(sc, sc.rects, edges, false)
+
+	switch strings.ToLower(strings.TrimSpace(in.Mode)) {
+	case "", "manual":
+	case "organic":
+		plans, moves, notes, err := planOrganic(doc, sc, &in, edges, gap)
+		if err != nil {
+			return "", err
+		}
+		return ec.commitArrangement(sc, flowBefore, plans, moves, notes)
+	default:
+		return "", fmt.Errorf("mode 는 organic 또는 manual 입니다 (%q)", in.Mode)
+	}
 
 	// 채울 묶음(표가 든 그룹, 블록)은 먼저 **자기 왼쪽 위 기준으로** 채워 크기를 안다.
 	// 자리는 그다음에 정한다 — autoPlace 는 묶음 크기를 알아야 묶음끼리를 놓을 수 있다.
@@ -750,6 +776,25 @@ func erdArrangeLayout(ec *erdToolContext, args json.RawMessage) (string, error) 
 	// 묶음끼리의 자리. autoPlace 면 묶음 사이의 관계 방향으로 열을 잡는다 — 묶음 안과
 	// 같은 규칙(부모 묶음이 왼쪽)이라, 묶음을 넘는 선도 같은 방향으로 흐른다.
 	if in.AutoPlace && len(units) > 0 {
+		// 어느 묶음에도 적지 않은 그룹 밖 표도 한 장짜리 묶음으로 함께 놓는다. 빼 두면
+		// 그 표는 제자리에 남고, 새로 놓인 묶음이 그 위를 덮는다 — 실제로 그렇게 표가
+		// 그룹 안에 갇혀 보이는 도면이 나왔다. 기존 그룹 안의 표는 그 그룹의 것이라 두고,
+		// 직접 좌표를 준 표도 그 자리가 이긴다.
+		inUnit := map[string]bool{}
+		for _, u := range units {
+			for _, k := range u.keys {
+				inUnit[k] = true
+			}
+		}
+		for _, t := range sc.tables {
+			k := t.Key()
+			if inUnit[k] || moves[k] != nil || sc.groupOf(sc.rects[k]) != nil {
+				continue
+			}
+			r := sc.rects[k]
+			units = append(units, &packUnit{name: t.Name, keys: []string{k},
+				rel: map[string]flowPoint{k: {}}, w: r.W, h: r.H})
+		}
 		if err := autoPlaceUnits(sc, units, edges, in.Origin); err != nil {
 			return "", err
 		}
@@ -770,10 +815,6 @@ func erdArrangeLayout(ec *erdToolContext, args json.RawMessage) (string, error) 
 
 	// 그룹을 따라 움직이는 내용물. 직접 자리를 정한 카드는 그 자리가 이긴다 —
 	// "그룹을 옮기되 이 표만은 여기에" 가 자연스러운 요청이기 때문이다.
-	type noteMove struct {
-		id   string
-		x, y float64
-	}
 	noteMoves := []noteMove{}
 	movedNotes := map[string]bool{}
 	views := viewKeySet(doc)
@@ -801,6 +842,20 @@ func erdArrangeLayout(ec *erdToolContext, args json.RawMessage) (string, error) 
 		}
 	}
 
+	return ec.commitArrangement(sc, flowBefore, plans, moves, noteMoves)
+}
+
+// noteMove는 메모 하나를 어디로 옮길지다(그룹을 따라 움직이는 메모).
+type noteMove struct {
+	id   string
+	x, y float64
+}
+
+// commitArrangement는 확정된 배치를 한 묶음으로 보내고, 옮긴 뒤의 도면을 다시 읽어
+// 결과를 만든다. 손으로 정한 배치와 힘 배치(organic)가 같은 길로 나간다 — 묶음 이름,
+// 순서, 결과 모양이 갈리면 한쪽만 되돌리기가 깨진다.
+func (ec *erdToolContext) commitArrangement(sc *layoutScene, flowBefore flowStats, plans []*groupPlan,
+	moves map[string]*cardMove, noteMoves []noteMove) (string, error) {
 	if total := len(plans) + len(moves) + len(noteMoves); total > arrangeMaxOps {
 		return "", fmt.Errorf("한 번에 옮길 수 있는 것은 %d개까지입니다(요청 %d개). 나눠서 부르세요", arrangeMaxOps, total)
 	}
