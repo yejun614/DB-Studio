@@ -411,11 +411,17 @@
   되돌릴 수 없는 폭이 커서 화면에만 둔다
 - 툴은 대화 중인 사용자의 권한으로 실행된다 — 권한이 없는 DB는 어시스턴트도 볼 수 없다
 - 승인 후에도 기존 안전장치(검토자 승인 수, 사전 검사, 운영 DB 확인 문구)가 그대로 적용된다
-- **ERD 초안 편집 툴 9종**(`erd_read_schema`, `erd_add_table`, `erd_update_table`,
+- **ERD 초안 편집 툴**(`erd_read_schema`, `erd_add_table`, `erd_update_table`,
   `erd_add_column`, `erd_update_column`, `erd_set_primary_key`, `erd_add_foreign_key`,
-  `erd_add_index`, `erd_duplicate_table`): 어느 초안인지 `document`(이름 또는 ID)로 받는다.
+  `erd_add_index`, `erd_duplicate_table` 등): 어느 초안인지 `document`(이름 또는 ID)로 받는다.
   **이것만 승인 없이 바로 반영된다** — 초안은 실제 DB가 아니고, 사람이 손으로 고칠 때와
   같은 경로(검증·op-log·실시간 브로드캐스트)를 지난다. 지우는 툴은 없다
+- **ERD 도면 배치 툴**(`erd_read_layout`, `erd_arrange_layout`): 표·뷰 카드와 그룹의
+  좌표를 읽고 한 번에 바꾼다. `groups[].tables` 에 표를 순서대로 주면 **격자 좌표와 그룹
+  크기는 서버가 계산한다** — 카드 높이는 컬럼 수로 정해져 모델이 덧셈을 하면 겹친다.
+  그룹만 옮기면 안에 통째로 든 카드·메모가 따라온다(`moveContents=false` 로 끈다).
+  한 호출 전체가 한 편집 묶음이라 Ctrl+Z 한 번으로 되돌아가고, 결과에 남은 겹침과
+  그룹 경계에 걸친 카드를 돌려준다. 잘못된 지시가 하나라도 있으면 아무것도 옮기지 않는다
 - **ERD 화면 안의 대화는 이 목록을 쓰지 않는다.** 초안에 매인 대화에는 문서를 고치는 툴만
   넘어가며([ERD 설계](#erd-설계-동시-편집)) `document` 를 묻지 않는다. 구현은 위의 것과
   같은 한 벌이다 — 검증이 두 곳에 갈라지면 그중 하나에서 빠진다
