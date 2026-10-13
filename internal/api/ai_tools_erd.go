@@ -301,6 +301,9 @@ func erdTools() map[string]*erdTool {
 		},
 	}
 
+	// 도면 배치 툴(ai_tools_erdlayout.go). 구조가 아니라 좌표·그룹을 다룬다.
+	list = append(list, erdLayoutTools()...)
+
 	out := make(map[string]*erdTool, len(list))
 	for _, t := range list {
 		out[t.Name] = t
@@ -331,12 +334,18 @@ func erdAITools() ([]ai.Tool, map[string]*erdTool) {
 // 열어 둔 사람들에게 브로드캐스트되는 것도 똑같다 — AI 전용 경로를 따로 만들면
 // 그중 하나가 빠지고, 빠진 것은 대개 검증이다.
 func (ec *erdToolContext) submit(kind erd.Kind, payload any) (*erd.Document, error) {
+	return ec.submitBatch(kind, payload, "")
+}
+
+// submitBatch는 submit과 같되 op에 묶음 이름을 붙인다. 같은 묶음의 op는 되돌리기가
+// 한 번에 되돌린다 — 한 번의 요청으로 여러 카드를 옮긴 것은 사람에게 한 동작이다.
+func (ec *erdToolContext) submitBatch(kind erd.Kind, payload any, batch string) (*erd.Document, error) {
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("요청을 만들 수 없습니다: %w", err)
 	}
 	op := &erd.Op{
-		ID: uuid.NewString(), Kind: kind, Payload: raw,
+		ID: uuid.NewString(), Kind: kind, Payload: raw, Batch: batch,
 		Actor: ec.tc.user.ID, ActorName: displayName(ec.tc.user),
 	}
 	doc, err := ec.tc.srv.erdHub.SubmitOp(ec.tc.ctx, ec.docID, op)
