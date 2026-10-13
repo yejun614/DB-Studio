@@ -71,7 +71,8 @@ func erdLayoutTools() []*erdTool {
 			Name: "read_layout",
 			Description: "이 초안의 도면 배치를 읽는다. 표·뷰 카드의 좌표와 크기(x, y, w, h — px, 왼쪽 위 기준), " +
 				"그룹의 사각형과 그 안에 든 카드, 메모, 표 사이의 관계(외래키 방향 자식 → 부모), " +
-				"그룹 사이를 넘는 관계(groupFlow), 지금 겹쳐 있는 카드를 반환한다. " +
+				"그룹 사이를 넘는 관계(groupFlow), 지금 겹쳐 있는 카드, 카드·그룹·메모의 지금 색(color)과 " +
+				"표 아이콘(icon)을 반환한다. " +
 				"flow 는 관계선이 얼마나 읽기 쉬운지의 점수다: throughCards(다른 카드를 관통하는 선), " +
 				"crossings(서로 교차하는 선 쌍), totalLength(선 길이 합)는 적을수록 좋다. " +
 				"backward(자식이 부모보다 왼쪽)는 참고값이다 — 허브를 가운데 두면 자식이 양쪽에 서므로 " +
@@ -178,6 +179,9 @@ type layoutCardOut struct {
 	H         float64 `json:"h"`
 	Collapsed bool    `json:"collapsed,omitempty"`
 	Group     string  `json:"group,omitempty"`
+	// Color·Icon은 지금 겉모습이다(set_appearance 로 바꾼다). 비어 있으면 기본.
+	Color string `json:"color,omitempty"`
+	Icon  string `json:"icon,omitempty"`
 	// Unplaced면 문서에 좌표가 없어 화면이 기본 자리(80, 80)에 그리고 있다.
 	Unplaced bool `json:"unplaced,omitempty"`
 }
@@ -189,6 +193,7 @@ type layoutGroupOut struct {
 	Y     float64  `json:"y"`
 	W     float64  `json:"w"`
 	H     float64  `json:"h"`
+	Color string   `json:"color,omitempty"`
 	Cards []string `json:"cards,omitempty"`
 }
 
@@ -354,7 +359,7 @@ func erdReadLayout(ec *erdToolContext, args json.RawMessage) (string, error) {
 			continue
 		}
 		r := g.Rect()
-		groups = append(groups, layoutGroupOut{ID: g.ID, Label: g.Label, X: r.X, Y: r.Y, W: r.W, H: r.H})
+		groups = append(groups, layoutGroupOut{ID: g.ID, Label: g.Label, X: r.X, Y: r.Y, W: r.W, H: r.H, Color: g.Color})
 	}
 	groupIdx := map[*erd.Group]int{}
 	for i := range groups {
@@ -378,6 +383,7 @@ func erdReadLayout(ec *erdToolContext, args json.RawMessage) (string, error) {
 		out := layoutCardOut{Name: sc.names[key], X: r.X, Y: r.Y, W: r.W, H: r.H, Unplaced: box == nil}
 		if box != nil {
 			out.Logical, out.Collapsed = box.Logical, box.Collapsed
+			out.Color, out.Icon = box.Color, box.Icon
 		}
 		if g != nil {
 			out.Group = groupName(g)
@@ -405,7 +411,11 @@ func erdReadLayout(ec *erdToolContext, args json.RawMessage) (string, error) {
 		if len(text) > 30 {
 			text = append(text[:30], '…')
 		}
-		notes = append(notes, map[string]any{"id": n.ID, "text": string(text), "x": r.X, "y": r.Y, "w": r.W, "h": r.H})
+		note := map[string]any{"id": n.ID, "text": string(text), "x": r.X, "y": r.Y, "w": r.W, "h": r.H}
+		if n.Color != "" {
+			note["color"] = n.Color
+		}
+		notes = append(notes, note)
 	}
 
 	overlaps, straddles := sc.issues()
@@ -914,7 +924,7 @@ func (ec *erdToolContext) commitArrangement(sc *layoutScene, flowBefore flowStat
 			continue
 		}
 		r := g.Rect()
-		groups = append(groups, layoutGroupOut{ID: g.ID, Label: g.Label, X: r.X, Y: r.Y, W: r.W, H: r.H})
+		groups = append(groups, layoutGroupOut{ID: g.ID, Label: g.Label, X: r.X, Y: r.Y, W: r.W, H: r.H, Color: g.Color})
 	}
 	res := map[string]any{
 		"ok":         true,

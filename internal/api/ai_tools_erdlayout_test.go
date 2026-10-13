@@ -202,7 +202,7 @@ func TestERDLayoutToolsAreExposedToAssistant(t *testing.T) {
 	for _, tool := range erdDocTools() {
 		names[tool.Name] = true
 	}
-	for _, want := range []string{"erd_read_layout", "erd_arrange_layout"} {
+	for _, want := range []string{"erd_read_layout", "erd_arrange_layout", "erd_set_appearance"} {
 		if !names[want] {
 			t.Errorf("%s 이(가) 일반 툴 상자에 없습니다", want)
 		}

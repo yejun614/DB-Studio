@@ -303,6 +303,8 @@ func erdTools() map[string]*erdTool {
 
 	// 도면 배치 툴(ai_tools_erdlayout.go). 구조가 아니라 좌표·그룹을 다룬다.
 	list = append(list, erdLayoutTools()...)
+	// 겉모습(색·아이콘) 툴(ai_tools_erdappearance.go).
+	list = append(list, erdAppearanceTools()...)
 
 	out := make(map[string]*erdTool, len(list))
 	for _, t := range list {
