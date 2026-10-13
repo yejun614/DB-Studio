@@ -52,7 +52,7 @@ func TestERDArrangeFillsGroupWithoutOverlap(t *testing.T) {
 	e, ec, impls := layoutFixture(t)
 
 	out, err := impls["arrange_layout"].Run(ec, json.RawMessage(`{
-		"groups":[{"new":true,"label":"주문","x":1000,"y":500,"tables":["users","orders","items"],"columns":2}]
+		"groups":[{"new":true,"label":"주문","x":1000,"y":500,"tables":["users","orders","items"],"layout":"grid","columns":2}]
 	}`))
 	if err != nil {
 		t.Fatalf("arrange_layout: %v", err)

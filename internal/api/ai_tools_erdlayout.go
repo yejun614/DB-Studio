@@ -22,9 +22,10 @@ import (
 //
 // 좌표 계산을 모델에게 전부 맡기지 않는 이유: 카드 높이는 컬럼 수로 정해지고 폭은
 // 카드마다 다르다. 모델이 그 덧셈을 표마다 하면 반드시 몇 개는 틀리고, 틀린 것은
-// 겹친 카드로 나타난다. 그래서 "이 표들을 이 그룹에 이 순서로" 만 받으면 격자 채우기와
-// 그룹 크기 맞추기는 서버가 한다. 모델은 **무엇을 어디에 둘지**를 정하고, **몇 px 인지**는
-// 서버가 정한다.
+// 겹친 카드로 나타난다. 관계선의 흐름은 더 그렇다 — 표 스무 개의 열과 순서를 머릿속으로
+// 정해 선이 엇갈리지 않게 하는 것은 계산이지 판단이 아니다. 그래서 "이 표들을 한 묶음으로"
+// 만 받으면 흐름 배치(ai_tools_erdflow.go)와 그룹 크기 맞추기는 서버가 한다. 모델은
+// **무엇을 함께 둘지**를 정하고, **어느 열 몇 px 인지**는 서버가 정한다.
 
 const (
 	// 그룹 안 격자의 여백. 머리 여백은 그룹 이름(erdcanvas.js 의 y=22)이 카드에
@@ -46,12 +47,34 @@ const (
 
 // erdLayoutTools는 배치 툴 정의다. erdTools 가 이것을 함께 등록한다.
 func erdLayoutTools() []*erdTool {
+	packFields := func(extra map[string]any) map[string]any {
+		props := map[string]any{
+			"tables": map[string]any{
+				"type": "array",
+				"description": "채울 표 이름. layout=flow 면 순서는 동점일 때만 쓰이고 자리는 관계가 정한다. " +
+					"layout=grid 면 적은 순서대로 왼쪽→오른쪽, 위→아래",
+				"items": map[string]any{"type": "string"},
+			},
+			"layout": str("flow(기본): 관계 방향으로 열을 나눠 부모를 왼쪽, 자식을 오른쪽에 두고 " +
+				"선이 엇갈리지 않게 순서를 정하며 자식을 부모 높이에 맞춘다. " +
+				"grid: 관계와 상관없이 적은 순서대로 격자에 채운다(관계가 거의 없는 묶음용)"),
+			"columns": num("layout=grid 일 때 열 수 (생략하면 표 수의 제곱근)"),
+		}
+		for k, v := range extra {
+			props[k] = v
+		}
+		return objectSchema(props)
+	}
+
 	return []*erdTool{
 		{
 			Name: "read_layout",
 			Description: "이 초안의 도면 배치를 읽는다. 표·뷰 카드의 좌표와 크기(x, y, w, h — px, 왼쪽 위 기준), " +
 				"그룹의 사각형과 그 안에 든 카드, 메모, 표 사이의 관계(외래키 방향 자식 → 부모), " +
-				"지금 겹쳐 있는 카드를 반환한다. 재배치하기 전에 먼저 부른다. " +
+				"그룹 사이를 넘는 관계(groupFlow), 지금 겹쳐 있는 카드를 반환한다. " +
+				"flow 는 관계선이 얼마나 자연스럽게 흐르는지의 점수다: backward(자식이 부모보다 왼쪽이라 " +
+				"흐름을 거스르는 선), throughCards(다른 카드를 관통하는 선), crossings(서로 교차하는 선 쌍), " +
+				"totalLength(선 길이 합) — 모두 적을수록 좋다. 재배치하기 전에 먼저 부른다. " +
 				"카드 높이는 컬럼 수로 정해지므로 바꿀 수 없다(뷰 높이는 어림값이다). " +
 				"표가 많아 한 번에 다 들어가지 않으면 nextOffset 을 알려주므로 offset 을 바꿔 이어서 부른다.",
 			Schema: objectSchema(map[string]any{
@@ -64,18 +87,52 @@ func erdLayoutTools() []*erdTool {
 			Name: "arrange_layout",
 			Description: "표·뷰 카드와 그룹의 자리를 한 번에 바꾼다. 한 번 부른 것 전체가 한 묶음이라 " +
 				"사용자가 Ctrl+Z 한 번으로 통째로 되돌릴 수 있다. 구조(컬럼·키)는 바뀌지 않는다.\n" +
-				"- tables/views: 카드를 지정한 좌표로 옮긴다(x, y 는 카드의 왼쪽 위).\n" +
-				"- groups[].tables: 그 표들을 **적은 순서대로** 그룹 안에 격자로 채우고 그룹 크기를 " +
-				"내용에 맞춘다. 좌표 계산은 서버가 하므로 겹치지 않는다. 그룹의 x, y 를 주면 그 자리에서, " +
-				"생략하면 그룹의 지금 자리에서 채운다. 관계가 있는 표끼리 이웃하게 순서를 정하는 것이 요점이다.\n" +
+				"관계선은 **부모(가리켜지는 표)가 왼쪽, 자식이 오른쪽**으로 흐를 때 가장 읽기 쉽다. " +
+				"그 배치를 서버가 계산하므로 표의 x, y 를 직접 계산하지 말고 묶음으로 넘긴다.\n" +
+				"- groups[].tables: 그 표들을 그룹 안에 채우고 그룹 크기를 내용에 맞춘다(layout 기본 flow). " +
+				"그룹의 x, y 를 주면 그 자리에서, 생략하면 그룹의 지금 자리에서 채운다.\n" +
+				"- blocks[]: 그룹 테두리 없이 표 묶음을 같은 방식으로 채운다(그룹 밖 표용).\n" +
+				"- autoPlace=true: 채운 그룹·블록들을 **묶음 사이의 관계 방향**으로 서버가 놓는다" +
+				"(부모 묶음이 왼쪽). 이때 그룹·블록의 x, y 는 무시되고 origin(생략하면 그 표들의 지금 " +
+				"왼쪽 위)에서 시작한다. 여러 묶음을 한꺼번에 정리할 때 쓴다.\n" +
+				"- tables/views: 카드 하나를 지정한 좌표로 옮긴다(x, y 는 카드의 왼쪽 위). 미세 조정용.\n" +
 				"- groups[] 에 tables 없이 x, y 만 주면 그룹을 옮기고, 그 안에 통째로 들어 있던 카드·메모도 " +
 				"함께 옮긴다(moveContents=false 면 그룹만).\n" +
-				"- new=true 면 그룹을 새로 만든다(label 과 x, y 필요).\n" +
-				"결과에 옮긴 뒤에도 겹치는 카드와 그룹 경계에 걸친 카드를 알려주므로, 남아 있으면 고쳐서 다시 부른다.",
+				"- new=true 면 그룹을 새로 만든다(label 필요, autoPlace 로 채우지 않으면 x, y 도 필요).\n" +
+				"결과의 flowBefore·flow 로 관계선 흐름이 나아졌는지 비교하고, overlaps·straddlingGroupEdge·" +
+				"backwardEdges·edgesThroughCards 가 남아 있으면 그 부분을 고쳐 다시 부른다.",
 			Schema: objectSchema(map[string]any{
+				"groups": map[string]any{
+					"type":        "array",
+					"description": "채우거나 옮길 그룹 목록",
+					"items": packFields(map[string]any{
+						"group": str("그룹 ID 또는 이름 (new=true 면 생략)"),
+						"new":   boolp("true 면 그룹을 새로 만든다"),
+						"label": str("그룹 이름 (새로 만들 때 필수, 기존 그룹이면 이름 바꾸기)"),
+						"x":     num("그룹 왼쪽 위 x (px)"),
+						"y":     num("그룹 왼쪽 위 y (px)"),
+						"w":     num("폭 (선택). tables 를 주면 내용에 맞춘 값보다 작아지지 않는다"),
+						"h":     num("높이 (선택). tables 를 주면 내용에 맞춘 값보다 작아지지 않는다"),
+						"moveContents": boolp(
+							"tables 없이 그룹을 옮길 때 안에 든 카드·메모도 함께 옮긴다 (기본 true)"),
+					}),
+				},
+				"blocks": map[string]any{
+					"type":        "array",
+					"description": "그룹 테두리 없이 채울 표 묶음 (autoPlace 가 아니면 x, y 필요)",
+					"items": packFields(map[string]any{
+						"x": num("묶음 왼쪽 위 x (px)"),
+						"y": num("묶음 왼쪽 위 y (px)"),
+					}),
+				},
+				"autoPlace": boolp("true 면 groups[].tables·blocks 로 채운 묶음들을 관계 방향으로 서버가 놓는다"),
+				"origin": objectSchema(map[string]any{
+					"x": num("autoPlace 의 시작 x"),
+					"y": num("autoPlace 의 시작 y"),
+				}),
 				"tables": map[string]any{
 					"type":        "array",
-					"description": "좌표를 직접 정할 표 목록",
+					"description": "좌표를 직접 정할 표 목록 (묶음에 넣은 표는 여기 적지 않는다)",
 					"items": objectSchema(map[string]any{
 						"table": str("테이블 이름"),
 						"x":     num("왼쪽 위 x (px)"),
@@ -85,35 +142,14 @@ func erdLayoutTools() []*erdTool {
 				},
 				"views": map[string]any{
 					"type":        "array",
-					"description": "좌표를 직접 정할 뷰 목록",
+					"description": "좌표를 직접 정할 뷰 목록. 뷰는 표를 읽는 것이라 표들의 오른쪽 끝에 둔다",
 					"items": objectSchema(map[string]any{
 						"view": str("뷰 이름"),
 						"x":    num("왼쪽 위 x (px)"),
 						"y":    num("왼쪽 위 y (px)"),
 					}, "view", "x", "y"),
 				},
-				"groups": map[string]any{
-					"type":        "array",
-					"description": "옮기거나 채울 그룹 목록",
-					"items": objectSchema(map[string]any{
-						"group": str("그룹 ID 또는 이름 (new=true 면 생략)"),
-						"new":   boolp("true 면 그룹을 새로 만든다"),
-						"label": str("그룹 이름 (새로 만들 때 필수, 기존 그룹이면 이름 바꾸기)"),
-						"x":     num("그룹 왼쪽 위 x (px)"),
-						"y":     num("그룹 왼쪽 위 y (px)"),
-						"w":     num("폭 (선택). tables 를 주면 내용에 맞춘 값보다 작아지지 않는다"),
-						"h":     num("높이 (선택). tables 를 주면 내용에 맞춘 값보다 작아지지 않는다"),
-						"tables": map[string]any{
-							"type":        "array",
-							"description": "이 그룹 안에 채울 표 이름 (적은 순서대로 왼쪽→오른쪽, 위→아래)",
-							"items":       map[string]any{"type": "string"},
-						},
-						"columns": num("그룹 안 격자의 열 수 (생략하면 표 수의 제곱근)"),
-						"moveContents": boolp(
-							"tables 없이 그룹을 옮길 때 안에 든 카드·메모도 함께 옮긴다 (기본 true)"),
-					}),
-				},
-				"gap": num("그룹 안 카드 사이 간격 px (기본 40, 16~200)"),
+				"gap": num("묶음 안 카드 사이 간격 px (기본 40, 16~200). flow 의 열 사이는 이것의 두 배"),
 			}),
 			Run: erdArrangeLayout,
 		},
@@ -213,32 +249,13 @@ func (sc *layoutScene) groupOf(r erd.Rect) *erd.Group {
 }
 
 // relations는 표 사이의 관계(자식 → 부모)를 한 쌍에 한 줄로 만든다.
-func (sc *layoutScene) relations(only map[string]bool) []string {
-	seen := map[string]bool{}
+func (sc *layoutScene) relations(edges []flowEdge, only map[string]bool) []string {
 	out := []string{}
-	for _, t := range sc.tables {
-		for _, fk := range t.ForeignKeys {
-			ns := fk.RefNamespace
-			if ns == "" {
-				ns = t.Namespace
-			}
-			to := strings.ToLower(qualified(ns, fk.RefTable))
-			if to == t.Key() {
-				continue
-			}
-			if _, ok := sc.names[to]; !ok {
-				continue
-			}
-			if only != nil && !only[t.Key()] && !only[to] {
-				continue
-			}
-			line := sc.names[t.Key()] + " → " + sc.names[to]
-			if seen[line] {
-				continue
-			}
-			seen[line] = true
-			out = append(out, line)
+	for _, e := range edges {
+		if only != nil && !only[e.child] && !only[e.parent] {
+			continue
 		}
+		out = append(out, sc.names[e.child]+" → "+sc.names[e.parent])
 	}
 	return out
 }
@@ -381,13 +398,20 @@ func erdReadLayout(ec *erdToolContext, args json.RawMessage) (string, error) {
 	}
 
 	overlaps, straddles := sc.issues()
+	edges := flowEdges(sc)
 	res := map[string]any{
 		"document":  doc.Name,
 		"cardCount": len(all),
 		"offset":    start,
 		"cards":     cards,
 		"groups":    groups,
-		"relations": sc.relations(shown),
+		"relations": sc.relations(edges, shown),
+		// 흐름 점수는 언제나 **도면 전체**의 것이다. 나눠 읽는 중이어도 고칠 대상은
+		// 도면 하나이고, 페이지마다 다른 숫자를 주면 비교할 수가 없다.
+		"flow": flowMetrics(sc, sc.rects, edges, true),
+	}
+	if gf := groupFlow(sc, edges); len(gf) > 0 {
+		res["groupFlow"] = gf
 	}
 	if len(notes) > 0 {
 		res["notes"] = notes
@@ -437,9 +461,45 @@ type arrangeIn struct {
 		H            *float64 `json:"h"`
 		Tables       []string `json:"tables"`
 		Columns      int      `json:"columns"`
+		Layout       string   `json:"layout"`
 		MoveContents *bool    `json:"moveContents"`
 	} `json:"groups"`
+	Blocks []struct {
+		X       *float64 `json:"x"`
+		Y       *float64 `json:"y"`
+		Tables  []string `json:"tables"`
+		Layout  string   `json:"layout"`
+		Columns int      `json:"columns"`
+	} `json:"blocks"`
+	AutoPlace bool `json:"autoPlace"`
+	Origin    *struct {
+		X *float64 `json:"x"`
+		Y *float64 `json:"y"`
+	} `json:"origin"`
 	Gap *float64 `json:"gap"`
+}
+
+// groupPlan은 그룹 하나에 보낼 op 다.
+type groupPlan struct {
+	add     bool
+	payload map[string]any
+	name    string
+	// 그룹만 옮길 때 함께 옮길 내용물(옛 자리 기준)과 이동량.
+	follow bool
+	old    erd.Rect
+	dx, dy float64
+}
+
+// packUnit은 한 덩어리로 채워 놓는 묶음이다(표를 채우는 그룹, 또는 테두리 없는 블록).
+type packUnit struct {
+	name string
+	// plan이 있으면 그룹이다. 자리가 정해지면 그룹의 좌표·크기도 함께 정해진다.
+	plan *groupPlan
+	keys []string
+	// rel은 묶음 왼쪽 위 기준의 카드 자리다(그룹이면 안쪽 여백까지 들어 있다).
+	rel  map[string]flowPoint
+	w, h float64
+	x, y float64
 }
 
 // cardMove는 카드 하나를 어디로 옮길지다.
@@ -467,8 +527,8 @@ func erdArrangeLayout(ec *erdToolContext, args json.RawMessage) (string, error) 
 	if err := parseArgs(args, &in); err != nil {
 		return "", err
 	}
-	if len(in.Tables)+len(in.Views)+len(in.Groups) == 0 {
-		return "", fmt.Errorf("옮길 것이 없습니다. tables·views·groups 중 하나 이상을 적어주세요")
+	if len(in.Tables)+len(in.Views)+len(in.Groups)+len(in.Blocks) == 0 {
+		return "", fmt.Errorf("옮길 것이 없습니다. tables·views·groups·blocks 중 하나 이상을 적어주세요")
 	}
 	gap := arrangeGapDef
 	if in.Gap != nil {
@@ -534,18 +594,50 @@ func erdArrangeLayout(ec *erdToolContext, args json.RawMessage) (string, error) 
 		}
 	}
 
-	type groupPlan struct {
-		add     bool
-		payload map[string]any
-		name    string
-		// 그룹만 옮길 때 함께 옮길 내용물(옛 자리 기준)과 이동량.
-		follow bool
-		old    erd.Rect
-		dx, dy float64
-	}
 	plans := []*groupPlan{}
 	touched := map[string]bool{}
 	newGroups := 0
+	edges := flowEdges(sc)
+	flowBefore := flowMetrics(sc, sc.rects, edges, false)
+
+	// 채울 묶음(표가 든 그룹, 블록)은 먼저 **자기 왼쪽 위 기준으로** 채워 크기를 안다.
+	// 자리는 그다음에 정한다 — autoPlace 는 묶음 크기를 알아야 묶음끼리를 놓을 수 있다.
+	units := []*packUnit{}
+	pack := func(where string, names []string, layout string, columns int, padX, padTop, padBot float64) (*packUnit, error) {
+		u := &packUnit{name: where, rel: map[string]flowPoint{}}
+		items := make([]packItem, 0, len(names))
+		seen := map[string]bool{}
+		for _, name := range names {
+			tbl := findERDTable(doc, name)
+			if tbl == nil {
+				return nil, fmt.Errorf("%s: 테이블 %q을(를) 찾을 수 없습니다", where, name)
+			}
+			if seen[tbl.Key()] {
+				return nil, fmt.Errorf("%s: %s 을(를) 두 번 적었습니다", where, tbl.Name)
+			}
+			seen[tbl.Key()] = true
+			r := sc.rects[tbl.Key()]
+			items = append(items, packItem{id: tbl.Key(), w: r.W, h: r.H})
+		}
+		var rel map[string]flowPoint
+		var cw, ch float64
+		switch strings.ToLower(strings.TrimSpace(layout)) {
+		case "", "flow":
+			// 열 사이는 줄 사이보다 넓게 둔다. 선이 지나가고 까마귀발이 놓일 자리다.
+			rel, cw, ch = packFlow(items, edges, max(2*gap, 80), gap, arrangeFlowRows)
+		case "grid":
+			rel, cw, ch = packGrid(items, columns, gap)
+		default:
+			return nil, fmt.Errorf("%s: layout 은 flow 또는 grid 입니다 (%q)", where, layout)
+		}
+		for _, it := range items {
+			p := rel[it.id]
+			u.rel[it.id] = flowPoint{x: p.x + padX, y: p.y + padTop}
+			u.keys = append(u.keys, it.id)
+		}
+		u.w, u.h = cw+2*padX, ch+padTop+padBot
+		return u, nil
+	}
 
 	for i, gi := range in.Groups {
 		p := &groupPlan{payload: map[string]any{}}
@@ -558,8 +650,9 @@ func erdArrangeLayout(ec *erdToolContext, args json.RawMessage) (string, error) 
 			if label == "" {
 				return "", fmt.Errorf("groups[%d]: 새 그룹에는 label 이 필요합니다", i)
 			}
-			if gi.X == nil || gi.Y == nil {
-				return "", fmt.Errorf("groups[%d]: 새 그룹 %q 에는 x, y 가 필요합니다", i, label)
+			if (gi.X == nil || gi.Y == nil) && (!in.AutoPlace || len(gi.Tables) == 0) {
+				return "", fmt.Errorf("groups[%d]: 새 그룹 %q 에는 x, y 가 필요합니다"+
+					"(autoPlace 로 표를 채울 때는 빼도 됩니다)", i, label)
 			}
 			newGroups++
 			if len(doc.Groups)+newGroups > erd.MaxGroups {
@@ -607,69 +700,72 @@ func erdArrangeLayout(ec *erdToolContext, args json.RawMessage) (string, error) 
 			h = *gi.H
 		}
 
-		if len(gi.Tables) > 0 {
-			// 그룹 안 격자 채우기. 열마다 가장 넓은 카드, 줄마다 가장 높은 카드에 맞춰
-			// 칸을 잡는다 — 칸 크기를 하나로 두면 컬럼 많은 표 하나 때문에 모든 줄이 벌어진다.
-			keys := make([]string, 0, len(gi.Tables))
-			for _, name := range gi.Tables {
-				tbl := findERDTable(doc, name)
-				if tbl == nil {
-					return "", fmt.Errorf("groups[%d]: 테이블 %q을(를) 찾을 수 없습니다", i, name)
-				}
-				keys = append(keys, tbl.Key())
-			}
-			cols := gi.Columns
-			if cols <= 0 {
-				cols = int(math.Ceil(math.Sqrt(float64(len(keys)))))
-			}
-			cols = min(cols, len(keys))
-			rows := (len(keys) + cols - 1) / cols
-
-			colW := make([]float64, cols)
-			rowH := make([]float64, rows)
-			for idx, k := range keys {
-				colW[idx%cols] = max(colW[idx%cols], sc.rects[k].W)
-				rowH[idx/cols] = max(rowH[idx/cols], sc.rects[k].H)
-			}
-			for idx, k := range keys {
-				c, r := idx%cols, idx/cols
-				x := gx + arrangePadX
-				for j := 0; j < c; j++ {
-					x += colW[j] + gap
-				}
-				y := gy + arrangePadTop
-				for j := 0; j < r; j++ {
-					y += rowH[j] + gap
-				}
-				if err := claim(&cardMove{key: k, x: math.Round(x), y: math.Round(y), by: "그룹 " + p.name}); err != nil {
-					return "", err
-				}
-			}
-			needW := 2*arrangePadX + gap*float64(cols-1)
-			for _, v := range colW {
-				needW += v
-			}
-			needH := arrangePadTop + arrangePadBot + gap*float64(rows-1)
-			for _, v := range rowH {
-				needH += v
+		switch {
+		case len(gi.Tables) > 0:
+			u, err := pack("그룹 "+p.name, gi.Tables, gi.Layout, gi.Columns, arrangePadX, arrangePadTop, arrangePadBot)
+			if err != nil {
+				return "", err
 			}
 			// 크기를 직접 준 경우에도 내용보다 작아지지는 않는다 — 작아지면 방금 채운
 			// 카드가 그룹 경계에 걸친다.
-			if gi.W == nil || w < needW {
-				w = needW
+			if gi.W != nil {
+				u.w = max(u.w, w)
 			}
-			if gi.H == nil || h < needH {
-				h = needH
+			if gi.H != nil {
+				u.h = max(u.h, h)
 			}
-		} else if !p.add && (gx != cur.X || gy != cur.Y) && (gi.MoveContents == nil || *gi.MoveContents) {
+			u.plan = p
+			u.x, u.y = gx, gy
+			units = append(units, u)
+		case !p.add && (gx != cur.X || gy != cur.Y) && (gi.MoveContents == nil || *gi.MoveContents):
 			p.follow = true
 			p.old = cur.Rect()
 			p.dx, p.dy = gx-cur.X, gy-cur.Y
 		}
-		if gi.W != nil || gi.H != nil || len(gi.Tables) > 0 || p.add {
+		if gi.W != nil || gi.H != nil || p.add {
 			p.payload["w"], p.payload["h"] = math.Round(w), math.Round(h)
 		}
 		plans = append(plans, p)
+	}
+
+	for i, bi := range in.Blocks {
+		if len(bi.Tables) == 0 {
+			return "", fmt.Errorf("blocks[%d]: tables 가 비어 있습니다", i)
+		}
+		u, err := pack(fmt.Sprintf("blocks[%d]", i), bi.Tables, bi.Layout, bi.Columns, 0, 0, 0)
+		if err != nil {
+			return "", err
+		}
+		if !in.AutoPlace {
+			if u.x, err = checkCoord(u.name, bi.X); err != nil {
+				return "", err
+			}
+			if u.y, err = checkCoord(u.name, bi.Y); err != nil {
+				return "", err
+			}
+		}
+		units = append(units, u)
+	}
+
+	// 묶음끼리의 자리. autoPlace 면 묶음 사이의 관계 방향으로 열을 잡는다 — 묶음 안과
+	// 같은 규칙(부모 묶음이 왼쪽)이라, 묶음을 넘는 선도 같은 방향으로 흐른다.
+	if in.AutoPlace && len(units) > 0 {
+		if err := autoPlaceUnits(sc, units, edges, in.Origin); err != nil {
+			return "", err
+		}
+	}
+
+	for _, u := range units {
+		if u.plan != nil {
+			u.plan.payload["x"], u.plan.payload["y"] = u.x, u.y
+			u.plan.payload["w"], u.plan.payload["h"] = math.Round(u.w), math.Round(u.h)
+		}
+		for _, k := range u.keys {
+			r := u.rel[k]
+			if err := claim(&cardMove{key: k, x: math.Round(u.x + r.x), y: math.Round(u.y + r.y), by: u.name}); err != nil {
+				return "", err
+			}
+		}
 	}
 
 	// 그룹을 따라 움직이는 내용물. 직접 자리를 정한 카드는 그 자리가 이긴다 —
@@ -755,6 +851,7 @@ func erdArrangeLayout(ec *erdToolContext, args json.RawMessage) (string, error) 
 	}
 	asc := newLayoutScene(after)
 	overlaps, straddles := asc.issues()
+	flowAfter := flowMetrics(asc, asc.rects, flowEdges(asc), true)
 	groups := []layoutGroupOut{}
 	for _, p := range plans {
 		g := after.Group(p.payload["id"].(string))
@@ -769,6 +866,10 @@ func erdArrangeLayout(ec *erdToolContext, args json.RawMessage) (string, error) 
 		"movedCards": len(moves),
 		"movedNotes": len(noteMoves),
 		"groups":     groups,
+		// 전후를 함께 준다. 숫자가 나빠졌으면 모델이 그 사실을 보고 고치거나 알려야 한다 —
+		// "정리했습니다"는 이 숫자가 좋아졌을 때만 할 수 있는 말이다.
+		"flowBefore": flowBefore,
+		"flow":       flowAfter,
 		"note":       "한 묶음으로 반영했습니다. 사용자가 도면에서 Ctrl+Z 한 번으로 통째로 되돌릴 수 있습니다.",
 	}
 	if len(overlaps) > 0 {
