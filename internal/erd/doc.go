@@ -498,40 +498,12 @@ func (r cardRect) overlaps(o cardRect) bool {
 func (d *Document) occupiedRects() []cardRect {
 	out := make([]cardRect, 0, len(d.Layout)+len(d.Notes)+len(d.Groups))
 
-	cols := make(map[string]int, len(d.Schema.Tables))
-	for _, t := range d.Schema.Tables {
-		cols[t.Key()] = len(t.Columns)
-	}
-	views := make(map[string]bool, len(d.Schema.Views))
-	for _, v := range d.Schema.Views {
-		views[v.Key()] = true
-	}
-
+	size := d.cardSizer()
 	for key, b := range d.Layout {
 		if b == nil {
 			continue
 		}
-		w := b.W
-		if w <= 0 {
-			w = cardDefW
-		}
-		var h float64
-		switch {
-		case b.Collapsed:
-			h = cardHeadH
-		case views[key]:
-			// 뷰 카드의 높이는 정의문이 몇 줄로 접히는지에 달려 있고, 그것은
-			// 폭을 아는 그리는 쪽만 안다. 격자 한 칸으로 넉넉히 잡는다.
-			h = layoutStepY
-		default:
-			n, ok := cols[key]
-			if !ok {
-				// 스키마에 없는 키다(지워진 표의 좌표가 남은 것). 격자 한 칸으로 둔다.
-				h = layoutStepY
-			} else {
-				h = CardHeight(n)
-			}
-		}
+		w, h := size(key)
 		out = append(out, cardRect{x: b.X, y: b.Y, w: w, h: h})
 	}
 
