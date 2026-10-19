@@ -358,6 +358,13 @@ func (s *Store) RollupHourly(ctx context.Context) (int64, error) {
 	// 소수점 자리수까지 timeLayout과 정확히 같게 맞춰야 한다 —
 	// 자리수가 다르면 조회 시 문자열 비교가 시간 순서와 어긋난다.
 	// ON CONFLICT로 재실행 시 같은 결과가 되도록(멱등) 만든다.
+	//
+	// 이미 있는 버킷은 **샘플이 늘었을 때만** 고친다(늦게 들어온 샘플). 조건이 없으면 두 가지가
+	// 틀어진다. 하나, 원본 보존기간(48시간) 안의 끝난 버킷을 10분마다 전부 같은 값으로 다시
+	// 쓰는데, SQLite는 값이 같아도 UPDATE로 치므로 복제 트리거가 행마다 로그를 남긴다 —
+	// 클러스터와 D1로 아무것도 바뀌지 않은 수천 행이 나간다. 둘, 보존기간 경계에 걸친 가장
+	// 오래된 버킷은 원본이 절반쯤 지워진 채로 다시 집계되어, 이미 맞게 적힌 평균을 반쪽
+	// 평균으로 덮는다.
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO metric_hourly (connection_id, metric, bucket, unit, samples, avg_value, min_value, max_value)
 		SELECT connection_id, metric,
@@ -371,7 +378,8 @@ func (s *Store) RollupHourly(ctx context.Context) (int64, error) {
 			avg_value = excluded.avg_value,
 			min_value = excluded.min_value,
 			max_value = excluded.max_value,
-			unit = excluded.unit`, cutoff)
+			unit = excluded.unit
+		WHERE excluded.samples > metric_hourly.samples`, cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("rollup hourly: %w", err)
 	}

@@ -29,6 +29,8 @@ import (
 // 보내기 시작하면 D1의 쓰기 한도가 지표에 다 쓰인다.
 var cloudSkip = map[string]bool{
 	"metric_samples":   true, // 원본 지표. 보존 기간 48시간짜리 시계열이다
+	"metric_hourly":    true, // 원본을 시간 단위로 접은 것. 이 노드가 수집한 만큼만 있다
+	"events":           true, // 감시가 낸 경보. 열려 있는 동안 폴링마다 횟수가 오르고, 이 컴퓨터의 경보도 섞여 있다
 	"host_samples":     true, // 이 컴퓨터의 지표
 	"connection_state": true, // 폴링마다 덮어쓰는 "지금 상태"
 	"host_state":       true,
@@ -39,6 +41,17 @@ var cloudSkip = map[string]bool{
 
 // CloudSkipped는 D1로 보내지 않는 표인지 본다.
 func CloudSkipped(table string) bool { return replSkip[table] || cloudSkip[table] }
+
+// CloudSkipList는 cloudSkip의 표 이름을 정렬해 돌려준다. 목록이 늘었는지 알아보는 데 쓴다 —
+// 늘어난 표의 행은 예전 판이 이미 D1에 올려 두었으므로 지워야 한다.
+func CloudSkipList() []string {
+	out := make([]string, 0, len(cloudSkip))
+	for t := range cloudSkip {
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out
+}
 
 // CloudTables는 D1로 보낼 표 목록이다.
 func (s *Store) CloudTables(ctx context.Context) ([]string, error) {
@@ -67,6 +80,7 @@ const (
 	StateD1PushedSeq    = "d1.pushed_seq"
 	StateD1FullNeeded   = "d1.full_needed"
 	StateD1SchemaVer    = "d1.schema_version"
+	StateD1SkipList     = "d1.skip_list"
 	StateObjLastBackup  = "objstore.last_backup_at"
 	StateObjLastAttempt = "objstore.last_attempt_at"
 )

@@ -30,9 +30,15 @@ import (
 //
 // 이 덕분에 이 값을 읽는 쪽(clusterRoute, 지표 묶음 키, 화면)은 서버가 생긴 것을
 // 몰라도 된다 — model.Connection만 보면 된다.
+//
+// 연결 확인 칸도 같은 이유로 여기서 합친다. 확인 결과는 두 곳에 있다: "테스트" 버튼이
+// 쓰는 connections.last_check_*, 모니터가 폴링마다 쓰는 connection_state. 둘 중 더 새
+// 것을 보인다. 폴러가 connections에 직접 쓰지 않는 이유는 RecordConnectionCheck 참고.
 const connColumns = `c.id, c.name, s.kind, c.environment, s.host, s.port, c.database_name,
 	s.options, c.tags, c.note, c.enabled, s.enabled,
-	c.last_check_at, c.last_check_ok, c.last_check_msg,
+	CASE WHEN cs.last_polled_at > COALESCE(c.last_check_at, '') THEN cs.last_polled_at ELSE c.last_check_at END,
+	CASE WHEN cs.last_polled_at > COALESCE(c.last_check_at, '') THEN cs.up ELSE c.last_check_ok END,
+	CASE WHEN cs.last_polled_at > COALESCE(c.last_check_at, '') THEN cs.last_error ELSE c.last_check_msg END,
 	c.created_by, c.created_at, c.updated_at, COALESCE(sec.username, ''),
 	c.server_id, s.name, COALESCE(NULLIF(c.node_id, ''), s.node_id, ''),
 	c.project_id, COALESCE(pj.name, '')`
@@ -40,7 +46,8 @@ const connColumns = `c.id, c.name, s.kind, c.environment, s.host, s.port, c.data
 const connFrom = ` FROM connections c
 	JOIN servers s ON s.id = c.server_id
 	LEFT JOIN server_secrets sec ON sec.server_id = c.server_id
-	LEFT JOIN projects pj ON pj.id = c.project_id`
+	LEFT JOIN projects pj ON pj.id = c.project_id
+	LEFT JOIN connection_state cs ON cs.connection_id = c.id`
 
 func scanConnection(row interface{ Scan(...any) error }) (*model.Connection, error) {
 	var c model.Connection
@@ -315,6 +322,10 @@ func (s *Store) GetSecret(ctx context.Context, connectionID string) (*model.Secr
 // 리플리카에서는 기록하지 않는다. 담당 노드로 넘어온 접속 테스트가 여기서 실행될 수
 // 있는데, 그 결과를 로컬에 쓰면 다음 복제에서 사라진다. 테스트를 누른 사람은 응답으로
 // 결과를 곧바로 보고, 목록의 "마지막 확인"은 마스터의 폴러가 유지한다.
+//
+// 사람이 누른 테스트만 여기로 온다. 폴러의 결과는 connection_state에 있고 조회가 둘을
+// 합친다(connColumns). 폴러까지 이 행에 쓰면 30초마다 바뀌는 시각 하나 때문에 커넥션
+// 행 전체가 클러스터와 D1로 계속 나간다.
 func (s *Store) RecordConnectionCheck(ctx context.Context, id string, ok bool, msg string) error {
 	if s.IsReplica() {
 		return nil
