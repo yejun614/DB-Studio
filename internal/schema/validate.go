@@ -38,6 +38,12 @@ type Issue struct {
 	FK     string `json:"fk,omitempty"`     // 외래키 이름
 	Index  string `json:"index,omitempty"`
 	View   string `json:"view,omitempty"` // 뷰 키(소문자)
+
+	// FixIndex는 이 문제를 고치는 인덱스다. 화면이 "인덱스 만들기" 단추로 그대로
+	// 만든다. 이름까지 여기서 정하는 이유: 이름이 겹치지 않는지는 스키마 전체를
+	// 봐야 알 수 있고(PostgreSQL 의 인덱스 이름은 스키마 안에서 유일하다), 그것을
+	// 아는 쪽이 여기다.
+	FixIndex *Index `json:"fixIndex,omitempty"`
 }
 
 // Validate는 초안에서 찾을 수 있는 문제를 모은다.
@@ -307,6 +313,38 @@ func (v *validator) checkForeignKeys(t *Table) {
 	}
 }
 
+// freeIndexName은 ix_<표>_<컬럼…> 을 짓되, 스키마의 다른 인덱스와 겹치면 뒤에 수를 붙인다.
+func (v *validator) freeIndexName(t *Table, cols []string) string {
+	taken := map[string]bool{}
+	for _, other := range v.sc.Tables {
+		for _, idx := range other.Indexes {
+			taken[strings.ToLower(idx.Name)] = true
+		}
+	}
+	base := "ix_" + t.Name + "_" + strings.Join(cols, "_")
+	name := base
+	for n := 2; taken[strings.ToLower(name)]; n++ {
+		name = fmt.Sprintf("%s_%d", base, n)
+	}
+	return name
+}
+
+// noAutoFKIndex는 외래키에 인덱스를 스스로 만들지 않는 DB 의 이름이다. 만드는 DB(MySQL)
+// 면 빈 문자열이다.
+func noAutoFKIndex(dialect string) string {
+	switch dialect {
+	case "postgres":
+		return "PostgreSQL"
+	case "mssql":
+		return "MS-SQL"
+	case "oracle":
+		return "Oracle"
+	case "sqlite":
+		return "SQLite"
+	}
+	return ""
+}
+
 func (v *validator) checkForeignKey(t *Table, fk *ForeignKey) {
 	at := Issue{Table: t.Key(), FK: fk.Name}
 	if len(fk.Columns) > 0 {
@@ -418,6 +456,16 @@ func (v *validator) checkForeignKey(t *Table, fk *ForeignKey) {
 		is.Message = fmt.Sprintf("%s(%s) 에 인덱스가 없습니다 (관계 %s)",
 			t.Display(), strings.Join(fk.Columns, ", "), fkLabel(fk))
 		is.Hint = "부모 행을 지우거나 고칠 때마다 이 표를 전수 조사합니다. 표가 커지면 그때 아픕니다"
+		// MySQL(InnoDB)은 외래키를 걸 때 인덱스를 스스로 만들지만 다른 DB 는 만들지
+		// 않는다. 그 차이를 모르면 MySQL 에서 옮겨 온 설계가 조용히 느려진다.
+		if label := noAutoFKIndex(v.dialect); label != "" {
+			is.Hint = label + " 는 외래키 컬럼에 인덱스를 만들어 주지 않습니다. " + is.Hint
+		}
+		parts := make([]IndexPart, len(locals))
+		for i, col := range locals {
+			parts[i] = IndexPart{Column: col.Name}
+		}
+		is.FixIndex = &Index{Name: v.freeIndexName(t, fk.Columns), Columns: parts}
 		v.warn(is)
 	}
 
