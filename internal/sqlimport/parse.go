@@ -45,10 +45,11 @@ func Parse(dialect, script string) (*Result, error) {
 		byKey: map[string]*schema.Table{},
 	}
 	p.run()
+	p.resolveEnumColumns()
 	// 뷰만 담긴 스크립트도 읽어낸 것이 있는 스크립트다. 여기서 실패시키면
 	// "뷰 정의만 따로 불러오기"가 아예 되지 않는다.
 	empty := len(p.res.Tables) == 0 && len(p.res.Drops) == 0 &&
-		len(p.res.Views) == 0 && len(p.res.ViewDrops) == 0
+		len(p.res.Views) == 0 && len(p.res.ViewDrops) == 0 && len(p.res.Enums) == 0
 	if empty {
 		if len(p.res.Notes) > 0 {
 			return nil, fmt.Errorf("테이블·뷰 정의를 찾지 못했습니다: %s", strings.Join(p.res.Notes, " / "))
@@ -208,6 +209,8 @@ func (p *parser) createStatement(start int) {
 		p.createIndex(start, unique)
 	case p.accept("VIEW"):
 		p.createView(start, materialized)
+	case p.accept("TYPE"):
+		p.createType(start)
 	case p.accept("DICTIONARY"):
 		// 사전은 표도 뷰도 아니다(외부 원본을 메모리에 얹어 dictGet 으로 찾는 것).
 		// ERD 에 담을 자리가 없으므로 건너뛰되, 무엇을 건너뛰었는지는 적는다.

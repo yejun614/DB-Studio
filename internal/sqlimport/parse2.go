@@ -46,6 +46,12 @@ func (p *parser) typeName() string {
 	}
 	var b strings.Builder
 	b.WriteString(p.next().text)
+	// 스키마가 붙은 타입 이름("public"."order_status"). 이름 붙은 ENUM 과 확장 타입이
+	// 이렇게 적힌다 — 첫 조각에서 멈추면 컬럼 정의 전체를 잃는다.
+	for p.peek().isPunct(".") && p.peekAt(1).isName() {
+		b.WriteString(p.next().text)
+		b.WriteString(p.next().text)
+	}
 
 	// 괄호가 붙는 길이/정밀도
 	if p.peek().isPunct("(") {
@@ -231,6 +237,10 @@ func endsWithOpenBracket(s string) bool {
 // ---------- ALTER / DROP / COMMENT ----------
 
 func (p *parser) alterStatement(start int) {
+	if p.accept("TYPE") {
+		p.alterType(start)
+		return
+	}
 	if !p.accept("TABLE") {
 		p.note(start, "")
 		p.skipToStatementEnd()
