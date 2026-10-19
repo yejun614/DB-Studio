@@ -417,7 +417,12 @@
   `erd_add_column`, `erd_update_column`, `erd_set_primary_key`, `erd_add_foreign_key`,
   `erd_add_index`, `erd_duplicate_table` 등): 어느 초안인지 `document`(이름 또는 ID)로 받는다.
   **이것만 승인 없이 바로 반영된다** — 초안은 실제 DB가 아니고, 사람이 손으로 고칠 때와
-  같은 경로(검증·op-log·실시간 브로드캐스트)를 지난다. 지우는 툴은 없다
+  같은 경로(검증·op-log·실시간 브로드캐스트)를 지난다. 컬럼 삭제(`erd_delete_column`)만
+  승인을 거친다
+- **ERD 설계 문제 툴**(`erd_read_issues`, `erd_update_foreign_key`, `erd_delete_foreign_key`,
+  `erd_delete_index`): 화면 "문제" 탭과 같은 검사(오류·경고)를 읽고, 문제마다 고칠 툴(`resolve`)과
+  그대로 부를 인자(`fix`, 예: 인덱스 없는 외래키 → `add_index`)를 함께 돌려준다. 관계·인덱스
+  삭제는 다른 것을 함께 지우지 않아 승인 없이 반영된다
 - **ERD 도면 배치 툴**(`erd_read_layout`, `erd_arrange_layout`): 표·뷰 카드와 그룹의
   좌표를 읽고 한 번에 바꾼다. 좌표는 서버가 계산하고 모델은 무엇을 함께 묶을지만 정한다.
   - **`mode:"organic"`(권장)**: 도면 전체를 사람이 손으로 그린 것처럼 다시 놓는다. 이어진 표는
