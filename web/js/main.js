@@ -49,6 +49,7 @@ import { renderAudit } from './pages/audit.js';
 import { renderSecurity } from './pages/security.js';
 import { renderNotify } from './pages/notify.js';
 import { renderCluster } from './pages/cluster.js';
+import { renderCloud } from './pages/cloud.js';
 import { renderStorage } from './pages/storage.js';
 import { renderBroker } from './pages/broker.js';
 import { renderVector } from './pages/vector.js';
@@ -94,6 +95,7 @@ router.define('/audit', renderAudit);
 router.define('/security', renderSecurity);
 router.define('/notify', renderNotify);
 router.define('/cluster', renderCluster);
+router.define('/cloud', renderCloud);
 router.define('/storage', renderStorage);
 router.define('/broker', renderBroker);
 router.define('/vector', renderVector);
@@ -191,6 +193,9 @@ const NAV = [
       // 클러스터는 인프라 구성이다. 노드 주소와 복제 지연은 운영자만 볼 일이고,
       // 노드를 내리는 것은 그 노드가 담당하던 일이 멈춘다는 뜻이다.
       { path: '/cluster', label: '클러스터', icon: 'copy', requires: 'manageUsers' },
+      // 클라우드 연결은 이 앱의 데이터 전체를 어디에 두는가다. 가져오기·복구는 이 서버의
+      // 데이터를 통째로 바꾸므로 클러스터와 같은 자리, 같은 권한에 둔다.
+      { path: '/cloud', label: '클라우드 연결', icon: 'cloud', requires: 'manageUsers' },
       { path: '/audit', label: '감사 로그', icon: 'list', requires: 'manageUsers' },
     ],
   },

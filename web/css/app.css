@@ -5760,7 +5760,27 @@ tr.is-clickable:focus-visible { outline: 2px solid var(--primary); outline-offse
 
 /* 알림 설정 (P23) */
 .notify-kinds { display: flex; flex-wrap: wrap; gap: 10px 18px; }
-.notify-actions { display: flex; gap: 8px; margin-top: 16px; }
+.notify-actions { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+
+/* 클라우드 연결 (P39).
+   상태(마지막 동기화·밀린 변경)는 이름–값 두 칸 표로 둔다. 문장으로 풀면 숫자가 묻힌다. */
+.cloud-status, .cloud-remote { margin-top: 14px; }
+.cloud-facts {
+  display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px;
+  margin: 6px 0 0; font-size: 13px;
+}
+.cloud-facts dt { color: var(--text-dim); }
+.cloud-facts dd { margin: 0; }
+.cloud-schedule {
+  margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border);
+}
+/* 되돌릴 수 없는 단추는 접어 둔다. 늘 보이면 "동기화"와 같은 무게로 읽힌다. */
+.cloud-danger {
+  margin-top: 16px; padding: 10px 12px;
+  border: 1px solid hsl(var(--h-danger) / 0.3); border-radius: var(--radius-sm);
+}
+.cloud-danger summary { cursor: pointer; font-weight: 500; }
+.cloud-actions { text-align: right; white-space: nowrap; }
 
 /* 클러스터 화면: 노드 카드.
    격자로 두는 이유는 노드가 늘어나도 한 화면에서 훑을 수 있어야 하기 때문이다. */

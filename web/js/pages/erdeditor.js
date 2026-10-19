@@ -31,6 +31,7 @@ import {
   loadTypeCatalog, buildType, parseType, categories, paramLabel, paramPlaceholder,
 } from '../core/dbtypes.js';
 import { navigate } from '../core/router.js';
+import { guardUnsaved } from '../core/unsaved.js';
 import { withProject } from '../core/project.js';
 import { isHidden as isNavHidden, setHidden as setNavHidden } from '../core/sidebar.js';
 import { panelResizeHandle, attachPanelResize } from '../core/panelresize.js';
@@ -294,6 +295,8 @@ class Editor {
       onUndoState: (canUndo, canRedo) => this.onUndoState(canUndo, canRedo),
       onMeta: (msg) => this.onMeta(msg),
       onClosed: (reason) => this.onClosed(reason),
+      onHold: (count, delay) => this.onHold(count, delay),
+      onSaved: () => this.onSaved(),
       onError: (message) => {
         toast(message, 'error');
         this.restoreRenamedSelection();
@@ -314,6 +317,13 @@ class Editor {
   }
 
   start() {
+    // 서버가 아직 저장했다고 확인하지 않은 편집이 있으면 떠나기 전에 묻는다. 저장소가
+    // 바빠 모아 둔 편집, 연결이 끊긴 동안 한 편집이 여기에 있다 — 창을 닫으면 사라진다.
+    this.unbindUnsaved = guardUnsaved(
+      () => this.session.unsaved(),
+      (n) => `아직 서버에 저장되지 않은 편집 ${n}개가 있습니다. 지금 나가면 이 편집은 사라집니다. ` +
+        '잠시 기다리면 자동으로 저장됩니다.',
+    );
     // 어시스턴트에게 이 화면을 알린다(core/screen.js).
     //
     // 함수로 넘기는 이유: 고른 표는 자주 바뀌고, 바뀔 때마다 보고하게 하면 select
@@ -397,6 +407,7 @@ class Editor {
     if (this.present) this.leavePresent({ render: false });
     this.session.close();
     this.canvas.destroy();
+    if (this.unbindUnsaved) this.unbindUnsaved();
     if (this.unbind) this.unbind();
     if (this.unbindKeys) this.unbindKeys();
     if (this.unbindLifecycle) this.unbindLifecycle();
@@ -519,6 +530,11 @@ class Editor {
   onStatus(status, delay) {
     const chip = this.ui.statusChip;
     chip.classList.remove('is-ok', 'is-warn', 'is-bad');
+    // 연결 상태가 바뀌면 "저장 대기" 표시는 그 위에 다시 그린다(onHold).
+    if (status === 'connected' && this.session?.holding) {
+      this.onHold(this.session.unsaved(), -1);
+      return;
+    }
     if (status === 'connected') {
       chip.classList.add('is-ok');
       chip.textContent = '실시간 연결됨';
@@ -531,6 +547,30 @@ class Editor {
     }
     chip.classList.add('is-bad');
     chip.textContent = '연결 끊김 — 편집은 재연결 후 전송됩니다';
+  }
+
+  // onHold는 저장소가 바빠 편집을 모아 두는 동안의 표시다.
+  //
+  // 오류 토스트를 띄우지 않는다. 편집은 사라지지 않았고 사용자가 할 일도 없다 — 빨간
+  // 알림이 뜨면 방금 한 일을 다시 하게 되고, 그것은 같은 편집을 두 번 쌓을 뿐이다.
+  // 상태 칩에 "몇 개를 들고 있는가"만 보인다. delay가 0이면 지금 다시 보내는 중이다.
+  onHold(count, delay) {
+    const chip = this.ui.statusChip;
+    chip.classList.remove('is-ok', 'is-warn', 'is-bad');
+    chip.classList.add('is-warn');
+    if (delay === 0) {
+      chip.textContent = `저장 중… (편집 ${count}개)`;
+      return;
+    }
+    chip.textContent = `저장 대기 — 편집 ${count}개를 모아 두었습니다`;
+    chip.title = '저장소가 잠시 바빠 편집을 브라우저에 모아 두었습니다. 곧 한 번에 보냅니다. ' +
+      '그 전에 창을 닫으면 묻습니다.';
+  }
+
+  onSaved() {
+    this.ui.statusChip.title = '';
+    this.onStatus(this.session.connected ? 'connected' : 'disconnected');
+    toast('모아 둔 편집을 모두 저장했습니다', 'success', 2500);
   }
 
   onInit(msg) {

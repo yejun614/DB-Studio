@@ -10,9 +10,14 @@
 //     필요하고 틀리기 쉬운데, 문서는 작아서 통째로 받는 비용이 더 싸다.
 //   - 연결이 끊기면 확인받지 못한 op를 큐에 남기고, 재접속 후 다시 보낸다.
 //     서버가 op.id로 중복을 걸러내므로 두 번 적용되지 않는다.
+//   - 서버의 저장소가 잠시 바쁘면(busy) 편집을 버리지 않는다. 그동안 생긴 편집까지
+//     큐에 모아 두었다가 잠시 뒤 **한 번에** 다시 보낸다. 큐는 언제나 처음부터 통째로
+//     보내므로, 저장되지 못한 편집이 뒤의 편집보다 늦게 적용되는 일이 없다.
 
 const RECONNECT_BASE_MS = 500;
 const RECONNECT_MAX_MS = 10000;
+// 저장소가 바쁠 때 다시 보내기까지의 간격. 거듭 바쁘면 두 배씩 늘린다.
+const BUSY_RETRY_MAX_MS = 8000;
 
 let opCounter = 0;
 
@@ -46,6 +51,20 @@ export class ErdSession {
     this.you = null;
     this.participants = [];
     this.connected = false;
+
+    // gen은 보낼 때마다 올리는 번호다. 큐가 커서 여러 메시지로 나뉘어도 한 번의 전송은
+    // 같은 번호를 단다. 서버는 바빠서 멈춘 전송의 나머지 조각을 이 번호로 알아보고 버린다.
+    this.gen = 0;
+    // holding이면 저장소가 바빠 기다리는 중이다. 새 편집은 큐에만 쌓고 보내지 않는다.
+    this.holding = false;
+    this.holdTimer = null;
+    this.busyAttempt = 0;
+  }
+
+  // unsaved는 서버가 아직 저장했다고 확인하지 않은 편집 수다.
+  // 창을 닫기 전에 물어볼지를 이것으로 정한다.
+  unsaved() {
+    return this.pending.length;
   }
 
   connect() {
@@ -65,6 +84,8 @@ export class ErdSession {
     ws.onopen = () => {
       this.attempt = 0;
       this.connected = true;
+      // 새 연결의 서버 쪽은 이전 연결의 "멈춘 전송"을 모른다. 기다릴 이유가 없다.
+      this.#releaseHold();
       this.handlers.onStatus?.('connected');
       // 확인받지 못한 op를 먼저 보낸다. 서버가 중복을 걸러내므로 안전하다.
       if (this.pending.length) this.#flush();
@@ -130,6 +151,14 @@ export class ErdSession {
           if (idx >= 0) this.pending.splice(idx, 1);
           this.handlers.onOp?.(op, idx >= 0, Boolean(msg.document));
         }
+        // 바빠서 모아 둔 편집이 모두 저장됐다.
+        if (this.busyAttempt > 0 && !this.holding && this.pending.length === 0) {
+          this.busyAttempt = 0;
+          this.handlers.onSaved?.();
+        }
+        break;
+      case 'busy':
+        this.#hold(msg.retryMs);
         break;
       case 'reject':
         this.pending = this.pending.filter((p) => p.id !== msg.opId);
@@ -177,13 +206,16 @@ export class ErdSession {
     const op = { id: newOpID(), kind, payload };
     if (batch) op.batch = batch;
     this.pending.push(op);
+    if (this.holding) this.handlers.onHold?.(this.pending.length, -1);
     this.#flush();
     return op;
   }
 
   #flush() {
+    if (this.holding) return;
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     if (!this.pending.length) return;
+    this.gen += 1;
     // 한 메시지에 담을 수 있는 op 수에 서버 한도가 있다. 넘긴 메시지는 통째로
     // 거부되므로, 카드 백 장을 함께 옮기면 **아무것도** 옮겨지지 않는다.
     //
@@ -194,8 +226,34 @@ export class ErdSession {
         type: 'ops',
         ops: this.pending.slice(i, i + MAX_OPS_PER_MESSAGE),
         baseSeq: this.seq,
+        gen: this.gen,
       });
     }
+  }
+
+  // #hold는 저장소가 바쁘다는 응답을 받았을 때 보내기를 멈춘다.
+  //
+  // 곧바로 다시 보내지 않는 이유: 바쁜 저장소에 같은 것을 연달아 보내면 바쁨을 늘릴
+  // 뿐이다. 기다리는 동안 생긴 편집은 큐에 쌓이고, 때가 되면 한 번에 간다.
+  #hold(retryMs) {
+    this.busyAttempt += 1;
+    const base = Math.max(Number(retryMs) || 1000, 250);
+    const delay = Math.min(base * 2 ** (this.busyAttempt - 1), BUSY_RETRY_MAX_MS);
+    this.holding = true;
+    clearTimeout(this.holdTimer);
+    this.holdTimer = setTimeout(() => {
+      this.holding = false;
+      this.holdTimer = null;
+      this.handlers.onHold?.(this.pending.length, 0);
+      this.#flush();
+    }, delay);
+    this.handlers.onHold?.(this.pending.length, delay);
+  }
+
+  #releaseHold() {
+    clearTimeout(this.holdTimer);
+    this.holdTimer = null;
+    this.holding = false;
   }
 
   presence(update) {
@@ -259,6 +317,7 @@ export class ErdSession {
 
   close() {
     this.closed = true;
+    this.#releaseHold();
     this.#drop();
   }
 

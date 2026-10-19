@@ -12,6 +12,7 @@ import {
   badge, envBadge, toast, toastError, openModal, confirmDialog, copyToClipboard,
 } from '../core/ui.js';
 import { navigate } from '../core/router.js';
+import { guardUnsaved } from '../core/unsaved.js';
 import { dbLogo } from '../core/dblogo.js';
 import { serverDbPicker } from '../core/connpick.js';
 import { setScreenDetail, screenConn } from '../core/screen.js';
@@ -212,6 +213,12 @@ export async function renderData(outlet, params, query) {
   // 지금까지처럼 바로 반영한다 — 보여줄 문장이 없는데 확인 단계만 늘리면 번거롭기만 하다.
   const staged = [];
   const canStage = () => Boolean(support.preview);
+  // 적용하지 않은 변경을 들고 창을 닫거나 다른 메뉴로 가면 묻는다. 대상을 바꿀 때 묻는
+  // 것(selectObject)과 같은 이유다 — 모아 둔 변경은 이 화면에만 있다.
+  const unguard = guardUnsaved(
+    () => staged.length,
+    (n) => `적용하지 않은 데이터 변경 ${n}건이 있습니다. 지금 나가면 이 변경은 사라집니다.`,
+  );
 
   mount(outlet,
     pageHeader('데이터', `${conn.name} 의 값을 조회하고 수정합니다`, [
@@ -1316,6 +1323,7 @@ export async function renderData(outlet, params, query) {
   }
 
   await loadObjects();
+  return unguard;
 }
 
 // keyOf는 한 행에서 기본키 값을 뽑는다. 기본키가 없으면 null이다.
