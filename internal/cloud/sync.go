@@ -9,6 +9,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"dbstudio/internal/store"
@@ -82,6 +83,15 @@ func setMeta(k, v, owner string) Stmt {
 		SQL: `INSERT INTO dbstudio_meta (k, v) SELECT ?, ? WHERE ` + ownerGuard +
 			` ON CONFLICT (k) DO UPDATE SET v = excluded.v`,
 		Params: []string{k, v, owner},
+	}
+}
+
+// deleteTables는 tables의 행을 원격에서 모두 지운다. 보내지 않기로 한 표를 치울 때 쓴다.
+func deleteTables(tables []string, owner string) Stmt {
+	holes := strings.TrimSuffix(strings.Repeat("?, ", len(tables)), ", ")
+	return Stmt{
+		SQL:    `DELETE FROM dbstudio_rows WHERE tbl IN (` + holes + `) AND ` + ownerGuard,
+		Params: append(append([]string{}, tables...), owner),
 	}
 }
 
@@ -266,6 +276,7 @@ func (s *Service) teardown(ctx context.Context) {
 	}
 	_ = s.st.SetLocalState(ctx, store.StateD1PushedSeq, "")
 	_ = s.st.SetLocalState(ctx, store.StateD1FullNeeded, "")
+	_ = s.st.SetLocalState(ctx, store.StateD1SkipList, "")
 	s.mu.Lock()
 	s.triggersOn = false
 	s.mu.Unlock()
@@ -415,7 +426,12 @@ func (s *Service) pushChanges(ctx context.Context, c *D1) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if hi <= pushed {
+	// 보내지 않는 표가 늘었으면(이 바이너리가 새 판) 예전 판이 올려 둔 그 표의 행을 지운다.
+	// 그대로 두면 원격에 영영 갱신되지 않는 옛 행이 남아 자리만 차지한다.
+	skip := store.CloudSkipList()
+	sentSkip, _ := s.st.LocalState(ctx, store.StateD1SkipList)
+	purge := sentSkip != strings.Join(skip, ",")
+	if hi <= pushed && !purge {
 		return 0, nil
 	}
 	// 로그가 잘려 보낸 지점과 이어지지 않으면(클러스터 마스터의 정리, 오래 끊겼던 경우)
@@ -464,8 +480,13 @@ func (s *Service) pushChanges(ctx context.Context, c *D1) (int, error) {
 	}
 	sort.Slice(changes, func(i, j int) bool { return changes[i].Seq < changes[j].Seq })
 
-	if len(changes) > 0 {
+	if len(changes) > 0 || purge {
 		b := &batcher{ctx: ctx, c: c}
+		if purge {
+			if err := b.add(deleteTables(skip, me)); err != nil {
+				return 0, err
+			}
+		}
 		for _, ch := range changes {
 			var st Stmt
 			if ch.Op == "delete" {
@@ -493,6 +514,9 @@ func (s *Service) pushChanges(ctx context.Context, c *D1) (int, error) {
 
 	if err := s.st.SetLocalState(ctx, store.StateD1PushedSeq, strconv.FormatInt(last, 10)); err != nil {
 		return 0, err
+	}
+	if purge {
+		_ = s.st.SetLocalState(ctx, store.StateD1SkipList, strings.Join(skip, ","))
 	}
 	if !s.opt.IsMaster() {
 		if _, err := s.st.PruneReplLogUpTo(ctx, last); err != nil {
@@ -585,6 +609,8 @@ func (s *Service) fullPush(ctx context.Context, c *D1, claim bool, j *Job) (int,
 	if err := s.markSynced(ctx, seq, local); err != nil {
 		return 0, err
 	}
+	// 원격을 비우고 보낼 표만 올렸으니 치울 것이 없다.
+	_ = s.st.SetLocalState(ctx, store.StateD1SkipList, strings.Join(store.CloudSkipList(), ","))
 	s.stage(j, "완료", int64(count))
 	return count, nil
 }
@@ -742,6 +768,9 @@ func (s *Service) pull(ctx context.Context, j *Job) (int, error) {
 	if err := s.markSynced(ctx, hi, local); err != nil {
 		return 0, err
 	}
+	// 받아 온 D1은 옛 판이 올린 것일 수 있다 — 지금은 보내지 않는 표의 행이 남아 있으면
+	// 다음 동기화에서 치운다.
+	_ = s.st.SetLocalState(ctx, store.StateD1SkipList, "")
 	// 원격이 옛 스키마로 쓴 것이면 새 컬럼을 채워 다시 올려 둔다.
 	if info.SchemaVersion < local {
 		_ = s.st.SetLocalState(ctx, store.StateD1FullNeeded, "schema")
@@ -809,6 +838,7 @@ func (s *Service) download(ctx context.Context, c *D1, path string, j *Job) (int
 func (s *Service) ResetD1(ctx context.Context) {
 	_ = s.st.SetLocalState(ctx, store.StateD1PushedSeq, "")
 	_ = s.st.SetLocalState(ctx, store.StateD1FullNeeded, "")
+	_ = s.st.SetLocalState(ctx, store.StateD1SkipList, "")
 	s.mu.Lock()
 	s.d1 = D1Status{State: "off"}
 	s.mu.Unlock()

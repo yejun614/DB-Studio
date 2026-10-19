@@ -365,6 +365,50 @@ func TestD1PullRefusesOtherKey(t *testing.T) {
 	}
 }
 
+// TestD1DropsNewlySkippedTables는 보내지 않기로 한 표의 행을 원격에서 한 번 치우는지 본다.
+//
+// 옛 판은 metric_hourly·events 를 올렸다. 새 판은 보내지 않으므로, 치우지 않으면 그 행은
+// 원격에 갱신되지 않은 채 영영 남는다.
+func TestD1DropsNewlySkippedTables(t *testing.T) {
+	d1 := newFakeD1(t)
+	a := newEnv(t, "a", 1)
+	a.connectD1(t)
+	a.user(t, "alice")
+	if _, err := a.sync(t); err != nil {
+		t.Fatal(err)
+	}
+	// 옛 판이 남긴 것처럼 꾸민다: 원격에 지금은 보내지 않는 표의 행, 로컬에는 치운 기록 없음.
+	d1.mu.Lock()
+	_, err := d1.db.Exec(`INSERT INTO dbstudio_rows (tbl, rid, row, updated_at) VALUES
+		('metric_hourly', 1, '{}', 'x'), ('events', 1, '{}', 'x')`)
+	d1.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.st.SetLocalState(a.ctx, store.StateD1SkipList, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := a.sync(t); err != nil {
+		t.Fatal(err)
+	}
+	if n := d1.count(t, `SELECT count(*) FROM dbstudio_rows WHERE tbl IN ('metric_hourly', 'events')`); n != 0 {
+		t.Fatalf("보내지 않는 표의 행 %d개가 원격에 남았습니다", n)
+	}
+	if n := d1.count(t, `SELECT count(*) FROM dbstudio_rows WHERE tbl = 'users'`); n == 0 {
+		t.Fatal("치우면서 보내는 표의 행까지 지웠습니다")
+	}
+
+	// 한 번 치웠으면 바뀐 것이 없는 동기화는 요청을 보내지 않는다.
+	before := d1.requests
+	if _, err := a.sync(t); err != nil {
+		t.Fatal(err)
+	}
+	if d1.requests != before {
+		t.Errorf("바뀐 것이 없는데 요청 %d번을 보냈습니다", d1.requests-before)
+	}
+}
+
 // TestD1Disable는 동기화를 끄면 변경 추적을 걷어내는지 본다.
 func TestD1Disable(t *testing.T) {
 	newFakeD1(t)
