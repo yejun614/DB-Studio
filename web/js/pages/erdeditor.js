@@ -1918,7 +1918,7 @@ class Editor {
     // "어느 표 이야기인가"를 문장에서 찾아 읽어야 한다.
     const where = [is.table || is.view, is.column, is.fk && `관계 ${is.fk}`]
       .filter(Boolean).join(' · ');
-    return h('button.erd-issue', {
+    const row = h('button.erd-issue', {
       type: 'button',
       class: `erd-issue${bad ? ' is-error' : ' is-warn'}`,
       onclick: () => this.gotoIssue(is),
@@ -1928,6 +1928,21 @@ class Editor {
       h('span.erd-issue-msg', {}, is.message),
       where ? h('span.erd-issue-where', {}, where) : null,
       is.hint ? h('span.erd-issue-hint', {}, is.hint) : null));
+
+    // 고칠 방법을 서버가 정해 준 문제는 그 자리에서 고친다. 줄 자체가 단추라 그 안에
+    // 단추를 넣을 수 없어 아래에 따로 둔다.
+    const fix = is.fixIndex;
+    if (!fix || !this.editable()) return row;
+    const cols = (fix.columns ?? []).map((p) => p.column);
+    return h('div.erd-issue-item', {},
+      row,
+      h('button.btn.btn-small.erd-issue-fix', {
+        type: 'button',
+        title: `${fix.name} (${cols.join(', ')}) 인덱스를 만듭니다`,
+        onclick: () => this.send('index.add', {
+          table: is.table, name: fix.name, columns: cols, unique: false,
+        }),
+      }, icon('plus', 13), `인덱스 만들기 · ${fix.name}`));
   }
 
   renderPanel() {
@@ -4618,6 +4633,12 @@ class Editor {
     const ro = !this.editable();
     const domains = this.doc.domains ?? [];
     const usage = this.domainUsage();
+    // 도메인이 맡지 않은 ENUM 타입. 이 기능 전에 DB 에서 만든 초안이나, 도메인을 지운 뒤
+    // 컬럼이 아직 쓰는 타입이 여기 남는다. 사람이 ENUM 을 다루는 곳은 도메인 탭 하나라
+    // 여기서 보여 주고 도메인으로 맡길 수 있게 한다.
+    const owned = new Set(domains.map((d) => d.name.toLowerCase()));
+    const orphans = (this.doc.schema?.enums ?? []).filter((e) => !owned.has(e.name.toLowerCase()));
+    const pg = this.doc.dialect === 'postgres';
 
     return [
       h('div.erd-panel-head', {},
@@ -4633,11 +4654,54 @@ class Editor {
         domains.length === 0
           ? h('p.muted', {}, '아직 도메인이 없습니다.')
           : h('div.erd-domain-list', {}, domains.map((d) => this.domainRow(d, usage.get(d.name.toLowerCase()) ?? [], ro))),
+        orphans.length
+          ? h('div', {},
+            h('h3.erd-sub', {}, '도메인이 없는 ENUM 타입'),
+            h('p.field-help', {},
+              '실제 DB나 SQL에서 온 타입입니다. 도메인으로 맡기면 값을 여기서 고치고, '
+              + '그 타입을 쓰는 컬럼이 함께 바뀝니다.'),
+            h('div.erd-domain-list', {}, orphans.map((e) => this.orphanEnumRow(e, ro))))
+          : null,
         h('p.field-help', {},
           '도메인은 이 설계 안에서만 쓰는 개념입니다. 마이그레이션에는 도메인이 아니라 '
-          + '그 결과인 구체 타입이 들어갑니다.'),
+          + '그 결과인 구체 타입이 들어갑니다. ',
+          h('b', {}, '예외는 ENUM 도메인입니다'),
+          pg
+            ? ' — 도메인 이름 그대로 CREATE TYPE … AS ENUM 이 만들어지고, 같은 도메인의 컬럼은 그 타입 하나를 같이 씁니다.'
+            : ' — PostgreSQL 로 내보내면 도메인 이름 그대로 CREATE TYPE … AS ENUM 이 만들어집니다.'),
       ),
     ];
+  }
+
+  // orphanEnumRow는 도메인이 맡지 않은 ENUM 타입 한 줄이다.
+  orphanEnumRow(e, ro) {
+    const values = e.values ?? [];
+    // 따옴표가 든 값은 타입 칸의 ENUM('…') 표기로 되살릴 수 없다. 서버도 맡지 않는다.
+    const adoptable = values.length > 0 && !values.some(hasQuoteChar);
+    const users = [];
+    for (const t of this.doc.schema?.tables ?? []) {
+      for (const c of t.columns ?? []) {
+        if ((c.type?.enumName ?? '').toLowerCase() === e.name.toLowerCase()) users.push(`${tableDisplay(t)}.${c.name}`);
+      }
+    }
+    return h('div.erd-domain', {},
+      h('div.erd-domain-head', {},
+        h('span.erd-domain-name', {}, e.name),
+        h('code.erd-domain-type', { title: enumTypeString(values) }, enumTypeString(values)),
+        ro || !adoptable ? null : h('button.btn.btn-small', {
+          type: 'button',
+          title: '이 타입을 같은 이름의 도메인으로 맡깁니다',
+          onclick: () => this.send('domain.add', { name: e.name, type: enumTypeString(values) }),
+        }, '도메인으로 관리'),
+      ),
+      h('div.erd-domain-meta', {},
+        badge('ENUM 타입', 'neutral'),
+        users.length
+          ? h('span.muted', {}, `${users.length}개 컬럼에서 사용`)
+          : h('span.muted', {}, '사용 중인 컬럼 없음'),
+        adoptable ? null : h('span.muted', {}, '값에 따옴표가 있어 도메인으로 맡길 수 없습니다'),
+      ),
+    );
   }
 
   // domainUsage는 도메인 이름 → 쓰는 컬럼 목록이다.
@@ -4658,7 +4722,7 @@ class Editor {
     return h('div.erd-domain', {},
       h('div.erd-domain-head', {},
         h('span.erd-domain-name', {}, domain.name),
-        h('code.erd-domain-type', {}, domain.type),
+        h('code.erd-domain-type', { title: domain.type }, domain.type),
         ro ? null : h('button.icon-btn', {
           type: 'button', title: '수정', onclick: () => this.openDomainDialog(domain),
         }, icon('edit', 13)),
@@ -4669,6 +4733,9 @@ class Editor {
         }, icon('trash', 13)),
       ),
       h('div.erd-domain-meta', {},
+        isEnumType(domain.type)
+          ? badge(this.doc.dialect === 'postgres' ? `CREATE TYPE ${domain.name}` : 'ENUM', 'accent')
+          : null,
         domain.nullable === false ? badge('NOT NULL', 'neutral') : null,
         domain.nullable === true ? badge('NULL 허용', 'neutral') : null,
         domain.default ? badge(`기본값 ${truncate(domain.default, 20)}`, 'neutral') : null,
@@ -5753,12 +5820,37 @@ function exportView(res, docName) {
 //
 // 삭제를 맨 위에 둔다. 추가와 덮어쓰기는 되돌릴 수 있지만(다시 그리면 된다)
 // 삭제는 사람이 만든 것을 없애는 유일한 항목이다.
+// 따옴표 글자들. 문자열·정규식 리터럴 안에 직접 쓰면 저장소의 정적 검사
+// (assets_test 의 호출 검사)가 따옴표를 문자열 시작으로 읽어 뒤의 정의를 놓친다.
+const QUOTE = String.fromCharCode(39);
+const DQUOTE = String.fromCharCode(34);
+const BACKSLASH = String.fromCharCode(92);
+
+// isEnumType은 타입 글자가 값 목록 ENUM('a','b') 인지다.
+function isEnumType(type) {
+  return /^\s*enum\s*\(/i.test(type ?? '');
+}
+
+// enumTypeString은 값 목록을 ENUM('a', 'b') 로 쓴다(schema.EnumTypeString 과 같은 표기).
+function enumTypeString(values) {
+  const quoted = values.map((v) => QUOTE + String(v).split(QUOTE).join(QUOTE + QUOTE) + QUOTE);
+  return 'ENUM(' + quoted.join(', ') + ')';
+}
+
+// hasQuoteChar는 값에 따옴표·역슬래시가 있는지다. 서버(erd.adoptEnum)도 그런 값의
+// 타입은 도메인으로 맡지 않는다.
+function hasQuoteChar(v) {
+  return [QUOTE, DQUOTE, BACKSLASH].some((ch) => String(v).includes(ch));
+}
+
 function importPreviewView(plan) {
   const s = plan.summary ?? {};
   const rows = [
     s.dropped?.length ? ['삭제', s.dropped, 'danger'] : null,
     s.added?.length ? ['추가', s.added, 'success'] : null,
     s.updated?.length ? ['덮어쓰기', s.updated, 'accent'] : null,
+    // ENUM 타입은 같은 이름의 도메인이 되어 들어간다.
+    plan.enums?.length ? ['ENUM 도메인', plan.enums, 'neutral'] : null,
   ].filter(Boolean);
 
   if (rows.length === 0) {
