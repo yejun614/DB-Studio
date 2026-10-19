@@ -51,6 +51,10 @@ const maxChatLen = 4000
 // 드래그 중 좌표 op가 묶여 오는 것을 허용하면서, 한 번에 과도한 작업을 막는다.
 const maxOpsPerMessage = 64
 
+// busyRetryMs는 메타 DB가 바쁠 때 클라이언트에게 권하는 첫 재시도 간격이다.
+// 클라이언트는 거듭 바쁘면 간격을 늘린다.
+const busyRetryMs = 1000
+
 // maxBatchLen은 편집 묶음 이름의 길이 제한이다. 클라이언트가 만든 짧은 식별자만
 // 들어오면 되고, 이 값은 op 로그에 그대로 남는다.
 const maxBatchLen = 64
@@ -138,6 +142,10 @@ type Client struct {
 	selection  string
 	// view는 이 연결이 보고 있는 시점이다(구조 화면의 버전 id, 현재면 빈 값).
 	view string
+
+	// heldGen은 메타 DB가 바빠서 멈춘 전송 묶음의 번호다(0이면 멈춘 것이 없다).
+	// 한 연결의 메시지는 읽기 펌프 하나가 차례로 넘기므로 잠금 없이 쓴다.
+	heldGen int64
 }
 
 type Point struct {
@@ -271,11 +279,14 @@ type inbound struct {
 	// View는 이 사람이 보고 있는 시점이다(구조 화면의 버전 id, 현재는 빈 문자열).
 	// 방은 DB 기준이고 시점은 사람마다 다를 수 있으므로, 커서를 서로 보여줄지
 	// 판단하려면 이 값이 필요하다 — 다른 시점의 커서는 없는 자리를 가리킨다.
-	View      *string         `json:"view,omitempty"`
-	Body      string          `json:"body,omitempty"`
-	TargetKey string          `json:"targetKey,omitempty"`
-	SinceSeq  int64           `json:"sinceSeq,omitempty"`
-	Extra     json.RawMessage `json:"-"`
+	View      *string `json:"view,omitempty"`
+	Body      string  `json:"body,omitempty"`
+	TargetKey string  `json:"targetKey,omitempty"`
+	SinceSeq  int64   `json:"sinceSeq,omitempty"`
+	// Gen은 클라이언트가 한 번 보낼 때마다 올리는 번호다. 대기 중인 편집이 많아 여러
+	// 메시지로 나뉘어도 같은 번호를 단다(busy 처리에 쓴다 — handleOps 참고).
+	Gen   int64           `json:"gen,omitempty"`
+	Extra json.RawMessage `json:"-"`
 }
 
 // Handle은 클라이언트가 보낸 한 메시지를 처리한다.
@@ -336,6 +347,15 @@ func (c *Client) handleOps(ctx context.Context, msg *inbound) error {
 		return nil
 	}
 
+	// 메타 DB가 바빠 멈춘 묶음의 나머지 조각은 버린다. 앞 조각의 편집이 저장되지 않았는데
+	// 뒤 조각을 적용하면 순서가 뒤집힌다(표를 만든 편집보다 그 표에 컬럼을 더한 편집이
+	// 먼저 들어간다). 버린 편집은 클라이언트의 대기열에 그대로 있다가 다음 묶음으로 온다 —
+	// 클라이언트는 보낼 때마다 확인받지 못한 편집을 **처음부터** 다시 싣는다.
+	if c.heldGen != 0 && msg.Gen != 0 && msg.Gen <= c.heldGen {
+		return nil
+	}
+	c.heldGen = 0
+
 	r := c.room
 	changed := false
 	for _, op := range msg.Ops {
@@ -355,6 +375,21 @@ func (c *Client) handleOps(ctx context.Context, msg *inbound) error {
 		}
 
 		applied, rejectErr, err := r.submit(ctx, op, intentEdit)
+		if err != nil && store.IsBusy(err) {
+			// 메타 DB가 잠시 바쁘다. 실패가 아니라 "조금 뒤에"다. 편집을 버리게 하지 않고
+			// 클라이언트가 모아 두었다가 다시 보내게 한다. 이 op와 그 뒤의 것은 적용하지
+			// 않았으므로, 다시 오면 처음 온 것처럼 처리된다.
+			r.hub.log.Warn("ERD op 저장 대기 (메타 DB 바쁨)", "doc", r.id, "kind", op.Kind, "error", err)
+			c.heldGen = msg.Gen
+			c.enqueue(mustJSON(map[string]any{
+				"type": "busy", "opId": op.ID, "retryMs": busyRetryMs,
+				"message": "저장소가 잠시 바쁩니다. 편집을 모아 두었다가 다시 보냅니다",
+			}))
+			if changed {
+				c.sendUndoState()
+			}
+			return nil
+		}
 		if err != nil {
 			// 저장 실패는 이 연결의 문제가 아니라 서버 문제다. 알리고 계속 살려둔다.
 			r.hub.log.Error("ERD op 저장 실패", "doc", r.id, "kind", op.Kind, "error", err)
@@ -900,4 +935,25 @@ func mustJSON(v any) []byte {
 		return []byte(`{"type":"error","message":"응답을 만들지 못했습니다"}`)
 	}
 	return data
+}
+
+// CloseAll은 열린 방을 모두 닫고 되돌리기 스택을 비운다.
+//
+// 메타 DB를 통째로 바꾼 뒤(클라우드에서 가져오기·백업으로 복구) 부른다. 방은 바꾸기 전의
+// 문서를 메모리에 들고 있고, 마지막 사람이 나갈 때 그것을 저장소에 굳힌다 — 그대로 두면
+// 방금 받아 온 문서를 옛 문서가 조용히 덮어쓴다. CloseDocument는 참여자를 먼저 비우므로
+// 굳히는 일이 일어나지 않는다. 되돌리기 스택도 옛 문서 위의 역연산이라 버린다.
+func (h *Hub) CloseAll(reason string) {
+	h.mu.Lock()
+	ids := make([]string, 0, len(h.rooms))
+	for id := range h.rooms {
+		ids = append(ids, id)
+	}
+	h.mu.Unlock()
+	for _, id := range ids {
+		h.CloseDocument(id, reason)
+	}
+	h.undos.mu.Lock()
+	h.undos.stacks = map[string]*undoStack{}
+	h.undos.mu.Unlock()
 }
