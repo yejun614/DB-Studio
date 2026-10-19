@@ -46,6 +46,8 @@ const systemPrompt = `당신은 DB Studio의 어시스턴트입니다. 이 앱�
   **단 erd_delete_column 은 승인이 필요합니다** — 컬럼을 지우면 그 컬럼을 쓰는 기본키
   자리·인덱스·외래키가 함께 영향받으므로, 무엇이 사라지는지 사용자가 보고 결정합니다.
   그 툴을 부른 뒤에는 "지웠습니다"가 아니라 "승인을 요청했습니다"라고 말하세요.
+  초안의 설계 문제(화면의 "문제" 탭)는 erd_read_issues 로 읽고, 문제마다 적힌 툴로
+  고치세요.
   테이블이나 초안을 지우는 툴은 없습니다 — 그때는 화면에서 하도록 안내하세요.
 - 운영(prod) 데이터베이스를 다룰 때는 위험을 먼저 설명하세요. 파괴적 변경(테이블·컬럼 삭제,
   타입 축소)은 데이터 손실을 뜻합니다.
@@ -168,6 +170,11 @@ func screenPrompt(r *screenReport) string {
 	return b.String()
 }
 
+// erdReadOnlyTools는 문서를 바꾸지 않는 ERD 툴이다.
+var erdReadOnlyTools = map[string]bool{
+	"read_schema": true, "list_domains": true, "read_layout": true, "read_issues": true,
+}
+
 // erdSystemPrompt는 ERD 초안 대화의 지침이다.
 //
 // 앱 전체 어시스턴트의 지침을 그대로 쓰지 않는 이유: 저쪽은 "쓰기는 제안만 가능하다"를
@@ -185,11 +192,17 @@ func erdSystemPrompt(docName, dialect string) string {
   참조하면 툴이 거부합니다.
 - 이것은 초안입니다. 실제 데이터베이스는 사용자가 마이그레이션을 만들어 실행할 때
   바뀌며, 그 단계는 이 대화 밖에 있습니다.
-- **지우는 툴은 delete_column 하나뿐이고, 그것만 승인을 거칩니다.** 부르면 제안이
-  만들어지고 사용자가 화면에서 승인해야 실제로 지워집니다 — 그러므로 "지웠습니다"가
-  아니라 "승인을 요청했습니다"라고 말하세요. 무엇이 함께 영향받는지(기본키 자리·
-  인덱스·외래키)는 제안에 담기므로 당신이 다시 세어 적을 필요는 없습니다.
+- **승인을 거치는 툴은 delete_column 하나뿐입니다.** 부르면 제안이 만들어지고 사용자가
+  화면에서 승인해야 실제로 지워집니다 — 그러므로 "지웠습니다"가 아니라 "승인을
+  요청했습니다"라고 말하세요. 무엇이 함께 영향받는지(기본키 자리·인덱스·외래키)는
+  제안에 담기므로 당신이 다시 세어 적을 필요는 없습니다. 외래키·인덱스를 지우는
+  delete_foreign_key·delete_index 는 다른 것을 함께 지우지 않아 바로 반영됩니다.
   테이블을 지우는 툴은 없습니다. 그때는 도면에서 직접 지우도록 안내하세요.
+- **화면 오른쪽 "문제" 탭의 오류·경고는 read_issues 로 읽습니다.** 사용자가 문제·경고를
+  말하거나 고쳐 달라고 하면 먼저 그것을 부르고, 문제마다 resolve 에 적힌 툴로 고치세요.
+  fix 가 있으면 그 툴과 인자를 그대로 쓰세요(이름을 새로 짓지 마세요). 표·관계를
+  여러 개 고친 뒤에는 다시 불러 무엇이 남았는지 확인하고 알리세요. 툴로 고칠 수 없는
+  문제는 사용자에게 화면에서 고치도록 안내하세요.
 - 타입은 %s 문법에 맞는 것을 쓰세요.
 - 답변은 한국어로, 간결하게. 무엇을 왜 그렇게 했는지 한두 줄로 덧붙이세요 —
   이 대화는 나중에 다른 사람과 공유될 수 있습니다.`, docName, dialect, dialect)
@@ -604,9 +617,8 @@ func (r *agentRun) executeERDCalls(ctx context.Context, msgID int64, calls []ai.
 		_ = r.out.send("tool_call", map[string]any{
 			"id": call.ID, "name": call.Name,
 			"arguments": json.RawMessage(call.Input),
-			// read_schema만 읽기다. 나머지는 문서를 바꾼다 —
-			// 화면이 그 구분을 표시할 수 있어야 한다.
-			"mutating": tool != nil && call.Name != "read_schema",
+			// 읽기 툴만 빼고 문서를 바꾼다 — 화면이 그 구분을 표시할 수 있어야 한다.
+			"mutating": tool != nil && !erdReadOnlyTools[call.Name],
 		})
 		if tool == nil {
 			results = append(results,
