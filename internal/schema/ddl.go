@@ -267,6 +267,9 @@ type renderer struct {
 	// SQLite처럼 ALTER로 제약을 추가할 수 없는 dialect에서 제약을 CREATE TABLE에
 	// 인라인했는지 판단하는 데 쓴다.
 	createdTables map[string]bool
+	// onUpdateByTrigger가 참이면 지금 그리는 컬럼의 ON UPDATE 를 트리거가 맡는다
+	// (PostgreSQL 의 CREATE TABLE). 컬럼 정의에서 빠지는 것이 생략이 아니다.
+	onUpdateByTrigger bool
 }
 
 func (r *renderer) markCreated(t *Table) {
@@ -431,9 +434,11 @@ func (r *renderer) createTable(c Change) {
 	fmt.Fprintf(&b, "CREATE TABLE %s%s (\n", ine, r.tableName(t))
 
 	parts := []string{}
+	r.onUpdateByTrigger = r.dialect == "postgres"
 	for _, col := range t.Columns {
 		parts = append(parts, "  "+r.columnDef(t, col))
 	}
+	r.onUpdateByTrigger = false
 	// SQLite에서 rowid 별칭(INTEGER PRIMARY KEY AUTOINCREMENT)은 컬럼 정의에
 	// 인라인되므로 테이블 레벨 PRIMARY KEY 절을 중복해서 넣으면 문법 오류가 된다.
 	// ClickHouse 의 기본키는 제약이 아니라 **정렬 키**다(유일성을 강제하지 않는다).
@@ -517,7 +522,63 @@ func (r *renderer) createTable(c Change) {
 		r.up(c, r.createIndexSQL(t, idx), "")
 	}
 
+	if r.dialect == "postgres" {
+		r.onUpdateTrigger(c, t)
+	}
+
 	r.down(c, fmt.Sprintf("DROP TABLE %s%s", r.ifExistsClause(), r.tableName(t)), "")
+}
+
+// onUpdateTrigger는 PostgreSQL 에서 ON UPDATE 컬럼을 트리거로 대신한다.
+//
+// PostgreSQL 에는 컬럼의 ON UPDATE 가 없어서, MySQL 에서 옮겨 온 updated_at 이
+// 그대로는 "넣을 때만 채워지고 고쳐도 그대로인" 컬럼이 된다. 오류가 나지 않으니
+// 아무도 모르고 지나간다. 그래서 표마다 함수 하나와 트리거 하나를 만들어 준다.
+//
+// MySQL 의 동작을 그대로 따른다: 행의 값이 실제로 바뀌었을 때만 갱신하고, 문장이
+// 그 컬럼을 직접 고쳤으면 그 값을 남긴다.
+func (r *renderer) onUpdateTrigger(c Change, t *Table) {
+	var cols []*Column
+	for _, col := range t.Columns {
+		if col.OnUpdate != "" {
+			cols = append(cols, col)
+		}
+	}
+	if len(cols) == 0 {
+		return
+	}
+	name := t.Name + "_on_update"
+	fn := r.tableNameParts(t.Namespace, name)
+
+	var body strings.Builder
+	body.WriteString("  IF NEW IS DISTINCT FROM OLD THEN\n")
+	for _, col := range cols {
+		id := r.id(col.Name)
+		fmt.Fprintf(&body, "    IF NEW.%s IS NOT DISTINCT FROM OLD.%s THEN NEW.%s := %s; END IF;\n",
+			id, id, id, pgOnUpdateExpr(col.OnUpdate))
+	}
+	body.WriteString("  END IF;\n")
+
+	r.up(c, fmt.Sprintf("CREATE OR REPLACE FUNCTION %s() RETURNS trigger AS $$\nBEGIN\n%s  RETURN NEW;\nEND\n$$ LANGUAGE plpgsql",
+		fn, body.String()), "ON UPDATE 를 대신하는 트리거 함수 (PostgreSQL 에는 컬럼의 ON UPDATE 가 없습니다)")
+	// 표를 IF NOT EXISTS 로 만들므로 스크립트를 다시 돌려도 되어야 한다.
+	r.up(c, fmt.Sprintf("DROP TRIGGER IF EXISTS %s ON %s", r.id(name), r.tableName(t)), "")
+	r.up(c, fmt.Sprintf("CREATE TRIGGER %s BEFORE UPDATE ON %s FOR EACH ROW EXECUTE FUNCTION %s()",
+		r.id(name), r.tableName(t), fn), "")
+
+	// 트리거는 표와 함께 사라지지만 함수는 남는다. down 은 나중에 뒤집히므로
+	// DROP TABLE 보다 먼저 넣어야 표를 지운 **뒤에** 함수를 지운다.
+	r.down(c, fmt.Sprintf("DROP FUNCTION IF EXISTS %s()", fn), "")
+}
+
+// pgOnUpdateExpr는 자동 갱신 식을 PostgreSQL 에서 통하는 형태로 바꾼다.
+//
+// MySQL 표기(current_timestamp(), now(3), LOCALTIME)는 PostgreSQL 에서 문법
+// 오류이거나 뜻이 다르다(LOCALTIME 은 시각만 준다). 모두 같은 "지금"이므로
+// CURRENT_TIMESTAMP 하나로 모으고 소수 자릿수만 지킨다.
+func pgOnUpdateExpr(expr string) string {
+	canon := canonicalOnUpdate(expr) // current_timestamp 또는 current_timestamp(n)
+	return strings.ToUpper(canon)
 }
 
 func (r *renderer) dropTable(c Change) {
@@ -529,13 +590,18 @@ func (r *renderer) dropTable(c Change) {
 
 	// 롤백은 테이블 구조를 되살릴 수 있지만 데이터는 되살릴 수 없다.
 	restore := Change{Kind: CreateTable, Table: c.Table, TableRef: t}
-	saved := r.plan.Up
+	saved, savedDown := r.plan.Up, len(r.plan.Down)
 	r.plan.Up = nil
 	r.createTable(restore) // Up에 생성문을 만들고
 	generated := r.plan.Up
 	r.plan.Up = saved
-	for _, s := range generated { // 그것을 Down으로 옮긴다
-		r.down(c, s.SQL, "")
+	// createTable 은 자기 되돌리기(DROP TABLE)도 Down 에 적는다. 그것이 남으면 이
+	// 변경을 되돌릴 때 표를 만들자마자 다시 지운다.
+	r.plan.Down = r.plan.Down[:savedDown]
+	// 그것을 Down으로 옮긴다. Down 은 마지막에 통째로 뒤집히므로 거꾸로 넣어야
+	// 표 → 인덱스 → 트리거 순서로 실행된다.
+	for i := len(generated) - 1; i >= 0; i-- {
+		r.down(c, generated[i].SQL, generated[i].Note)
 	}
 	r.irreversible(c, "구조는 복원되지만 데이터는 복원되지 않습니다")
 }
@@ -606,17 +672,45 @@ func (r *renderer) columnDef(t *Table, col *Column) string {
 	if col.OnUpdate != "" {
 		if r.dialect == "mysql" {
 			fmt.Fprintf(&b, " ON UPDATE %s", col.OnUpdate)
-		} else {
+		} else if !r.onUpdateByTrigger {
 			// 다른 DB 에는 이 문법이 없다. 조용히 빼면 "ERD 에는 있는데 DB 에는
 			// 없는" 컬럼이 되므로, 무엇을 해야 하는지까지 적어 둔다.
 			r.warn("%s는 컬럼의 ON UPDATE를 지원하지 않아 %s.%s 의 자동 갱신을 생략했습니다 — "+
 				"트리거로 만들어야 합니다", r.dialect, t.Display(), col.Name)
 		}
 	}
+	if values := r.inlineEnumValues(col); values != "" {
+		fmt.Fprintf(&b, " CHECK (%s IN (%s))", r.id(col.Name), values)
+	}
 	if col.Comment != "" && r.q.supportsInlineComment {
 		fmt.Fprintf(&b, " COMMENT %s", quoteLiteral(col.Comment))
 	}
 	return b.String()
+}
+
+// inlineEnumValues는 허용값을 CHECK 로 지켜야 하는 컬럼의 값 목록이다(SQL 리터럴을
+// 쉼표로 이은 것). 해당 없으면 빈 문자열이다.
+//
+// 값 목록을 타입에 품는 ENUM('a','b') 은 MySQL·ClickHouse 의 것이다. 다른 DB 에서는
+// 문자열 타입으로 그려지는데, 거기서 멈추면 아무 문자열이나 들어가는 컬럼이 되고
+// 오류도 나지 않는다. 값 목록을 CHECK 제약으로 옮겨 그 약속을 지킨다.
+func (r *renderer) inlineEnumValues(col *Column) string {
+	if r.dialect == "mysql" || r.dialect == "clickhouse" {
+		return ""
+	}
+	if col.Type.Base != TypeEnum || col.Type.EnumName != "" || len(col.Type.Values) == 0 {
+		return ""
+	}
+	// MySQL 의 SET 도 같은 논리 타입으로 읽힌다. 그 값은 'a,b' 처럼 여러 개를 품으므로
+	// IN 으로 묶으면 멀쩡한 값이 거부된다.
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(col.RawType)), "set") {
+		return ""
+	}
+	quoted := make([]string, len(col.Type.Values))
+	for i, v := range col.Type.Values {
+		quoted[i] = quoteLiteral(v)
+	}
+	return strings.Join(quoted, ", ")
 }
 
 // sqliteInlinePKColumn은 SQLite에서 "INTEGER PRIMARY KEY AUTOINCREMENT"로
@@ -879,6 +973,12 @@ func (r *renderer) alterColumn(c Change) {
 		if typeChanged {
 			r.up(c, r.q.alterColumnType(r.q, table, colID, newType, col.Nullable),
 				noteIf(c.Destructive, c.LossyDetail))
+			// 표를 만들 때는 허용값을 CHECK 로 옮기지만, 이미 있는 컬럼에 붙이려면 제약
+			// 이름과 기존 값 검사가 따라와야 한다. 만들지 않은 것을 숨기지 않는다.
+			if r.inlineEnumValues(col) != "" {
+				r.warn("%s는 컬럼 타입에 허용값 목록을 담지 못해 %s.%s 의 허용값 제약(CHECK)을 만들지 않았습니다",
+					r.dialect, t.Display(), col.Name)
+			}
 			r.down(c, r.q.alterColumnType(r.q, table, colID, oldType, old.Nullable), "")
 		}
 		if nullChanged {

@@ -31,27 +31,70 @@ func TestOnUpdateInCreateTable(t *testing.T) {
 // MySQL 말고는 이 문법이 없다. 조용히 빼면 "ERD 에는 있는데 DB 에는 없는" 컬럼이
 // 되므로 무엇을 해야 하는지까지 경고에 적어야 한다.
 func TestOnUpdateWarnsOnOtherDialects(t *testing.T) {
-	sc := &Schema{Dialect: "postgres", Shape: ShapeRelational, Tables: []*Table{{
-		Name: "posts",
-		Columns: []*Column{{
-			Name: "updated_at", Position: 1, RawType: "timestamp",
-			Type: LogicalType{Base: TypeTimestamp}, OnUpdate: "CURRENT_TIMESTAMP",
-		}},
-	}}}
-	plan := BuildPlan("postgres", Diff(&Schema{
-		Dialect: "postgres", Shape: ShapeRelational}, sc))
+	for _, dialect := range []string{"mssql", "oracle", "sqlite"} {
+		sc := &Schema{Dialect: dialect, Shape: ShapeRelational, Tables: []*Table{{
+			Name: "posts",
+			Columns: []*Column{{
+				Name: "updated_at", Position: 1, RawType: "timestamp",
+				Type: LogicalType{Base: TypeTimestamp}, OnUpdate: "CURRENT_TIMESTAMP",
+			}},
+		}}}
+		plan := BuildPlan(dialect, Diff(&Schema{
+			Dialect: dialect, Shape: ShapeRelational}, sc))
 
-	if strings.Contains(plan.UpSQL(), "ON UPDATE") {
-		t.Errorf("PostgreSQL DDL 에 ON UPDATE 가 나갔습니다:\n%s", plan.UpSQL())
-	}
-	found := false
-	for _, w := range plan.Warnings {
-		if strings.Contains(w, "트리거") {
-			found = true
+		if strings.Contains(plan.UpSQL(), "ON UPDATE") {
+			t.Errorf("%s DDL 에 ON UPDATE 가 나갔습니다:\n%s", dialect, plan.UpSQL())
+		}
+		found := false
+		for _, w := range plan.Warnings {
+			if strings.Contains(w, "트리거") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s: 무엇을 해야 하는지 적지 않았습니다: %v", dialect, plan.Warnings)
 		}
 	}
-	if !found {
-		t.Errorf("무엇을 해야 하는지 적지 않았습니다: %v", plan.Warnings)
+}
+
+// PostgreSQL 은 표를 만들 때 트리거로 대신 만들어 준다. MySQL 에서 옮겨 온
+// updated_at 이 "고쳐도 그대로인" 컬럼이 되는 것을 경고만으로는 막지 못했다.
+func TestOnUpdateBecomesTriggerOnPostgres(t *testing.T) {
+	sc := &Schema{Dialect: "postgres", Shape: ShapeRelational, Tables: []*Table{{
+		Name: "posts",
+		Columns: []*Column{
+			{Name: "id", Position: 1, Type: LogicalType{Base: TypeBigInt}},
+			{
+				Name: "updated_at", Position: 2, RawType: "datetime(3)",
+				Type: LogicalType{Base: TypeTimestamp, Precision: 3}, OnUpdate: "current_timestamp(3)",
+			},
+		},
+	}}}
+	plan := BuildPlan("postgres", Diff(&Schema{Dialect: "postgres", Shape: ShapeRelational}, sc))
+	up := plan.UpSQL()
+
+	for _, want := range []string{
+		`CREATE OR REPLACE FUNCTION "posts_on_update"() RETURNS trigger`,
+		`IF NEW."updated_at" IS NOT DISTINCT FROM OLD."updated_at" THEN NEW."updated_at" := CURRENT_TIMESTAMP(3);`,
+		`CREATE TRIGGER "posts_on_update" BEFORE UPDATE ON "posts" FOR EACH ROW EXECUTE FUNCTION "posts_on_update"()`,
+	} {
+		if !strings.Contains(up, want) {
+			t.Errorf("%q 가 없습니다:\n%s", want, up)
+		}
+	}
+	if strings.Contains(up, "ON UPDATE CURRENT") {
+		t.Errorf("컬럼 정의에 ON UPDATE 가 나갔습니다:\n%s", up)
+	}
+	for _, w := range plan.Warnings {
+		if strings.Contains(w, "ON UPDATE") {
+			t.Errorf("트리거로 대신했는데 생략했다고 경고합니다: %s", w)
+		}
+	}
+	// 함수는 표를 지운 뒤에 지워야 한다. 먼저 지우면 트리거가 물고 있어 실패한다.
+	down := plan.DownSQL()
+	table, fn := strings.Index(down, `DROP TABLE`), strings.Index(down, `DROP FUNCTION IF EXISTS "posts_on_update"()`)
+	if table < 0 || fn < 0 || fn < table {
+		t.Errorf("되돌리기 순서가 틀렸습니다:\n%s", down)
 	}
 }
 
@@ -177,5 +220,31 @@ func TestTimePrecisionIsCompared(t *testing.T) {
 	}
 	if d := Diff(mk("datetime(3)"), mk("datetime(3)")); len(d.Changes) != 0 {
 		t.Errorf("같은 것을 다르다고 봤습니다: %+v", d.Changes)
+	}
+}
+
+// 표를 지운 변경을 되돌리면 표 → 인덱스 → 트리거 순서로 다시 만들어야 하고, 만든
+// 표를 도로 지우면 안 된다. 순서가 뒤집히면 없는 표에 인덱스를 걸다 실패한다.
+func TestDropTableRollbackOrder(t *testing.T) {
+	sc := &Schema{Dialect: "postgres", Shape: ShapeRelational, Tables: []*Table{{
+		Name: "posts",
+		Columns: []*Column{
+			{Name: "title", Position: 1, Type: LogicalType{Base: TypeText}},
+			{
+				Name: "updated_at", Position: 2,
+				Type: LogicalType{Base: TypeTimestamp}, OnUpdate: "CURRENT_TIMESTAMP",
+			},
+		},
+		Indexes: []*Index{{Name: "ix_title", Columns: []IndexPart{{Column: "title"}}}},
+	}}}
+	down := BuildPlan("postgres", Diff(sc, &Schema{Dialect: "postgres", Shape: ShapeRelational})).DownSQL()
+
+	at := func(s string) int { return strings.Index(down, s) }
+	table, index, fn, trigger := at("CREATE TABLE"), at("CREATE INDEX"), at("CREATE OR REPLACE FUNCTION"), at("CREATE TRIGGER")
+	if table < 0 || !(table < index && index < fn && fn < trigger) {
+		t.Errorf("되살리는 순서가 틀렸습니다:\n%s", down)
+	}
+	if strings.Contains(down, "DROP TABLE") {
+		t.Errorf("되살린 표를 다시 지웁니다:\n%s", down)
 	}
 }
