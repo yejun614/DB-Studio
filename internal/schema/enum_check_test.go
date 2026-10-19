@@ -22,7 +22,7 @@ func TestInlineEnumBecomesCheck(t *testing.T) {
 	want := map[string]string{
 		"postgres": `"status" text NOT NULL DEFAULT 'DEVELOPING' CHECK ("status" IN ('DEVELOPING', 'RUNNING'))`,
 		"mssql":    `[status] nvarchar(255) NOT NULL DEFAULT 'DEVELOPING' CHECK ([status] IN ('DEVELOPING', 'RUNNING'))`,
-		"oracle":   `"status" VARCHAR2(255) NOT NULL DEFAULT 'DEVELOPING' CHECK ("status" IN ('DEVELOPING', 'RUNNING'))`,
+		"oracle":   `"status" VARCHAR2(255) DEFAULT 'DEVELOPING' NOT NULL CHECK ("status" IN ('DEVELOPING', 'RUNNING'))`,
 	}
 	for dialect, def := range want {
 		up := BuildPlan(dialect, Diff(&Schema{Dialect: dialect, Shape: ShapeRelational}, status())).UpSQL()
