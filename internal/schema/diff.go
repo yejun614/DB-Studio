@@ -104,6 +104,15 @@ func Diff(from, to *Schema) *DiffResult {
 	from.Sort()
 	to.Sort()
 
+	// ENUM 을 계획이 향하는 DB 의 모양으로 맞춘다. 계획의 방언은 from 의 것이다
+	// (실제 DB 이거나, 처음부터 만들 때는 그 방언의 빈 스키마다). 맞추지 않으면 같은
+	// 설계를 같은 DB 와 견줘도 "값 목록 ENUM" 과 "이름 붙은 ENUM" 이 다르다고 나온다.
+	enumDialect := from.Dialect
+	if enumDialect == "" {
+		enumDialect = to.Dialect
+	}
+	from, to = enumsFor(from, enumDialect), enumsFor(to, enumDialect)
+
 	// 관계형이 아닌 스키마는 DDL 개념이 없으므로 비교 대상에서 제외한다.
 	if from.Shape != ShapeRelational || to.Shape != ShapeRelational {
 		res.Unsupported = append(res.Unsupported,

@@ -646,7 +646,7 @@ func (r *renderer) columnDef(t *Table, col *Column) string {
 		}
 		return b.String()
 	}
-	fmt.Fprintf(&b, "%s %s", r.id(col.Name), RenderType(r.dialect, col.Type, col.RawType))
+	fmt.Fprintf(&b, "%s %s", r.id(col.Name), r.colType(col))
 
 	if col.Generated != "" {
 		fmt.Fprintf(&b, " GENERATED ALWAYS AS (%s)", col.Generated)
@@ -700,6 +700,17 @@ func (r *renderer) columnDef(t *Table, col *Column) string {
 	return b.String()
 }
 
+// colType은 컬럼 정의에 쓰는 타입이다.
+//
+// PostgreSQL 의 이름 붙은 ENUM 은 식별자이므로 따옴표로 감싼다. CREATE TYPE 은 따옴표로
+// 만들므로, 대문자나 한글이 든 도메인 이름을 따옴표 없이 쓰면 다른 이름이 된다.
+func (r *renderer) colType(col *Column) string {
+	if r.dialect == "postgres" && col.Type.Base == TypeEnum && col.Type.EnumName != "" {
+		return r.id(col.Type.EnumName)
+	}
+	return RenderType(r.dialect, col.Type, col.RawType)
+}
+
 // inlineEnumValues는 허용값을 CHECK 로 지켜야 하는 컬럼의 값 목록이다(SQL 리터럴을
 // 쉼표로 이은 것). 해당 없으면 빈 문자열이다.
 //
@@ -713,9 +724,7 @@ func (r *renderer) inlineEnumValues(col *Column) string {
 	if col.Type.Base != TypeEnum || col.Type.EnumName != "" || len(col.Type.Values) == 0 {
 		return ""
 	}
-	// MySQL 의 SET 도 같은 논리 타입으로 읽힌다. 그 값은 'a,b' 처럼 여러 개를 품으므로
-	// IN 으로 묶으면 멀쩡한 값이 거부된다.
-	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(col.RawType)), "set") {
+	if IsSetType(col.RawType) {
 		return ""
 	}
 	quoted := make([]string, len(col.Type.Values))
@@ -977,10 +986,11 @@ func (r *renderer) alterColumn(c Change) {
 		}
 	}
 
-	newType := RenderType(r.dialect, col.Type, col.RawType)
-	oldType := RenderType(r.dialect, old.Type, old.RawType)
+	newType := r.colType(col)
+	oldType := r.colType(old)
 	_, typeChanged := c.Attrs["type"]
 	_, nullChanged := c.Attrs["nullable"]
+	defaultDone := false
 
 	if r.dialect == "mysql" {
 		// MySQL의 MODIFY COLUMN은 정의 전체를 다시 쓴다. 따라서 타입·NULL·기본값·주석
@@ -992,7 +1002,10 @@ func (r *renderer) alterColumn(c Change) {
 	}
 
 	{
-		if typeChanged {
+		if typeChanged && r.dialect == "postgres" && (isNamedEnum(col) || isNamedEnum(old)) {
+			r.pgAlterEnumColumnType(c, table, colID, col, old, newType, oldType)
+			defaultDone = true
+		} else if typeChanged {
 			r.up(c, r.q.alterColumnType(r.q, table, colID, newType, col.Nullable),
 				noteIf(c.Destructive, c.LossyDetail))
 			// 표를 만들 때는 허용값을 CHECK 로 옮기지만, 이미 있는 컬럼에 붙이려면 제약
@@ -1011,7 +1024,7 @@ func (r *renderer) alterColumn(c Change) {
 	}
 
 	// 기본값 변경
-	if _, ok := c.Attrs["default"]; ok {
+	if _, ok := c.Attrs["default"]; ok && !defaultDone {
 		r.renderDefaultChange(c, table, colID, col, old)
 	}
 
@@ -1025,6 +1038,39 @@ func (r *renderer) alterColumn(c Change) {
 			r.up(c, mssqlSetDescription(t, col.Name, col.Comment), "")
 			r.down(c, mssqlSetDescription(t, col.Name, old.Comment), "")
 		}
+	}
+}
+
+func isNamedEnum(col *Column) bool {
+	return col.Type.Base == TypeEnum && col.Type.EnumName != ""
+}
+
+// pgAlterEnumColumnType은 PostgreSQL 에서 ENUM 이 끼는 컬럼 타입 변경이다.
+//
+// 두 가지가 보통의 타입 변경과 다르다.
+//   - ENUM 과 다른 타입 사이에는 직접 변환이 없다(ENUM 끼리도 없다 — 도메인 이름을
+//     바꾸면 새 타입으로 옮겨 가야 한다). text 를 거치면 된다: USING c::text::새타입.
+//   - 기본값은 옛 타입의 값으로 저장돼 있어 함께 바뀌지 않는다("default for column
+//     cannot be cast automatically"). 떼고, 바꾸고, 다시 붙인다.
+func (r *renderer) pgAlterEnumColumnType(c Change, table, colID string, col, old *Column, newType, oldType string) {
+	alter := func(typ string) string {
+		return fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s TYPE %s USING %s::text::%s", table, colID, typ, colID, typ)
+	}
+	if old.HasDefault && old.Default != "" {
+		r.up(c, r.q.dropDefault(r.q, table, colID), "")
+	}
+	r.up(c, alter(newType), noteIf(c.Destructive, c.LossyDetail))
+	if col.HasDefault && col.Default != "" {
+		r.up(c, r.q.setDefault(r.q, table, colID, col.Default), "")
+	}
+
+	// Down 은 마지막에 통째로 뒤집히므로 실행할 순서의 거꾸로 넣는다.
+	if old.HasDefault && old.Default != "" {
+		r.down(c, r.q.setDefault(r.q, table, colID, old.Default), "")
+	}
+	r.down(c, alter(oldType), "")
+	if col.HasDefault && col.Default != "" {
+		r.down(c, r.q.dropDefault(r.q, table, colID), "")
 	}
 }
 

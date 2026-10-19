@@ -294,6 +294,9 @@ var postgresTypes = []TypeDef{
 	{Name: "CITEXT", Label: "대소문자 무시 문자열", Category: CatText,
 		Note: "citext 확장이 설치되어 있어야 합니다."},
 	{Name: "NAME", Label: "식별자 문자열 (63바이트)", Category: CatText, Note: "시스템 카탈로그용 타입입니다."},
+	{Name: "ENUM", Label: "정해진 값 중 하나", Category: CatText, Param: ParamValues, Default: "a,b",
+		Note: "CREATE TYPE 으로 만들어집니다. 이름은 도메인이면 도메인 이름, 아니면 <표>_<컬럼>입니다. " +
+			"여러 컬럼이 같은 값 목록을 쓰면 도메인으로 만드세요."},
 
 	{Name: "DATE", Label: "날짜", Category: CatTime},
 	{Name: "TIME", Label: "시각", Category: CatTime, Param: ParamFraction, Default: "6"},
