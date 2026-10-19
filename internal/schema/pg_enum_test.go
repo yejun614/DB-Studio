@@ -198,3 +198,26 @@ func TestNamedEnumOnOtherDialects(t *testing.T) {
 		t.Errorf("값을 바꿨는데 컬럼을 고치지 않습니다:\n%s", up)
 	}
 }
+
+// 직접 입력한 ENUM 배열(my_enum[])은 겉은 배열로 알아보지만 원소를 모른다. 그 원소를
+// 기본값 text 로 그리면 text[] 가 나가고, 값은 들어가므로 오류도 나지 않는다.
+// 모르는 원소가 있으면 적은 그대로 내보내야 한다.
+func TestPostgresArrayOfUnknownKeepsRaw(t *testing.T) {
+	col := func(name, raw string) *Column {
+		return &Column{Name: name, RawType: raw, Type: ParseType("postgres", raw)}
+	}
+	sc := &Schema{Dialect: "postgres", Shape: ShapeRelational,
+		Enums: []*Enum{{Name: "data_source_permission", Values: []string{"read", "write"}}},
+		Tables: []*Table{tableOf("data_source",
+			col("permission", "data_source_permission[]"),
+			col("tags", "varchar(20)[]"),
+		)},
+	}
+	up := BuildPlan("postgres", Diff(pgEmpty(), sc)).UpSQL()
+	if !strings.Contains(up, `"permission" data_source_permission[]`) {
+		t.Errorf("직접 입력한 배열 타입이 바뀌었습니다:\n%s", up)
+	}
+	if !strings.Contains(up, `"tags" varchar(20)[]`) {
+		t.Errorf("알아보는 배열 타입이 정규화되지 않았습니다:\n%s", up)
+	}
+}

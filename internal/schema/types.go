@@ -288,8 +288,11 @@ var dialectTypes = map[string]map[string]BaseType{
 // RenderType은 논리 타입을 대상 dialect의 DDL 타입 문자열로 변환한다.
 // preferRaw가 있고 대상 dialect가 원본과 같으면 원본을 그대로 써서 손실을 막는다.
 func RenderType(dialect string, t LogicalType, preferRaw string) string {
-	if preferRaw != "" && t.Base == TypeUnknown {
+	if preferRaw != "" && hasUnknown(t) {
 		// 정규화에 실패한 타입은 원본을 그대로 내보낸다. 추측보다 낫다.
+		// 배열의 원소도 본다 — my_enum[] 은 배열이라 겉은 알아보지만 원소를 모른다.
+		// 겉만 보면 원소가 기본값 text 로 그려져 text[] 가 되고, 값은 들어가므로
+		// 오류도 나지 않는다.
 		return preferRaw
 	}
 	switch dialect {
@@ -310,6 +313,19 @@ func RenderType(dialect string, t LogicalType, preferRaw string) string {
 		return preferRaw
 	}
 	return string(t.Base)
+}
+
+// hasUnknown은 타입 자신이나 (배열이면) 그 원소 중에 알아보지 못한 것이 있는지 본다.
+func hasUnknown(t LogicalType) bool {
+	for {
+		if t.Base == TypeUnknown {
+			return true
+		}
+		if t.Element == nil {
+			return false
+		}
+		t = *t.Element
+	}
 }
 
 func renderMySQL(t LogicalType) string {
