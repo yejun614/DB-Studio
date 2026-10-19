@@ -44,8 +44,17 @@ type Store struct {
 func Open(ctx context.Context, dbPath string, secret *crypto.SecretBox) (*Store, error) {
 	// busy_timeout과 foreign_keys는 커넥션마다 적용되어야 하므로 DSN에 담는다.
 	// (아래 db.ExecContext로 켠 PRAGMA는 풀의 한 커넥션에만 적용될 수 있다.)
+	//
+	// _txlock=immediate는 쓰기 트랜잭션을 BEGIN IMMEDIATE로 연다(ReadOnly로 연 것은
+	// 그대로 BEGIN이다). 기본값(DEFERRED)은 읽기로 시작해 첫 쓰기에서 쓰기 잠금으로
+	// 올라가는데, WAL에서 그 사이에 다른 커넥션이 커밋했으면 SQLite는 **기다리지 않고**
+	// 곧바로 SQLITE_BUSY를 낸다 — 기다려 봐야 이미 낡은 스냅샷 위에서 쓰게 되기 때문이다.
+	// busy_timeout은 이 경우에 듣지 않는다. ERD 편집(AppendERDOp: seq를 읽고 op를 넣는다)
+	// 도중 가끔 보이던 "database is locked"가 이것이었다. 처음부터 쓰기 잠금을 잡으면
+	// 경합은 busy_timeout 안에서 줄을 서는 문제로 바뀐다.
 	dsn := strings.ReplaceAll(dbPath, "\\", "/") +
-		"?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"
+		"?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)" +
+		"&_txlock=immediate"
 
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
