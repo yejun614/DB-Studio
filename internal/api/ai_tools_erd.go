@@ -305,6 +305,8 @@ func erdTools() map[string]*erdTool {
 	list = append(list, erdLayoutTools()...)
 	// 겉모습(색·아이콘) 툴(ai_tools_erdappearance.go).
 	list = append(list, erdAppearanceTools()...)
+	// 설계 문제 읽기와 그것을 고치는 툴(ai_tools_erdissues.go).
+	list = append(list, erdIssueTools()...)
 
 	out := make(map[string]*erdTool, len(list))
 	for _, t := range list {

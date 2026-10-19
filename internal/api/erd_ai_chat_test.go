@@ -153,7 +153,8 @@ func TestERDChatAppliesToolCall(t *testing.T) {
 			n != "read_schema" && n != "set_primary_key" && n != "duplicate_table" &&
 			n != "set_logical_names" && n != "list_domains" && n != "detach_domain" &&
 			n != "delete_column" && n != "read_layout" && n != "arrange_layout" &&
-			n != "set_appearance" {
+			n != "set_appearance" && n != "read_issues" && n != "delete_foreign_key" &&
+			n != "delete_index" {
 			t.Errorf("초안 대화에 낯선 툴이 있습니다: %s", n)
 		}
 		if n == "run_query" || n == "list_connections" || n == "apply_migration" {
