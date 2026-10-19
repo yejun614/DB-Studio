@@ -3,8 +3,11 @@ package crypto
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -16,6 +19,8 @@ import (
 // 출력 형식은 "v1:<base64(nonce||ciphertext)>" 이며, 향후 키 로테이션을 위해 버전 접두사를 둔다.
 type SecretBox struct {
 	aead cipher.AEAD
+	// key는 파생 키를 만들 때만 쓴다(DeriveKey·Fingerprint). 봉인 자체는 aead가 한다.
+	key []byte
 }
 
 const secretVersion = "v1"
@@ -38,7 +43,27 @@ func NewSecretBox(key []byte) (*SecretBox, error) {
 	if err != nil {
 		return nil, fmt.Errorf("new gcm: %w", err)
 	}
-	return &SecretBox{aead: aead}, nil
+	return &SecretBox{aead: aead, key: append([]byte(nil), key...)}, nil
+}
+
+// DeriveKey는 용도 이름(label)마다 다른 32바이트 키를 만든다.
+//
+// 마스터 키를 그대로 다른 용도(백업 파일 암호화 등)에 쓰지 않는 이유: 같은 키가 두 가지
+// 형식의 암호문을 만들면, 한쪽 형식의 약점이 다른 쪽까지 번진다. 용도마다 키를 갈라 두면
+// 한 용도의 사고가 그 용도에 머문다.
+func (s *SecretBox) DeriveKey(label string) []byte {
+	m := hmac.New(sha256.New, s.key)
+	m.Write([]byte(label))
+	return m.Sum(nil)
+}
+
+// Fingerprint는 마스터 키를 가리키는 짧은 표식이다. 키 자체는 드러나지 않는다.
+//
+// 원격(D1·오브젝트 스토리지)에 있는 데이터가 **이 키로 봉인된 것인지**를 받기 전에 확인하는
+// 데 쓴다. 다른 키로 봉인된 메타 DB를 받으면 저장된 자격증명이 전부 풀리지 않는데, 그 사실은
+// 받고 나서 커넥션을 하나씩 열어 볼 때에야 드러난다.
+func (s *SecretBox) Fingerprint() string {
+	return hex.EncodeToString(s.DeriveKey("dbstudio/key-fingerprint/v1"))[:16]
 }
 
 // Seal은 평문을 암호화한다. 빈 문자열은 빈 문자열로 통과시켜 "값 없음"을 유지한다.
