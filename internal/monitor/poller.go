@@ -525,15 +525,11 @@ func (m *Manager) applyPoll(ctx context.Context, conn *model.Connection, adapter
 		}
 	}
 
-	// 커넥션 화면의 연결 상태도 여기서 갱신한다.
-	//
-	// 지금까지 이 값을 쓰는 것은 "테스트" 버튼뿐이었다. 모니터가 30초마다 같은
-	// 것을 확인하고 있는데도 DB 커넥션 화면은 사람이 눌러 주기 전까지 영원히
-	// "확인 전"이었다 — 모니터링 화면은 전부 초록인데 커넥션 화면만 회색이었다.
-	if err := m.st.RecordConnectionCheck(ctx, conn.ID, reachable, lastError); err != nil {
-		slog.Warn("연결 상태 기록 실패", "connection", conn.Name, "err", err)
-	}
-
+	// 커넥션 화면의 연결 상태도 이 기록으로 갱신된다. SaveSamples가 쓰는
+	// connection_state를 커넥션 조회가 "테스트" 버튼 결과와 견주어 더 새 쪽을 보인다
+	// (store/connections.go의 connColumns). connections 행에 직접 쓰지 않는 이유:
+	// 그 표는 클러스터와 D1로 복제되는데, 30초마다 바뀌는 시각을 거기 두면 아무도
+	// 아무것도 바꾸지 않아도 커넥션 수만큼의 행이 매번 나간다.
 	if err := m.st.SaveSamples(ctx, conn.ID, set, lastError); err != nil {
 		slog.Error("지표 저장 실패", "connection", conn.Name, "err", err)
 		return

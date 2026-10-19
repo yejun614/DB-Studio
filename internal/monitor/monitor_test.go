@@ -838,13 +838,30 @@ func TestRollupAndPurge(t *testing.T) {
 	t.Logf("원본 %d행, 시간 롤업 %d행", stats.RawSamples, stats.HourlyRows)
 
 	// 롤업 재실행은 멱등이어야 한다 (같은 버킷을 중복 생성하지 않음).
+	// 바뀐 것이 없으면 한 행도 건드리지 않아야 한다 — 같은 값으로 다시 쓰는 것도 복제
+	// 트리거에는 변경이라 클러스터와 D1로 나간다.
 	beforeRows := stats.HourlyRows
-	if _, err := st.RollupHourly(ctx); err != nil {
+	if n, err := st.RollupHourly(ctx); err != nil {
 		t.Fatalf("rollup again: %v", err)
+	} else if n != 0 {
+		t.Errorf("바뀐 것이 없는데 롤업이 %d개 버킷을 다시 썼습니다", n)
 	}
 	stats, _ = st.MetricStorageStats(ctx)
 	if stats.HourlyRows != beforeRows {
 		t.Errorf("롤업 재실행이 행을 늘렸습니다: %d → %d", beforeRows, stats.HourlyRows)
+	}
+
+	// 끝난 시간대에 늦게 들어온 샘플은 반영한다.
+	late := metric.NewSet()
+	late.CollectedAt = base.Add(30*time.Minute + 30*time.Second)
+	late.Gauge(metric.NameConnTotal, 1000, metric.UnitCount)
+	if err := st.SaveSamples(ctx, conn.ID, late, ""); err != nil {
+		t.Fatalf("save late: %v", err)
+	}
+	if n, err := st.RollupHourly(ctx); err != nil {
+		t.Fatalf("rollup late: %v", err)
+	} else if n != 1 {
+		t.Errorf("늦게 들어온 샘플의 버킷 하나만 고쳐야 합니다: %d", n)
 	}
 
 	// 2시간 이상 지난 원본 삭제
@@ -854,6 +871,13 @@ func TestRollupAndPurge(t *testing.T) {
 	}
 	if rawDeleted == 0 {
 		t.Error("보존기간이 지난 원본이 삭제되지 않았습니다")
+	}
+
+	// 원본이 지워진 버킷을 반쪽 원본으로 다시 집계해 덮으면 안 된다.
+	if n, err := st.RollupHourly(ctx); err != nil {
+		t.Fatalf("rollup after purge: %v", err)
+	} else if n != 0 {
+		t.Errorf("원본이 지워진 뒤의 롤업이 %d개 버킷을 덮었습니다", n)
 	}
 
 	// 롤업은 남아 있어야 하므로 오래된 범위 조회가 여전히 동작한다.
