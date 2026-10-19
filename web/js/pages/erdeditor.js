@@ -1211,7 +1211,8 @@ class Editor {
           h('span.field-help', {},
             dialectSelect.disabled && !ro
               ? '대상 DB가 있으면 문법은 그 DB의 것으로 정해집니다.'
-              : '이미 적어 둔 컬럼 타입은 그대로 남습니다 — 내보낼 때 변환 경고로 알려 줍니다.')),
+              : '적어 둔 컬럼 타입 글자는 그대로 남고, 내보낼 때 새 문법의 타입으로 바뀌어 나갑니다. '
+                + '그 문법에 없는 것은 내보내기 경고로 알려 줍니다.')),
         h('label.field', {}, h('span.field-label', {}, '메모'), noteBox),
 
         h('h3.erd-sub', {}, '새 데이터베이스'),
