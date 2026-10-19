@@ -22,6 +22,7 @@ import (
 	"dbstudio/internal/bootstrap"
 	"dbstudio/internal/buildinfo"
 	"dbstudio/internal/clock"
+	"dbstudio/internal/cloud"
 	"dbstudio/internal/cluster"
 	"dbstudio/internal/config"
 	"dbstudio/internal/crypto"
@@ -297,6 +298,16 @@ func serve(cfg *config.Config, run *runstate.Run, startupNote string) error {
 	srv.SetNotifier(notifier)
 	srv.SetCluster(node)
 
+	// 클라우드 연결(D1 동기화, R2·S3 백업). 설정은 화면에서 하므로 여기서는 늘 만든다.
+	// 메타 DB를 통째로 바꾼 뒤에는 열린 ERD 방을 닫아야 한다 — 방이 들고 있는 옛 문서가
+	// 방금 받아 온 문서를 덮어쓰지 않도록. 그 연결을 아는 것이 부팅 절차다.
+	cloudSvc := cloud.New(st, cloud.Options{
+		DataDir: cfg.DataDir, NodeName: node.Name(),
+		IsMaster: node.IsMaster, IsReplica: node.IsReplica,
+		OnReplaced: srv.CloseAllERDRooms, Log: slog.Default(),
+	})
+	srv.SetCloud(cloudSvc)
+
 	// 앱이 매크로 실행 도중 죽으면 그 기록은 'running'으로 남는다. 화면은 그것을
 	// "지금 돌고 있음"으로 보여주고 사용자는 끝나기를 기다린다. 우리는 그 실행이
 	// 이어지지 않았음을 아는 유일한 시점에 있으므로 여기서 정리한다.
@@ -394,6 +405,11 @@ func serve(cfg *config.Config, run *runstate.Run, startupNote string) error {
 			node.Run(ctx)
 		}()
 	}
+	// 클라우드 동기화·정기 백업. 리플리카에서는 Run이 곧바로 돌아온다(마스터가 한다).
+	go func() {
+		defer applog.Recover("cloud.Run")
+		cloudSvc.Run(ctx)
+	}()
 	// 매크로 자동 실행도 마스터에서만 돈다. 노드마다 돌면 "매일 3시 백업"이 노드 수만큼
 	// 실행되고, 그 기록은 리플리카에서 사라진다.
 	if node.IsReplica() {

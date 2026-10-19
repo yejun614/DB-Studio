@@ -104,6 +104,13 @@ func errorHandler(c *fiber.Ctx, err error) error {
 		default:
 			code = "error"
 		}
+	} else if store.IsBusy(err) {
+		// 메타 DB가 잠시 바쁘다. 500(서버 고장)으로 보이면 사용자는 방금 한 일이 망가졌다고
+		// 읽는다. 다시 하면 되는 일이라는 것을 상태 코드와 문구로 말한다.
+		status = fiber.StatusServiceUnavailable
+		code = "db_busy"
+		message = "저장소가 잠시 바쁩니다. 잠시 뒤 다시 시도하세요"
+		slog.Warn("메타 DB 바쁨", "method", c.Method(), "path", c.Path(), "err", err)
 	} else {
 		// fiber.Error가 아닌 오류는 핸들러가 예상하지 못한 것이다.
 		// 스택은 없지만 어떤 요청에서 났는지는 남겨야 조사할 수 있다.

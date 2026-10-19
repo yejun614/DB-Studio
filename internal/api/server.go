@@ -22,6 +22,7 @@ import (
 	"dbstudio/internal/auth"
 	"dbstudio/internal/backup"
 	"dbstudio/internal/buildinfo"
+	"dbstudio/internal/cloud"
 	"dbstudio/internal/cluster"
 	"dbstudio/internal/config"
 	"dbstudio/internal/dbx"
@@ -47,7 +48,9 @@ type Server struct {
 	// hostMon은 이 컴퓨터 자신의 감시자다. nil일 수 있다(호스트 감시를 끈 경우).
 	hostMon *monitor.HostMonitor
 	// cluster는 이 노드의 클러스터 참여 상태다. nil이면 단일 서버로 동작한다.
-	cluster  *cluster.Cluster
+	cluster *cluster.Cluster
+	// cloud는 D1 동기화·오브젝트 스토리지 백업이다. nil이면 클라우드 화면은 꺼져 있다.
+	cloud    *cloud.Service
 	erdHub   *erdhub.Hub
 	migrator *migrate.Runner
 	macros   *macro.Engine
@@ -294,6 +297,20 @@ func (s *Server) routes() {
 	notifyGroup.Post("/test", s.handleTestNotify)
 
 	// 클러스터: 노드 목록과 복제 상태. 인프라 정보이므로 슈퍼 어드민 전용이다.
+	// 클라우드 연결(D1 동기화, R2·S3 백업). 이 앱의 데이터 전체를 어디에 두는가를 정한다.
+	cloudGroup := authed.Group("/cloud", s.requireRole(model.RoleSuperadmin))
+	cloudGroup.Get("/", s.handleGetCloud)
+	cloudGroup.Put("/d1", s.handlePutCloudD1)
+	cloudGroup.Post("/d1/test", s.handleTestCloudD1)
+	cloudGroup.Post("/d1/sync", s.handleSyncCloudD1)
+	cloudGroup.Post("/d1/push", s.handlePushCloudD1)
+	cloudGroup.Post("/d1/pull", s.handlePullCloudD1)
+	cloudGroup.Put("/object", s.handlePutCloudObject)
+	cloudGroup.Post("/object/test", s.handleTestCloudObject)
+	cloudGroup.Get("/object/backups", s.handleListCloudBackups)
+	cloudGroup.Post("/object/backups", s.handleCreateCloudBackup)
+	cloudGroup.Post("/object/restore", s.handleRestoreCloudBackup)
+
 	clusterGroup := authed.Group("/cluster", s.requireRole(model.RoleSuperadmin))
 	clusterGroup.Get("/", s.handleClusterStatus)
 	clusterGroup.Delete("/nodes/:id", s.handleRemoveClusterNode)
