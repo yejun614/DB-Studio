@@ -204,6 +204,9 @@ func FromSchema(id, name, connectionID string, sc *schema.Schema) *Document {
 	doc := NewDocument(id, name, connectionID, sc.Dialect)
 	doc.Schema = sc
 	doc.Schema.Sort()
+	// 실제 DB 의 ENUM 타입은 도메인으로 보인다. 사람이 ENUM 을 다루는 곳은 도메인
+	// 탭 하나이고, 그래야 값을 고치면 그 타입을 쓰는 컬럼이 모두 따라온다.
+	_ = AdoptEnumsAsDomains(doc)
 	doc.Layout = AutoLayout(sc)
 	return doc
 }

@@ -53,7 +53,8 @@ func applySchemaImport(doc *Document, op *Op) error {
 	if err := decode(op, &p); err != nil {
 		return err
 	}
-	if len(p.Tables) == 0 && len(p.Drops) == 0 && len(p.Views) == 0 && len(p.ViewDrops) == 0 {
+	if len(p.Tables) == 0 && len(p.Drops) == 0 && len(p.Views) == 0 && len(p.ViewDrops) == 0 &&
+		len(p.Enums) == 0 {
 		return invalid("불러올 내용이 없습니다")
 	}
 	if len(p.Tables) > maxImportTables {
@@ -99,7 +100,13 @@ func applySchemaImport(doc *Document, op *Op) error {
 		if e == nil {
 			continue
 		}
+		if _, err := validateIdent("enum", e.Name); err != nil {
+			return err
+		}
 		replaceEnum(doc.Schema, e)
+	}
+	if err := importEnumDomains(doc, p.Enums); err != nil {
+		return err
 	}
 
 	for _, raw := range p.ViewDrops {
@@ -196,6 +203,55 @@ func dropTableByKey(doc *Document, key string) {
 	}
 	doc.Schema.Tables = kept
 	delete(doc.Layout, key)
+}
+
+// importEnumDomains는 불러온 ENUM 타입을 도메인으로 맡긴다.
+//
+// 같은 이름의 ENUM 도메인이 있으면 그 값을 불러온 것으로 바꾸고(덮어쓰기가 불러오기의
+// 규칙이다), 없으면 만든다. 그 뒤 타입 이름만 적힌 컬럼 — 이 스크립트가 아니라 앞서
+// 불러온 타입을 쓰는 표 — 도 그 ENUM 으로 읽는다.
+func importEnumDomains(doc *Document, enums []*schema.Enum) error {
+	for _, e := range enums {
+		if e == nil {
+			continue
+		}
+		if d := doc.findDomain(e.Name); d != nil {
+			if ownedEnumValues(doc, d) == nil {
+				continue // 같은 이름의 다른 도메인이다. 건드리지 않는다.
+			}
+			d.Type = schema.EnumTypeString(e.Values)
+			if err := applyDomainToColumns(doc, d.Name, d); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := adoptEnum(doc, findSchemaEnum(doc.Schema, e.Name)); err != nil {
+			return err
+		}
+	}
+
+	for _, t := range doc.Schema.Tables {
+		for _, c := range t.Columns {
+			if c.Type.Base != schema.TypeUnknown {
+				continue
+			}
+			if e := findSchemaEnum(doc.Schema, c.RawType); e != nil {
+				c.Type = schema.LogicalType{
+					Base: schema.TypeEnum, EnumName: e.Name,
+					Values: append([]string(nil), e.Values...),
+				}
+			}
+		}
+	}
+	for _, d := range doc.Domains {
+		if ownedEnumValues(doc, d) == nil {
+			continue
+		}
+		if err := linkEnumColumns(doc, d); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func replaceEnum(sc *schema.Schema, e *schema.Enum) {

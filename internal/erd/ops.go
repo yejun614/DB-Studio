@@ -1211,9 +1211,13 @@ func parseColumnType(doc *Document, raw string) (schema.LogicalType, string, err
 	// 문서에 정의된 enum 이름을 쓰면 enum 타입으로 해석한다.
 	// introspect가 PostgreSQL의 이름 붙은 enum을 이렇게 표현하므로, 여기서 맞추지 않으면
 	// ERD로 그린 enum 컬럼이 실제 DB의 같은 컬럼과 영원히 다르게 보인다.
+	// 값도 함께 담는다. 이 초안을 MySQL 로 내보내면 이름이 아니라 값 목록이 필요하다.
 	for _, e := range doc.Schema.Enums {
 		if strings.EqualFold(e.Name, raw) {
-			return schema.LogicalType{Base: schema.TypeEnum, EnumName: e.Name}, raw, nil
+			return schema.LogicalType{
+				Base: schema.TypeEnum, EnumName: e.Name,
+				Values: append([]string(nil), e.Values...),
+			}, raw, nil
 		}
 	}
 	return schema.ParseType(doc.Dialect, raw), raw, nil
