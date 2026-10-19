@@ -101,6 +101,15 @@ func (s *Store) InstallReplTriggers(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	return s.InstallReplTriggersFor(ctx, tables)
+}
+
+// InstallReplTriggersFor는 고른 표에만 변경 기록 트리거를 단다. 나머지 표의 트리거는 걷어낸다.
+//
+// 클라우드 동기화가 쓴다: 단일 서버에서 D1로 보낼 표는 전체가 아니다(cloud.go의 cloudSkip).
+// 30초마다 덮어쓰는 지표 표에까지 트리거를 달면 쓰기마다 로그가 한 줄씩 붙고, 그 로그는
+// 보내지도 않을 것이다.
+func (s *Store) InstallReplTriggersFor(ctx context.Context, tables []string) (int, error) {
 	if err := s.DropReplTriggers(ctx); err != nil {
 		return 0, err
 	}
@@ -465,9 +474,37 @@ func (s *Store) SnapshotTo(ctx context.Context, path string) error {
 // 교체하면 이미 열린 커넥션들이 사라진 파일을 계속 붙들게 된다. 대신 표 단위로
 // 비우고 채운다 — 한 트랜잭션 안에서 일어나므로 중간 상태가 보이지 않는다.
 func (s *Store) LoadSnapshot(ctx context.Context, path string) (int64, error) {
-	tables, err := s.ReplTables(ctx)
+	return s.loadFromFile(ctx, path, true, nil)
+}
+
+// RestoreFromFile은 메타 DB 백업 파일(VACUUM INTO로 뜬 것)의 내용으로 이 메타 DB를
+// 통째로 맞춘다. LoadSnapshot과 같은 길이되, 복제 지점은 건드리지 않는다 — 백업은
+// 복제 로그와 무관한 시점의 사본이다.
+//
+// 세션·로그인 중간 상태·클러스터 노드 목록은 되돌리지 않는다. 백업 시점의 세션을 되살리면
+// 이미 로그아웃한 쿠키가 다시 통하고, 노드 목록은 지금 떠 있는 배치의 사실이다.
+func (s *Store) RestoreFromFile(ctx context.Context, path string) error {
+	_, err := s.loadFromFile(ctx, path, false, restoreKeep)
+	return err
+}
+
+// restoreKeep은 복구가 건드리지 않는 표다(RestoreFromFile 참고).
+var restoreKeep = map[string]bool{
+	"sessions":        true,
+	"totp_challenges": true,
+	"cluster_nodes":   true,
+}
+
+func (s *Store) loadFromFile(ctx context.Context, path string, markApplied bool, keep map[string]bool) (int64, error) {
+	all, err := s.ReplTables(ctx)
 	if err != nil {
 		return 0, err
+	}
+	tables := all[:0:0]
+	for _, t := range all {
+		if !keep[t] {
+			tables = append(tables, t)
+		}
 	}
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
@@ -482,61 +519,128 @@ func (s *Store) LoadSnapshot(ctx context.Context, path string) (int64, error) {
 	defer conn.ExecContext(context.WithoutCancel(ctx), `DETACH DATABASE snap`)
 
 	var seq sql.NullInt64
-	if err := conn.QueryRowContext(ctx, `SELECT max(seq) FROM snap.repl_log`).Scan(&seq); err != nil {
-		return 0, fmt.Errorf("스냅샷의 복제 지점을 읽지 못했습니다: %w", err)
+	if markApplied {
+		if err := conn.QueryRowContext(ctx, `SELECT max(seq) FROM snap.repl_log`).Scan(&seq); err != nil {
+			return 0, fmt.Errorf("스냅샷의 복제 지점을 읽지 못했습니다: %w", err)
+		}
 	}
 
-	tx, err := conn.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `PRAGMA defer_foreign_keys = ON`); err != nil {
-		return 0, err
-	}
-
+	// 스냅샷에 없는 표는 건너뛴다(버전 차이). 지우기만 하면 그 표가 통째로 비어
+	// 버리는데, 그것은 복제가 아니라 파괴다.
+	present := make([]string, 0, len(tables))
 	for _, t := range tables {
-		// 스냅샷에 없는 표는 건너뛴다(버전 차이). 지우기만 하면 그 표가 통째로 비어
-		// 버리는데, 그것은 복제가 아니라 파괴다.
 		var exists int
-		if err := tx.QueryRowContext(ctx,
+		if err := conn.QueryRowContext(ctx,
 			`SELECT count(*) FROM snap.sqlite_master WHERE type='table' AND name = ?`, t).Scan(&exists); err != nil {
 			return 0, err
 		}
-		if exists == 0 {
-			continue
-		}
-		cols, _, err := s.columnsOf(ctx, t)
-		if err != nil {
-			return 0, err
-		}
-		snapCols, err := snapshotColumns(ctx, tx, t)
-		if err != nil {
-			return 0, err
-		}
-		shared := []string{"rowid"}
-		for _, c := range cols {
-			if snapCols[c] {
-				shared = append(shared, fmt.Sprintf("%q", c))
-			}
-		}
-		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %q`, t)); err != nil {
-			return 0, fmt.Errorf("%s 비우기 실패: %w", t, err)
-		}
-		stmt := fmt.Sprintf(`INSERT INTO %q (%s) SELECT %s FROM snap.%q`,
-			t, strings.Join(shared, ", "), strings.Join(shared, ", "), t)
-		if _, err := tx.ExecContext(ctx, stmt); err != nil {
-			return 0, fmt.Errorf("%s 채우기 실패: %w", t, err)
+		if exists > 0 {
+			present = append(present, t)
 		}
 	}
 
-	if err := setApplied(ctx, tx, seq.Int64); err != nil {
-		return 0, err
-	}
-	if err := tx.Commit(); err != nil {
+	err = s.replaceOnConn(ctx, conn, present, func(tx *sql.Tx) error {
+		for _, t := range present {
+			cols, _, err := s.columnsOf(ctx, t)
+			if err != nil {
+				return err
+			}
+			snapCols, err := snapshotColumns(ctx, tx, t)
+			if err != nil {
+				return err
+			}
+			shared := []string{"rowid"}
+			for _, c := range cols {
+				if snapCols[c] {
+					shared = append(shared, fmt.Sprintf("%q", c))
+				}
+			}
+			stmt := fmt.Sprintf(`INSERT INTO %q (%s) SELECT %s FROM snap.%q`,
+				t, strings.Join(shared, ", "), strings.Join(shared, ", "), t)
+			if _, err := tx.ExecContext(ctx, stmt); err != nil {
+				return fmt.Errorf("%s 채우기 실패: %w", t, err)
+			}
+		}
+		if markApplied {
+			return setApplied(ctx, tx, seq.Int64)
+		}
+		return nil
+	})
+	if err != nil {
 		return 0, err
 	}
 	return seq.Int64, nil
+}
+
+// replaceOnConn은 tables를 모두 비운 뒤 fill로 채운다. 한 트랜잭션이다.
+//
+// **먼저 전부 비우고, 그다음 채운다.** 표마다 비우고 채우기를 번갈아 하면 부모 표를
+// 나중에 비울 때 ON DELETE CASCADE가 먼저 채워 둔 자식 표를 다시 지운다(projects를
+// 비우는 순간 방금 넣은 project_members가 사라진다). 오류도 내지 않는다.
+//
+// 그래서 외래키 검사를 끄고 작업한 뒤, 커밋하기 전에 PRAGMA foreign_key_check로 직접
+// 확인한다. 끊어진 참조가 **바꾼 표**에서 나오면 받은 데이터가 온전하지 않다는 뜻이므로
+// 전부 되돌린다. 바꾸지 않은 표(지표·세션처럼 이 노드에서 생겨 남는 것)에서 나오면 그
+// 행은 사라진 부모를 가리키는 찌꺼기이므로 지운다 — 외래키를 켜 둔 채였다면 CASCADE가
+// 했을 일이다.
+func (s *Store) replaceOnConn(ctx context.Context, conn *sql.Conn, tables []string, fill func(tx *sql.Tx) error) error {
+	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+		return err
+	}
+	// 이 커넥션은 곧 풀로 돌아간다. 검사가 꺼진 채 돌아가면 이후의 쓰기가 무결성
+	// 검사를 건너뛴다(applyMigration과 같은 이유).
+	defer conn.ExecContext(context.WithoutCancel(ctx), `PRAGMA foreign_keys = ON`)
+
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	replaced := map[string]bool{}
+	for _, t := range tables {
+		replaced[t] = true
+		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %q`, t)); err != nil {
+			return fmt.Errorf("%s 비우기 실패: %w", t, err)
+		}
+	}
+	if err := fill(tx); err != nil {
+		return err
+	}
+
+	type dangling struct {
+		table  string
+		rowid  sql.NullInt64
+		parent string
+	}
+	rows, err := tx.QueryContext(ctx, `PRAGMA foreign_key_check`)
+	if err != nil {
+		return err
+	}
+	var broken []dangling
+	for rows.Next() {
+		var d dangling
+		var fkid any
+		if err := rows.Scan(&d.table, &d.rowid, &d.parent, &fkid); err != nil {
+			rows.Close()
+			return err
+		}
+		broken = append(broken, d)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, d := range broken {
+		if replaced[d.table] || !d.rowid.Valid {
+			return fmt.Errorf("받은 데이터의 참조가 끊어져 있습니다: %s → %s", d.table, d.parent)
+		}
+		if _, err := tx.ExecContext(ctx,
+			fmt.Sprintf(`DELETE FROM %q WHERE rowid = ?`, d.table), d.rowid.Int64); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func snapshotColumns(ctx context.Context, tx *sql.Tx, table string) (map[string]bool, error) {
