@@ -932,12 +932,11 @@ func erdAddIndex(ec *erdToolContext, args json.RawMessage) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	cols := make([]map[string]any, 0, len(in.Columns))
-	for _, c := range in.Columns {
-		cols = append(cols, map[string]any{"column": c})
-	}
+	// index.add 는 컬럼 이름의 배열을 받는다(화면이 보내는 것과 같다). IR 의
+	// IndexPart 모양({"column": …})으로 보내면 op 해석에서 거부되어, 모델이 인자를
+	// 어떻게 바꿔 불러도 인덱스를 만들 수 없었다.
 	if _, err := ec.submit(erd.OpIndexAdd, map[string]any{
-		"table": tbl.Key(), "name": in.Name, "columns": cols, "unique": in.Unique,
+		"table": tbl.Key(), "name": in.Name, "columns": in.Columns, "unique": in.Unique,
 	}); err != nil {
 		return "", err
 	}
