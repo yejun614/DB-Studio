@@ -265,6 +265,12 @@ func (s *Server) updateERDTarget(c *fiber.Ctx, doc *erd.Document,
 	// 받을 때 반영된다(소켓은 스키마 op 만 다룬다) — 화면 쪽에서 다시 읽는다.
 	doc.ConnectionID = connID
 	doc.Dialect = dialect
+	// 스키마도 같은 문법을 말해야 한다. 내보내기·검사가 이 값을 읽으므로, 문서만
+	// 바꾸면 PostgreSQL 초안을 MySQL 규칙으로 검사하고 내보낼 때마다 "변환했다"고 한다.
+	if doc.Schema != nil {
+		doc.Schema.Dialect = dialect
+	}
+	s.erdHub.SetTarget(doc.ID, connID, dialect)
 	return nil
 }
 

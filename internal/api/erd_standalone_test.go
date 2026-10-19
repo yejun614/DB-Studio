@@ -276,3 +276,51 @@ func TestERDExportDDL(t *testing.T) {
 		t.Errorf("알 수 없는 방언이 통과했습니다: %d", status)
 	}
 }
+
+// 초안의 문법을 바꾸면 스키마도 그 문법이 되어야 한다. 문서만 바꾸면 내보낼 때마다
+// "mysql → postgres 로 변환했다"는 경고가 붙고, 검사도 옛 문법의 규칙으로 돈다.
+func TestERDRetargetDialectReachesSchema(t *testing.T) {
+	e := newTestEnv(t)
+	c := login(t, e, "alice")
+	docID := createStandalone(t, e, c, "초안", "mysql")
+
+	if status, body := c.do("POST", "/api/v1/erd/documents/"+docID+"/import",
+		map[string]any{"sql": "CREATE TABLE t (id bigint PRIMARY KEY, " +
+			"status enum('A','B') NOT NULL DEFAULT 'A', " +
+			"updated_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP);"}); status != 200 {
+		t.Fatalf("import = %d: %v", status, body)
+	}
+	if status, body := c.do("PATCH", "/api/v1/erd/documents/"+docID,
+		map[string]any{"dialect": "postgres"}); status != 200 {
+		t.Fatalf("문법 바꾸기 = %d: %v", status, body)
+	}
+
+	doc, err := e.st.GetERDDocument(context.Background(), docID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc.Schema.Dialect != "postgres" {
+		t.Errorf("스키마 문법이 %q 로 남았습니다", doc.Schema.Dialect)
+	}
+
+	status, body := c.do("GET", "/api/v1/erd/documents/"+docID+"/ddl", nil)
+	if status != 200 {
+		t.Fatalf("ddl = %d: %v", status, body)
+	}
+	if body["dialect"] != "postgres" {
+		t.Errorf("내보내기 문법이 %v 입니다", body["dialect"])
+	}
+	plan, _ := body["plan"].(map[string]any)
+	warnings, _ := plan["warnings"].([]any)
+	for _, w := range warnings {
+		if s, _ := w.(string); strings.Contains(s, "변환했습니다") {
+			t.Errorf("같은 문법인데 변환 경고가 붙었습니다: %s", s)
+		}
+	}
+	sql, _ := body["upSql"].(string)
+	for _, want := range []string{`CHECK ("status" IN ('A', 'B'))`, `CREATE TRIGGER "t_on_update"`} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("SQL에 %q 가 없습니다:\n%s", want, sql)
+		}
+	}
+}

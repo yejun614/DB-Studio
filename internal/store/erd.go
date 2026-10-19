@@ -120,6 +120,12 @@ func (s *Store) GetERDDocument(ctx context.Context, id string) (*erd.Document, e
 		}
 		doc.Seq = applied
 	}
+	// 문서의 문법은 dialect 칸이 정한다(updateERDTarget 이 바꾸는 곳이 거기다).
+	// 스냅샷 JSON 에 적힌 값은 만들 때의 것이라, 문법을 바꾼 문서에서는 낡아 있다.
+	// 읽을 때 맞추면 이미 바꿔 둔 문서도 다시 저장하지 않고 바로 고쳐진다.
+	if doc.Dialect != "" {
+		doc.Schema.Dialect = doc.Dialect
+	}
 	doc.Schema.Sort()
 	return &doc, nil
 }

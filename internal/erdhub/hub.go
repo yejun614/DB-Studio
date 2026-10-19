@@ -798,6 +798,27 @@ func (h *Hub) Broadcast(docID string, payload map[string]any) {
 	r.broadcast(mustJSON(payload))
 }
 
+// SetTarget은 열려 있는 방이 들고 있는 문서의 대상·문법을 고친다.
+//
+// 대상은 REST 경로(updateERDTarget)에서 바뀌고 방은 그것을 모른다. 그대로 두면
+// 방이 닫힐 때까지 새 컬럼의 타입을 옛 문법으로 읽는다 — PostgreSQL 로 바꾼 초안에
+// MySQL 식으로 해석된 컬럼이 쌓인다.
+func (h *Hub) SetTarget(docID, connectionID, dialect string) {
+	h.mu.Lock()
+	r := h.rooms[docID]
+	h.mu.Unlock()
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.doc.ConnectionID = connectionID
+	r.doc.Dialect = dialect
+	if r.doc.Schema != nil {
+		r.doc.Schema.Dialect = dialect
+	}
+}
+
 // Participants는 지금 문서를 보고 있는 사람들이다. 목록 화면에서 "3명 편집 중"을 표시한다.
 func (h *Hub) Participants(docID string) []PresenceView {
 	h.mu.Lock()
