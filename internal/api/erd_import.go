@@ -69,8 +69,15 @@ func (s *Server) handleERDImportSQL(c *fiber.Ctx) error {
 
 	summary := erd.SummarizeImportAll(doc, parsed.Tables, parsed.Drops,
 		parsed.Views, parsed.ViewDrops)
+	// ENUM 타입은 도메인이 되어 들어간다. 미리보기가 표만 말하면 도메인 탭에 무엇이
+	// 생기는지는 적용한 뒤에야 보인다.
+	enumNames := make([]string, 0, len(parsed.Enums))
+	for _, e := range parsed.Enums {
+		enumNames = append(enumNames, e.Name)
+	}
 	resp := fiber.Map{
 		"summary":    summary,
+		"enums":      enumNames,
 		"notes":      parsed.Notes,
 		"statements": parsed.Statements,
 		"dialect":    dialect,

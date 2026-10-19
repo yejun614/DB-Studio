@@ -279,6 +279,7 @@ func TestERDExportDDL(t *testing.T) {
 
 // 초안의 문법을 바꾸면 스키마도 그 문법이 되어야 한다. 문서만 바꾸면 내보낼 때마다
 // "mysql → postgres 로 변환했다"는 경고가 붙고, 검사도 옛 문법의 규칙으로 돈다.
+// MySQL 의 값 목록 ENUM 은 PostgreSQL 에서 <표>_<컬럼> 타입이 된다.
 func TestERDRetargetDialectReachesSchema(t *testing.T) {
 	e := newTestEnv(t)
 	c := login(t, e, "alice")
@@ -318,9 +319,57 @@ func TestERDRetargetDialectReachesSchema(t *testing.T) {
 		}
 	}
 	sql, _ := body["upSql"].(string)
-	for _, want := range []string{`CHECK ("status" IN ('A', 'B'))`, `CREATE TRIGGER "t_on_update"`} {
+	for _, want := range []string{`CREATE TYPE "t_status" AS ENUM ('A', 'B')`, `"status" "t_status"`,
+		`CREATE TRIGGER "t_on_update"`} {
 		if !strings.Contains(sql, want) {
 			t.Errorf("SQL에 %q 가 없습니다:\n%s", want, sql)
 		}
+	}
+}
+
+// SQL 불러오기로 들어온 PostgreSQL ENUM 은 도메인이 되고, 내보내면 같은 이름의
+// CREATE TYPE 이 표보다 먼저 나간다.
+func TestERDImportPostgresEnum(t *testing.T) {
+	e := newTestEnv(t)
+	c := login(t, e, "alice")
+	docID := createStandalone(t, e, c, "초안", "postgres")
+
+	status, body := c.do("POST", "/api/v1/erd/documents/"+docID+"/import", map[string]any{
+		"sql": `CREATE TYPE public.order_status AS ENUM ('new', 'paid');
+CREATE TABLE orders (id bigint PRIMARY KEY, status public.order_status NOT NULL DEFAULT 'new');`,
+		"dryRun": true,
+	})
+	if status != 200 {
+		t.Fatalf("미리보기 = %d: %v", status, body)
+	}
+	if enums, _ := body["enums"].([]any); len(enums) != 1 || enums[0] != "order_status" {
+		t.Errorf("미리보기에 ENUM 이 없습니다: %v", body["enums"])
+	}
+
+	if status, body = c.do("POST", "/api/v1/erd/documents/"+docID+"/import", map[string]any{
+		"sql": `CREATE TYPE public.order_status AS ENUM ('new', 'paid');
+CREATE TABLE orders (id bigint PRIMARY KEY, status public.order_status NOT NULL DEFAULT 'new');`,
+	}); status != 200 {
+		t.Fatalf("불러오기 = %d: %v", status, body)
+	}
+	doc, err := e.st.GetERDDocument(context.Background(), docID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Domains) != 1 || doc.Domains[0].Name != "order_status" {
+		t.Errorf("도메인이 생기지 않았습니다: %+v", doc.Domains)
+	}
+
+	status, body = c.do("GET", "/api/v1/erd/documents/"+docID+"/ddl", nil)
+	if status != 200 {
+		t.Fatalf("ddl = %d: %v", status, body)
+	}
+	sql, _ := body["upSql"].(string)
+	typ, table := strings.Index(sql, `CREATE TYPE "public"."order_status" AS ENUM ('new', 'paid')`), strings.Index(sql, "CREATE TABLE")
+	if typ < 0 || table < 0 || typ > table {
+		t.Errorf("타입이 표보다 먼저 만들어지지 않았습니다:\n%s", sql)
+	}
+	if !strings.Contains(sql, `"status" "order_status" NOT NULL DEFAULT 'new'`) {
+		t.Errorf("컬럼이 타입을 가리키지 않습니다:\n%s", sql)
 	}
 }
