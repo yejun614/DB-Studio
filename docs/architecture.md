@@ -44,6 +44,9 @@ internal/
   vcs/               GitHub/GitLab/Bitbucket 공통 인터페이스와 3사 REST 구현
   ai/                LLM 프로바이더 어댑터 (Anthropic 네이티브 / OpenAI 호환) + SSE 파서
   mcp/               MCP 프로토콜 타입과 판 협상 (앱을 모른다. 툴 실행은 api가 한다)
+  cloud/             메타 DB를 클라우드에 잇는다: D1 동기화(sync.go, 행 JSON + 주인 조건),
+                     R2·S3 백업·복구·정기 실행(backup.go), S3 업·다운로드(objstore.go, SigV4는
+                     storage의 것), 백업 암호화 스트림(seal.go)
   applog/            로거 구성 (파일 기록·로테이션·크래시 리포트·패닉 복구)
   runstate/          실행 중 표식 (강제 종료를 다음 시작 때 감지)
   buildinfo/         빌드 시점에 주입되는 버전 정보
@@ -59,10 +62,11 @@ web/                 프론트엔드 (ES Module, 프레임워크 없음)
                      subset(한글 2,350자 + ASCII) 두 굵기로 약 750KB (통짜는 3MB)
   js/theme-init.js   저장된 테마를 첫 페인트 전에 적용 (CSP 때문에 인라인 불가)
   js/core/           api, dom, ui, store, router, chart, dblogo, erdsocket, theme, avatars, highlight,
-                     screen(보고 있는 화면 → AI 어시스턴트의 시스템 프롬프트)
+                     screen(보고 있는 화면 → AI 어시스턴트의 시스템 프롬프트),
+                     unsaved(반영 안 된 수정이 있을 때 떠나기 전에 묻기)
   js/pages/          login, totp, security, dashboard, users, access, connections, schema, monitor,
                      rules, events, logs, erd, erdeditor, migrations, vcs, nosql,
-                     data, sqlconsole, backups, macros, macroeditor, triggers, assistant, audit
+                     data, sqlconsole, backups, macros, macroeditor, triggers, assistant, audit, cloud
 scripts/             릴리스 빌드 (release.sh / release.ps1), 파비콘 생성 (gen-favicon)
 .github/workflows/   CI (ci.yml) 와 릴리스 (release.yml)
 docker/              테스트용 DB 컨테이너 정의
