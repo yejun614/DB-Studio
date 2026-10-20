@@ -1192,6 +1192,16 @@ func moveColumn(tbl *schema.Table, col *schema.Column, position int) {
 	tbl.Columns = rest
 }
 
+// 컬럼 타입 문자열의 길이 제한.
+//
+// ENUM·SET 을 따로 두는 이유: 값 목록이 타입 안에 들어 있어 값이 스무 개쯤만 되어도
+// 200자를 넘는다. ENUM 도메인의 타입 칸은 늘 ENUM('…') 이라, 한 제한으로 묶으면 실제
+// DB 나 SQL 에서 온 멀쩡한 ENUM 이 도메인이 되지 못하고 불러오기가 거절된다.
+const (
+	maxColumnTypeLen    = 200
+	maxValueListTypeLen = 8000
+)
+
 // parseColumnType은 사용자가 입력한 타입 문자열을 논리 타입으로 정규화한다.
 //
 // 정규화에 실패한 타입(벤더 전용 타입 등)도 거부하지 않고 원본을 RawType에 보존한다.
@@ -1202,8 +1212,9 @@ func parseColumnType(doc *Document, raw string) (schema.LogicalType, string, err
 	if raw == "" {
 		return schema.LogicalType{}, "", invalid("컬럼 타입이 비어 있습니다")
 	}
-	if len([]rune(raw)) > 200 {
-		return schema.LogicalType{}, "", invalid("컬럼 타입 문자열이 너무 깁니다")
+	n := len([]rune(raw))
+	if n > maxValueListTypeLen {
+		return schema.LogicalType{}, "", invalid("컬럼 타입 문자열이 너무 깁니다 (%d자 제한)", maxValueListTypeLen)
 	}
 	if strings.ContainsAny(raw, ";\x00\n\r") {
 		return schema.LogicalType{}, "", invalid("컬럼 타입에 쓸 수 없는 문자가 있습니다")
@@ -1220,7 +1231,11 @@ func parseColumnType(doc *Document, raw string) (schema.LogicalType, string, err
 			}, raw, nil
 		}
 	}
-	return schema.ParseType(doc.Dialect, raw), raw, nil
+	lt := schema.ParseType(doc.Dialect, raw)
+	if n > maxColumnTypeLen && lt.Base != schema.TypeEnum {
+		return schema.LogicalType{}, "", invalid("컬럼 타입 문자열이 너무 깁니다 (%d자 제한)", maxColumnTypeLen)
+	}
+	return lt, raw, nil
 }
 
 // ---------- 기본키 ----------

@@ -181,6 +181,42 @@ func TestImportEnumBecomesDomain(t *testing.T) {
 	}
 }
 
+// 값이 많은 ENUM 도 불러온다. 도메인의 타입 칸은 값 목록을 다 적은 ENUM('…') 이라
+// 값이 스무 개쯤만 되어도 200자를 넘는다 — 일반 타입의 길이 제한에 걸려 불러오기
+// 전체가 거절되던 것.
+func TestImportLongEnumBecomesDomain(t *testing.T) {
+	doc := newDoc(t)
+	values := []string{
+		"OWNER_NOTIFIED", "ADMIN_NOTIFIED", "EXTENDED", "OWNER_CHANGED",
+		"STOP_STARTED", "STOPPED", "STOP_FAILED",
+		"RESTART_STARTED", "RESTARTED", "RESTART_FAILED",
+		"ARCHIVE_STARTED", "ARCHIVED", "ARCHIVE_FAILED",
+		"RESTORE_STARTED", "RESTORED", "RESTORE_FAILED",
+		"DISPOSE_STARTED", "DISPOSED", "DISPOSE_FAILED",
+	}
+	if n := len(schema.EnumTypeString(values)); n <= 200 {
+		t.Fatalf("시험의 전제가 틀렸습니다: 타입 표기가 %d자", n)
+	}
+	apply(t, doc, OpSchemaImport, `{"enums":[{"name":"lifecycle_event_type","values":["`+
+		strings.Join(values, `","`)+`"]}],"tables":[{"name":"lifecycle_event","columns":[
+		{"name":"event_type","position":1,"rawType":"lifecycle_event_type","type":{"base":"unknown"}}]}]}`)
+
+	col := doc.findTable("lifecycle_event").Column("event_type")
+	if col.Domain != "lifecycle_event_type" || len(col.Type.Values) != len(values) {
+		t.Errorf("컬럼이 ENUM 으로 묶이지 않았습니다: %+v / %q", col.Type, col.Domain)
+	}
+	// 같은 타입 칸으로 도메인을 고쳐도 받아들여야 한다.
+	apply(t, doc, OpDomainUpdate, `{"name":"lifecycle_event_type","type":"`+
+		schema.EnumTypeString(append(values, "PURGED"))+`"}`)
+	if e := findSchemaEnum(doc.Schema, "lifecycle_event_type"); e == nil || len(e.Values) != len(values)+1 {
+		t.Errorf("타입의 값이 따라오지 않았습니다: %+v", e)
+	}
+
+	// 값 목록이 아닌 타입은 그대로 200자에서 막는다.
+	applyErr(t, doc, OpColumnUpdate, `{"table":"lifecycle_event","name":"event_type","type":"varchar(`+
+		strings.Repeat("9", 200)+`)"}`, "invalid", "너무 깁니다")
+}
+
 // 되돌리기는 도메인만이 아니라 도메인이 만든 타입과 컬럼까지 되돌려야 한다. 도메인만
 // 사라지고 타입이 남으면, 아무도 만든 적 없는 CREATE TYPE 이 마이그레이션에 나온다.
 func TestEnumDomainUndoRestoresType(t *testing.T) {
