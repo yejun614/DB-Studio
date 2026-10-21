@@ -224,11 +224,35 @@ func BuildPlan(dialect string, diff *DiffResult) *Plan {
 	p := &Plan{Dialect: dialect}
 	r := &renderer{q: q, dialect: dialect, plan: p}
 
+	changes := order(diff.Changes)
+	// PostgreSQL 의 자동 갱신 트리거는 표마다 하나이고 그 표의 자동 갱신 컬럼을 모두
+	// 담는다. 그래서 컬럼 변경마다가 아니라 그 표의 **마지막** 컬럼 변경 뒤에 한 번
+	// 맞춘다 — 그때는 더하고 빼는 컬럼이 모두 제자리에 있다.
+	syncAt := map[int]bool{}
+	if r.onUpdateByTrigger() {
+		last := map[string]int{}
+		for i, c := range changes {
+			switch c.Kind {
+			case AddColumn, AlterColumn, DropColumn:
+				if c.TableRef != nil {
+					last[c.TableRef.Key()] = i
+				}
+			}
+		}
+		for _, i := range last {
+			syncAt[i] = true
+		}
+	}
+
 	// 변경마다 번호를 매겨 그 변경이 낳은 문장에 찍는다. 렌더러의 모든 emit 자리를
 	// 고치는 대신 여기서 구간을 잘라 찍는다 — 한 곳에서만 매기므로 빠뜨릴 자리가 없다.
-	for i, c := range order(diff.Changes) {
+	for i, c := range changes {
 		upFrom, downFrom := len(p.Up), len(p.Down)
 		r.render(c)
+		if syncAt[i] {
+			// 그 변경의 번호를 함께 받는다. 그 변경만 되돌리면 트리거도 옛 모양으로 돌아간다.
+			r.syncOnUpdateTrigger(c)
+		}
 		for j := upFrom; j < len(p.Up); j++ {
 			p.Up[j].Seq = i + 1
 		}
@@ -275,10 +299,12 @@ type renderer struct {
 	// SQLite처럼 ALTER로 제약을 추가할 수 없는 dialect에서 제약을 CREATE TABLE에
 	// 인라인했는지 판단하는 데 쓴다.
 	createdTables map[string]bool
-	// onUpdateByTrigger가 참이면 지금 그리는 컬럼의 ON UPDATE 를 트리거가 맡는다
-	// (PostgreSQL 의 CREATE TABLE). 컬럼 정의에서 빠지는 것이 생략이 아니다.
-	onUpdateByTrigger bool
 }
+
+// onUpdateByTrigger가 참이면 컬럼의 ON UPDATE 를 트리거가 맡는다(PostgreSQL).
+// 컬럼 정의에서 빠지는 것이 생략이 아니다 — 표를 만들 때는 createTable 이, 이미 있는
+// 표에서는 syncOnUpdateTrigger 가 표마다 함수 하나와 트리거 하나로 만든다.
+func (r *renderer) onUpdateByTrigger() bool { return r.dialect == "postgres" }
 
 func (r *renderer) markCreated(t *Table) {
 	if r.createdTables == nil {
@@ -442,11 +468,9 @@ func (r *renderer) createTable(c Change) {
 	fmt.Fprintf(&b, "CREATE TABLE %s%s (\n", ine, r.tableName(t))
 
 	parts := []string{}
-	r.onUpdateByTrigger = r.dialect == "postgres"
 	for _, col := range t.Columns {
 		parts = append(parts, "  "+r.columnDef(t, col))
 	}
-	r.onUpdateByTrigger = false
 	// SQLite에서 rowid 별칭(INTEGER PRIMARY KEY AUTOINCREMENT)은 컬럼 정의에
 	// 인라인되므로 테이블 레벨 PRIMARY KEY 절을 중복해서 넣으면 문법 오류가 된다.
 	// ClickHouse 의 기본키는 제약이 아니라 **정렬 키**다(유일성을 강제하지 않는다).
@@ -545,19 +569,63 @@ func (r *renderer) createTable(c Change) {
 //
 // MySQL 의 동작을 그대로 따른다: 행의 값이 실제로 바뀌었을 때만 갱신하고, 문장이
 // 그 컬럼을 직접 고쳤으면 그 값을 남긴다.
+//
+// 이 모양은 DB 를 다시 읽을 때 알아보는 모양이기도 하다(dbx.pgOnUpdateFromTrigger).
+// 한쪽만 고치면 만든 트리거를 읽지 못해 초안과 DB 가 늘 다르다고 나온다.
 func (r *renderer) onUpdateTrigger(c Change, t *Table) {
-	var cols []*Column
-	for _, col := range t.Columns {
-		if col.OnUpdate != "" {
-			cols = append(cols, col)
-		}
-	}
+	cols := onUpdateColumns(t)
 	if len(cols) == 0 {
 		return
 	}
-	name := t.Name + "_on_update"
-	fn := r.tableNameParts(t.Namespace, name)
+	for i, sql := range r.onUpdateCreateSQL(t, cols) {
+		r.up(c, sql, noteIf(i == 0, "ON UPDATE 를 대신하는 트리거 함수 (PostgreSQL 에는 컬럼의 ON UPDATE 가 없습니다)"))
+	}
+	// 트리거는 표와 함께 사라지지만 함수는 남는다. down 은 나중에 뒤집히므로
+	// DROP TABLE 보다 먼저 넣어야 표를 지운 **뒤에** 함수를 지운다.
+	_, fn := r.onUpdateNames(t)
+	r.down(c, fmt.Sprintf("DROP FUNCTION IF EXISTS %s()", fn), "")
+}
 
+// syncOnUpdateTrigger는 이미 있는 표의 자동 갱신 트리거를 바뀐 컬럼에 맞춘다.
+//
+// 컬럼을 더하고 빼고 고치는 변경은 그 표의 함수 본문을 바꾼다. 본문은 표의 자동 갱신
+// 컬럼 전부를 담으므로 바뀐 컬럼만 고칠 수 없고 통째로 다시 쓴다. 자동 갱신 컬럼이
+// 하나도 남지 않으면 트리거와 함수를 지운다 — 빈 함수를 남기면 DB 를 다시 읽을 때
+// 그것이 무엇인지 설명할 수 없다.
+func (r *renderer) syncOnUpdateTrigger(c Change) {
+	oldT, newT := c.OldTable, c.TableRef
+	if oldT == nil || newT == nil {
+		return
+	}
+	oldCols, newCols := onUpdateColumns(oldT), onUpdateColumns(newT)
+	if sameOnUpdateColumns(oldCols, newCols) {
+		return
+	}
+	stmts := func(t *Table, cols []*Column) []string {
+		if len(cols) == 0 {
+			return r.onUpdateDropSQL(t)
+		}
+		return r.onUpdateCreateSQL(t, cols)
+	}
+	for _, sql := range stmts(newT, newCols) {
+		r.up(c, sql, "")
+	}
+	// down 은 마지막에 통째로 뒤집히므로 실행할 순서의 거꾸로 넣는다.
+	restore := stmts(oldT, oldCols)
+	for i := len(restore) - 1; i >= 0; i-- {
+		r.down(c, restore[i], "")
+	}
+}
+
+// onUpdateNames는 표의 자동 갱신 트리거 이름과, 그 트리거가 부르는 함수의 이름이다.
+// 둘은 같은 이름이고 함수는 표와 같은 스키마에 둔다.
+func (r *renderer) onUpdateNames(t *Table) (trigger, fn string) {
+	name := t.Name + "_on_update"
+	return r.id(name), r.tableNameParts(t.Namespace, name)
+}
+
+func (r *renderer) onUpdateCreateSQL(t *Table, cols []*Column) []string {
+	trigger, fn := r.onUpdateNames(t)
 	var body strings.Builder
 	body.WriteString("  IF NEW IS DISTINCT FROM OLD THEN\n")
 	for _, col := range cols {
@@ -566,17 +634,47 @@ func (r *renderer) onUpdateTrigger(c Change, t *Table) {
 			id, id, id, pgOnUpdateExpr(col.OnUpdate))
 	}
 	body.WriteString("  END IF;\n")
+	return []string{
+		fmt.Sprintf("CREATE OR REPLACE FUNCTION %s() RETURNS trigger AS $$\nBEGIN\n%s  RETURN NEW;\nEND\n$$ LANGUAGE plpgsql",
+			fn, body.String()),
+		// 표를 IF NOT EXISTS 로 만들므로 스크립트를 다시 돌려도 되어야 한다.
+		fmt.Sprintf("DROP TRIGGER IF EXISTS %s ON %s", trigger, r.tableName(t)),
+		fmt.Sprintf("CREATE TRIGGER %s BEFORE UPDATE ON %s FOR EACH ROW EXECUTE FUNCTION %s()",
+			trigger, r.tableName(t), fn),
+	}
+}
 
-	r.up(c, fmt.Sprintf("CREATE OR REPLACE FUNCTION %s() RETURNS trigger AS $$\nBEGIN\n%s  RETURN NEW;\nEND\n$$ LANGUAGE plpgsql",
-		fn, body.String()), "ON UPDATE 를 대신하는 트리거 함수 (PostgreSQL 에는 컬럼의 ON UPDATE 가 없습니다)")
-	// 표를 IF NOT EXISTS 로 만들므로 스크립트를 다시 돌려도 되어야 한다.
-	r.up(c, fmt.Sprintf("DROP TRIGGER IF EXISTS %s ON %s", r.id(name), r.tableName(t)), "")
-	r.up(c, fmt.Sprintf("CREATE TRIGGER %s BEFORE UPDATE ON %s FOR EACH ROW EXECUTE FUNCTION %s()",
-		r.id(name), r.tableName(t), fn), "")
+// onUpdateDropSQL은 트리거를 먼저 지운다. 트리거가 물고 있는 함수는 지울 수 없다.
+func (r *renderer) onUpdateDropSQL(t *Table) []string {
+	trigger, fn := r.onUpdateNames(t)
+	return []string{
+		fmt.Sprintf("DROP TRIGGER IF EXISTS %s ON %s", trigger, r.tableName(t)),
+		fmt.Sprintf("DROP FUNCTION IF EXISTS %s()", fn),
+	}
+}
 
-	// 트리거는 표와 함께 사라지지만 함수는 남는다. down 은 나중에 뒤집히므로
-	// DROP TABLE 보다 먼저 넣어야 표를 지운 **뒤에** 함수를 지운다.
-	r.down(c, fmt.Sprintf("DROP FUNCTION IF EXISTS %s()", fn), "")
+func onUpdateColumns(t *Table) []*Column {
+	var cols []*Column
+	for _, col := range t.Columns {
+		if col.OnUpdate != "" {
+			cols = append(cols, col)
+		}
+	}
+	return cols
+}
+
+// sameOnUpdateColumns는 두 표의 자동 갱신이 같은 함수 본문을 낳는지 본다.
+// 컬럼의 순서는 본문의 순서이므로 순서까지 같아야 같다.
+func sameOnUpdateColumns(a, b []*Column) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !strings.EqualFold(a[i].Name, b[i].Name) || !sameOnUpdate(a[i].OnUpdate, b[i].OnUpdate) {
+			return false
+		}
+	}
+	return true
 }
 
 // pgOnUpdateExpr는 자동 갱신 식을 PostgreSQL 에서 통하는 형태로 바꾼다.
@@ -595,6 +693,12 @@ func (r *renderer) dropTable(c Change) {
 		return
 	}
 	r.up(c, fmt.Sprintf("DROP TABLE %s%s", r.ifExistsClause(), r.tableName(t)), "")
+	// 자동 갱신 트리거는 표와 함께 사라지지만 함수는 남는다. 남겨 두면 아무도 부르지
+	// 않는 함수가 DB 에 쌓이고, 초안에는 보이지 않으니 이 앱으로는 지울 길도 없다.
+	if r.onUpdateByTrigger() && len(onUpdateColumns(t)) > 0 {
+		_, fn := r.onUpdateNames(t)
+		r.up(c, fmt.Sprintf("DROP FUNCTION IF EXISTS %s()", fn), "")
+	}
 
 	// 롤백은 테이블 구조를 되살릴 수 있지만 데이터는 되살릴 수 없다.
 	restore := Change{Kind: CreateTable, Table: c.Table, TableRef: t}
@@ -684,11 +788,8 @@ func (r *renderer) columnDef(t *Table, col *Column) string {
 	if col.OnUpdate != "" {
 		if r.dialect == "mysql" {
 			fmt.Fprintf(&b, " ON UPDATE %s", col.OnUpdate)
-		} else if !r.onUpdateByTrigger {
-			// 다른 DB 에는 이 문법이 없다. 조용히 빼면 "ERD 에는 있는데 DB 에는
-			// 없는" 컬럼이 되므로, 무엇을 해야 하는지까지 적어 둔다.
-			r.warn("%s는 컬럼의 ON UPDATE를 지원하지 않아 %s.%s 의 자동 갱신을 생략했습니다 — "+
-				"트리거로 만들어야 합니다", r.dialect, t.Display(), col.Name)
+		} else if !r.onUpdateByTrigger() {
+			r.warnOnUpdateSkipped(t, col)
 		}
 	}
 	if values := r.inlineEnumValues(col); values != "" {
@@ -698,6 +799,15 @@ func (r *renderer) columnDef(t *Table, col *Column) string {
 		fmt.Fprintf(&b, " COMMENT %s", quoteLiteral(col.Comment))
 	}
 	return b.String()
+}
+
+// warnOnUpdateSkipped는 컬럼의 자동 갱신을 만들지 못했다고 알린다.
+//
+// MySQL·PostgreSQL 밖에는 이 문법도 대신할 트리거도 없다. 조용히 빼면 "ERD 에는
+// 있는데 DB 에는 없는" 컬럼이 되므로, 무엇을 해야 하는지까지 적어 둔다.
+func (r *renderer) warnOnUpdateSkipped(t *Table, col *Column) {
+	r.warn("%s는 컬럼의 ON UPDATE를 지원하지 않아 %s.%s 의 자동 갱신을 생략했습니다 — "+
+		"트리거로 만들어야 합니다", r.dialect, t.Display(), col.Name)
 }
 
 // colType은 컬럼 정의에 쓰는 타입이다.
@@ -1038,6 +1148,12 @@ func (r *renderer) alterColumn(c Change) {
 			r.up(c, mssqlSetDescription(t, col.Name, col.Comment), "")
 			r.down(c, mssqlSetDescription(t, col.Name, old.Comment), "")
 		}
+	}
+
+	// 자동 갱신은 PostgreSQL 이면 syncOnUpdateTrigger 가 맡는다. 다른 DB 에서는 이
+	// 변경 하나만 왔을 때 문장이 하나도 나가지 않으므로, 경고가 없으면 반영된 줄 안다.
+	if _, ok := c.Attrs["onUpdate"]; ok && col.OnUpdate != "" && !r.onUpdateByTrigger() {
+		r.warnOnUpdateSkipped(t, col)
 	}
 }
 

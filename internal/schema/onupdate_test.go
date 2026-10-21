@@ -248,3 +248,174 @@ func TestDropTableRollbackOrder(t *testing.T) {
 		t.Errorf("되살린 표를 다시 지웁니다:\n%s", down)
 	}
 }
+
+// pgPosts는 posts 표다. onUpdate 에 적은 컬럼은 자동 갱신 컬럼이 된다.
+func pgPosts(cols ...*Column) *Schema {
+	all := append([]*Column{{Name: "id", Position: 1, Type: LogicalType{Base: TypeBigInt}}}, cols...)
+	for i, c := range all {
+		c.Position = i + 1
+	}
+	return &Schema{Dialect: "postgres", Shape: ShapeRelational, Tables: []*Table{{Name: "posts", Columns: all}}}
+}
+
+func pgTimeCol(name, onUpdate string) *Column {
+	return &Column{Name: name, Type: LogicalType{Base: TypeTimestamp}, Nullable: true, OnUpdate: onUpdate}
+}
+
+func noOnUpdateWarning(t *testing.T, plan *Plan) {
+	t.Helper()
+	for _, w := range plan.Warnings {
+		if strings.Contains(w, "ON UPDATE") {
+			t.Errorf("트리거로 대신했는데 생략했다고 경고합니다: %s", w)
+		}
+	}
+}
+
+// 이미 있는 표에 자동 갱신 컬럼을 더해도 트리거가 생겨야 한다. 표를 처음 만들 때만
+// 만들면, 초안에 updated_at 을 나중에 더한 사람은 "고쳐도 그대로인" 컬럼을 얻는다.
+func TestOnUpdateTriggerOnAddColumn(t *testing.T) {
+	plan := BuildPlan("postgres", Diff(pgPosts(), pgPosts(pgTimeCol("updated_at", "CURRENT_TIMESTAMP"))))
+	up, down := plan.UpSQL(), plan.DownSQL()
+
+	at := func(sql, s string) int { return strings.Index(sql, s) }
+	add, fn, trig := at(up, "ADD COLUMN"), at(up, `CREATE OR REPLACE FUNCTION "posts_on_update"()`),
+		at(up, `CREATE TRIGGER "posts_on_update" BEFORE UPDATE ON "posts"`)
+	if add < 0 || !(add < fn && fn < trig) {
+		t.Errorf("컬럼 → 함수 → 트리거 순서가 아닙니다:\n%s", up)
+	}
+	if !strings.Contains(up, `NEW."updated_at" := CURRENT_TIMESTAMP;`) {
+		t.Errorf("함수 본문에 컬럼이 없습니다:\n%s", up)
+	}
+	noOnUpdateWarning(t, plan)
+
+	// 되돌리면 트리거 → 함수 → 컬럼 순서로 지운다. 트리거가 물고 있는 함수는 지울 수 없다.
+	dTrig, dFn, dCol := at(down, `DROP TRIGGER IF EXISTS "posts_on_update" ON "posts"`),
+		at(down, `DROP FUNCTION IF EXISTS "posts_on_update"()`), at(down, "DROP COLUMN")
+	if dTrig < 0 || !(dTrig < dFn && dFn < dCol) {
+		t.Errorf("되돌리기 순서가 틀렸습니다:\n%s", down)
+	}
+
+	// 문장 번호가 컬럼 추가의 것이어야 그 변경만 되돌릴 때 트리거도 함께 돌아간다.
+	for _, st := range append(plan.Up, plan.Down...) {
+		if st.Seq != 1 {
+			t.Errorf("변경 번호가 %d 입니다: %s", st.Seq, st.SQL)
+		}
+	}
+}
+
+// 있던 컬럼에 자동 갱신을 켜고 끄는 것도 같다.
+func TestOnUpdateTriggerOnAlterColumn(t *testing.T) {
+	off := pgPosts(pgTimeCol("updated_at", ""))
+	on := pgPosts(pgTimeCol("updated_at", "CURRENT_TIMESTAMP(3)"))
+
+	plan := BuildPlan("postgres", Diff(off, on))
+	if up := plan.UpSQL(); !strings.Contains(up, `NEW."updated_at" := CURRENT_TIMESTAMP(3);`) ||
+		!strings.Contains(up, "CREATE TRIGGER") {
+		t.Errorf("켰는데 트리거가 없습니다:\n%s", up)
+	}
+	if down := plan.DownSQL(); !strings.Contains(down, `DROP FUNCTION IF EXISTS "posts_on_update"()`) {
+		t.Errorf("되돌리기가 함수를 지우지 않습니다:\n%s", down)
+	}
+	noOnUpdateWarning(t, plan)
+
+	// 마지막 하나를 끄면 트리거와 함수를 지운다. 빈 함수를 남기면 다시 읽을 때 설명할 수 없다.
+	plan = BuildPlan("postgres", Diff(on, off))
+	up := plan.UpSQL()
+	if strings.Contains(up, "CREATE OR REPLACE FUNCTION") {
+		t.Errorf("껐는데 함수를 다시 만듭니다:\n%s", up)
+	}
+	trig, fn := strings.Index(up, `DROP TRIGGER IF EXISTS "posts_on_update"`), strings.Index(up, `DROP FUNCTION IF EXISTS "posts_on_update"()`)
+	if trig < 0 || fn < trig {
+		t.Errorf("트리거 → 함수 순서로 지우지 않습니다:\n%s", up)
+	}
+	if down := plan.DownSQL(); !strings.Contains(down, `NEW."updated_at" := CURRENT_TIMESTAMP(3);`) {
+		t.Errorf("되돌리기가 옛 트리거를 되살리지 않습니다:\n%s", down)
+	}
+}
+
+// 자동 갱신 컬럼이 둘인 표에서 하나를 빼면 함수는 남은 하나로 다시 쓴다.
+func TestOnUpdateTriggerKeepsOtherColumns(t *testing.T) {
+	both := pgPosts(pgTimeCol("updated_at", "CURRENT_TIMESTAMP"), pgTimeCol("touched_at", "CURRENT_TIMESTAMP"))
+	one := pgPosts(pgTimeCol("updated_at", "CURRENT_TIMESTAMP"))
+
+	plan := BuildPlan("postgres", Diff(both, one))
+	up := plan.UpSQL()
+	if strings.Contains(up, "DROP FUNCTION") {
+		t.Errorf("남은 컬럼이 있는데 함수를 지웁니다:\n%s", up)
+	}
+	if !strings.Contains(up, `NEW."updated_at"`) || strings.Contains(up, `NEW."touched_at"`) {
+		t.Errorf("남은 컬럼만으로 다시 쓰지 않았습니다:\n%s", up)
+	}
+	if down := plan.DownSQL(); !strings.Contains(down, `NEW."touched_at"`) {
+		t.Errorf("되돌리기가 뺀 컬럼을 되살리지 않습니다:\n%s", down)
+	}
+}
+
+// 한 표의 컬럼 변경이 여럿이어도 함수는 한 번만, 모든 컬럼이 제자리에 있을 때 쓴다.
+func TestOnUpdateTriggerOncePerTable(t *testing.T) {
+	from := pgPosts(pgTimeCol("old_at", "CURRENT_TIMESTAMP"), pgTimeCol("seen_at", ""))
+	to := pgPosts(pgTimeCol("seen_at", "CURRENT_TIMESTAMP"), pgTimeCol("updated_at", "CURRENT_TIMESTAMP"))
+	plan := BuildPlan("postgres", Diff(from, to))
+	up := plan.UpSQL()
+
+	if n := strings.Count(up, "CREATE OR REPLACE FUNCTION"); n != 1 {
+		t.Fatalf("함수를 %d번 씁니다:\n%s", n, up)
+	}
+	fn := strings.Index(up, "CREATE OR REPLACE FUNCTION")
+	for _, s := range []string{"ADD COLUMN", "DROP COLUMN", `ALTER TABLE "posts" ALTER COLUMN`} {
+		if i := strings.Index(up, s); i > fn {
+			t.Errorf("%s 가 함수보다 뒤에 있습니다:\n%s", s, up)
+		}
+	}
+	if !strings.Contains(up, `NEW."seen_at"`) || !strings.Contains(up, `NEW."updated_at"`) || strings.Contains(up, `NEW."old_at"`) {
+		t.Errorf("함수 본문이 바뀐 뒤의 컬럼과 다릅니다:\n%s", up)
+	}
+}
+
+// 자동 갱신과 상관없는 변경에는 트리거를 건드리지 않는다. 건드리면 주석 하나 고친
+// 마이그레이션마다 함수가 다시 쓰인다.
+func TestOnUpdateTriggerUntouchedByOtherChanges(t *testing.T) {
+	a := pgPosts(pgTimeCol("updated_at", "CURRENT_TIMESTAMP"))
+	b := pgPosts(pgTimeCol("updated_at", "now()"))
+	b.Tables[0].Columns[1].Comment = "고친 시각"
+	up := BuildPlan("postgres", Diff(a, b)).UpSQL()
+	if strings.Contains(up, "FUNCTION") || strings.Contains(up, "TRIGGER") {
+		t.Errorf("주석만 고쳤는데 트리거를 건드립니다:\n%s", up)
+	}
+}
+
+// 표를 지우면 트리거는 함께 사라지지만 함수는 남는다. 남은 함수는 초안에 보이지
+// 않아 이 앱으로는 지울 길이 없다.
+func TestDropTableDropsOnUpdateFunction(t *testing.T) {
+	up := BuildPlan("postgres", Diff(pgPosts(pgTimeCol("updated_at", "CURRENT_TIMESTAMP")),
+		&Schema{Dialect: "postgres", Shape: ShapeRelational})).UpSQL()
+	table, fn := strings.Index(up, "DROP TABLE"), strings.Index(up, `DROP FUNCTION IF EXISTS "posts_on_update"()`)
+	if table < 0 || fn < table {
+		t.Errorf("표를 지운 뒤에 함수를 지우지 않습니다:\n%s", up)
+	}
+}
+
+// 다른 DB 에서 있던 컬럼에 자동 갱신을 켜면 문장이 하나도 나가지 않는다. 경고가
+// 없으면 반영된 줄 안다.
+func TestOnUpdateAlterWarnsOnOtherDialects(t *testing.T) {
+	for _, dialect := range []string{"mssql", "oracle", "sqlite"} {
+		mk := func(onUpdate string) *Schema {
+			return &Schema{Dialect: dialect, Shape: ShapeRelational, Tables: []*Table{{
+				Name: "posts", Columns: []*Column{{
+					Name: "updated_at", Position: 1, RawType: "timestamp",
+					Type: LogicalType{Base: TypeTimestamp}, OnUpdate: onUpdate,
+				}},
+			}}}
+		}
+		plan := BuildPlan(dialect, Diff(mk(""), mk("CURRENT_TIMESTAMP")))
+		found := false
+		for _, w := range plan.Warnings {
+			if strings.Contains(w, "트리거") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s: 자동 갱신을 켰는데 경고가 없습니다: %v", dialect, plan.Warnings)
+		}
+	}
+}

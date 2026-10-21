@@ -216,7 +216,7 @@ func diffTable(res *DiffResult, ft, tt *Table) {
 			}
 			res.add(Change{
 				Kind: AddColumn, Table: tt.Display(), Object: tc.Name,
-				TableRef: tt, Column: tc,
+				TableRef: tt, OldTable: ft, Column: tc,
 				Summary:     fmt.Sprintf("%s.%s 컬럼 추가 (%s)", tt.Display(), tc.Name, tc.Type.Canonical()),
 				Destructive: destructive,
 				LossyDetail: detail,
