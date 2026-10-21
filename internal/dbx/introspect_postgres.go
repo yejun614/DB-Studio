@@ -4,7 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"regexp"
+	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"dbstudio/internal/schema"
 )
@@ -253,6 +256,8 @@ func introspectPostgres(ctx context.Context, db *sql.DB, t Target, s *schema.Sch
 		return fmt.Errorf("제약 순회 실패: %w", err)
 	}
 
+	readOnUpdateTriggers(ctx, db, namespaces, tables, s)
+
 	// enum 타입
 	erows, err := db.QueryContext(ctx, `
 		SELECT n.nspname, t.typname,
@@ -380,6 +385,124 @@ func pgFKAction(code string) string {
 		return "SET DEFAULT"
 	}
 	return ""
+}
+
+// readOnUpdateTriggers는 이 앱이 만든 자동 갱신 트리거를 컬럼의 자동 갱신으로 되읽는다.
+//
+// PostgreSQL 에는 컬럼의 ON UPDATE 가 없어서 표마다 <표>_on_update 트리거로 대신한다
+// (schema.renderer.onUpdateTrigger). 그것을 읽지 않으면 초안에는 자동 갱신이 있고
+// DB 에는 없는 것으로 보여, 비교할 때마다 차이가 남는다.
+//
+// 이름만 보고 믿지 않는다. 트리거의 모양(BEFORE UPDATE · FOR EACH ROW · 조건·컬럼
+// 목록 없음 · 켜져 있음)과 함수 본문이 우리가 만든 그대로일 때만 알아본다. 사람이
+// 손으로 고친 트리거를 컬럼의 성질로 읽으면, 다음 마이그레이션이 그것을 우리 본문으로
+// 덮어쓴다.
+func readOnUpdateTriggers(ctx context.Context, db *sql.DB, namespaces []string,
+	tables map[string]*schema.Table, s *schema.Schema) {
+	// tgtype 19 = ROW(1) | BEFORE(2) | UPDATE(16). INSERT·DELETE·TRUNCATE 비트가
+	// 섞인 것은 우리 것이 아니다.
+	rows, err := db.QueryContext(ctx, `
+		SELECT n.nspname, c.relname, tg.tgname, p.prosrc
+		FROM pg_trigger tg
+		JOIN pg_class c ON c.oid = tg.tgrelid
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		JOIN pg_proc p ON p.oid = tg.tgfoid
+		JOIN pg_language l ON l.oid = p.prolang
+		WHERE NOT tg.tgisinternal AND c.relkind = 'r' AND n.nspname = ANY($1::text[])
+		  AND tg.tgtype = 19 AND tg.tgenabled <> 'D' AND tg.tgqual IS NULL
+		  AND cardinality(tg.tgattr::int2[]) = 0
+		  AND p.proname = tg.tgname AND p.pronamespace = c.relnamespace
+		  AND p.pronargs = 0 AND l.lanname = 'plpgsql'`, pgArray(namespaces))
+	if err != nil {
+		s.AddNote("자동 갱신 트리거를 읽지 못했습니다: %v", err)
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var ns, tblName, trigger, src string
+		if err := rows.Scan(&ns, &tblName, &trigger, &src); err != nil {
+			s.AddNote("자동 갱신 트리거를 읽지 못했습니다: %v", err)
+			return
+		}
+		tbl := tables[strings.ToLower(ns+"."+tblName)]
+		if tbl == nil || trigger != pgIdentifier(tblName+"_on_update") {
+			continue
+		}
+		exprs, ok := pgOnUpdateFromTrigger(src)
+		if !ok {
+			continue
+		}
+		cols := map[string]*schema.Column{}
+		for _, col := range tbl.Columns {
+			cols[col.Name] = col
+		}
+		missing := ""
+		for name := range exprs {
+			if cols[name] == nil {
+				missing = name
+				break
+			}
+		}
+		if missing != "" {
+			// 그 트리거는 UPDATE 마다 실패한다. 자동 갱신으로 읽지 않으면 다음
+			// 마이그레이션이 초안의 컬럼으로 본문을 다시 쓴다.
+			s.AddNote("%s 의 자동 갱신 트리거가 없는 컬럼 %s 를 가리켜 읽지 않았습니다", tbl.Display(), missing)
+			continue
+		}
+		for name, expr := range exprs {
+			cols[name].OnUpdate = expr
+		}
+	}
+	if err := rows.Err(); err != nil {
+		s.AddNote("자동 갱신 트리거를 읽지 못했습니다: %v", err)
+	}
+}
+
+// pgOnUpdateLine은 자동 갱신 함수 본문의 컬럼 한 줄이다. 식별자는 언제나 따옴표로 쓴다.
+var pgOnUpdateLine = regexp.MustCompile(
+	`^IF NEW\.("(?:[^"]|"")+") IS NOT DISTINCT FROM OLD\.("(?:[^"]|"")+") THEN NEW\.("(?:[^"]|"")+") := (CURRENT_TIMESTAMP(?:\([0-6]\))?); END IF;$`)
+
+// pgOnUpdateFromTrigger는 자동 갱신 함수의 본문(prosrc)에서 컬럼별 식을 읽는다.
+//
+// 본문이 우리가 만든 모양과 줄 단위로 같을 때만 ok 다. 한 줄이라도 다르면 사람이
+// 고친 함수이고, 그때는 컬럼의 성질이 아니라 표에 붙은 별개의 트리거다.
+func pgOnUpdateFromTrigger(src string) (map[string]string, bool) {
+	var lines []string
+	for _, line := range strings.Split(src, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			lines = append(lines, line)
+		}
+	}
+	head := []string{"BEGIN", "IF NEW IS DISTINCT FROM OLD THEN"}
+	tail := []string{"END IF;", "RETURN NEW;", "END"}
+	if len(lines) <= len(head)+len(tail) ||
+		!slices.Equal(lines[:len(head)], head) || !slices.Equal(lines[len(lines)-len(tail):], tail) {
+		return nil, false
+	}
+	exprs := map[string]string{}
+	for _, line := range lines[len(head) : len(lines)-len(tail)] {
+		m := pgOnUpdateLine.FindStringSubmatch(line)
+		if m == nil || m[1] != m[2] || m[1] != m[3] {
+			return nil, false
+		}
+		name := strings.ReplaceAll(m[1][1:len(m[1])-1], `""`, `"`)
+		exprs[name] = m[4]
+	}
+	return exprs, true
+}
+
+// pgIdentifier는 PostgreSQL 이 식별자를 저장하는 모양이다. 63바이트를 넘으면 글자
+// 경계에서 자른다 — 긴 표 이름의 트리거는 잘린 이름으로 저장된다.
+func pgIdentifier(name string) string {
+	const max = 63
+	if len(name) <= max {
+		return name
+	}
+	cut := max
+	for cut > 0 && !utf8.RuneStart(name[cut]) {
+		cut--
+	}
+	return name[:cut]
 }
 
 // parseIndexDefColumns는 pg_get_indexdef 결과에서 컬럼 목록을 추출한다.
