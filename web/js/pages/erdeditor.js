@@ -5017,9 +5017,9 @@ class Editor {
     // 둘 다 두는 것이 흔한 쓰임이라(updated_at) 한 칸으로 합칠 수 없다.
     //
     // 이 기능이 없는 DB 에서는 칸 자체를 그리지 않는다(cat.onUpdateLabel 이 비어
-    // 있다). 다른 DB 에서 같은 일을 하려면 트리거가 필요한데, 그것은 컬럼의 성질이
-    // 아니라 표에 붙는 별개의 물건이라 여기서 만들어 주는 척하면 ERD 가 실제
-    // 스키마와 어긋난다.
+    // 있다). PostgreSQL 은 서버가 표마다 트리거로 만들고 다시 읽을 때 컬럼의 성질로
+    // 되돌리므로 칸이 있다. 그 밖의 DB 는 트리거를 만들어 주지 않는다 — 만들지 않는
+    // 것을 칸으로 보여 주면 ERD 가 실제 스키마와 어긋난다.
     const onUpdatePick = suggestInput({
       items: (cat.onUpdateExprs ?? []).map((d) => ({
         value: d.expr, label: d.expr, hint: d.label,

@@ -174,8 +174,31 @@ func TestCatalogMarksOnUpdateTypes(t *testing.T) {
 			t.Errorf("%s 에 자동 갱신을 붙일 수 있다고 표시돼 있습니다", name)
 		}
 	}
+
+	// PostgreSQL 은 트리거로 대신 만들므로 칸이 있다. 시각 계열 둘에만 붙는다.
+	pg := TypeCatalog("postgres")
+	if pg.OnUpdateLabel == "" || len(pg.OnUpdateExprs) == 0 {
+		t.Fatal("PostgreSQL 카탈로그에 자동 갱신 정보가 없습니다")
+	}
+	pgAllowed := map[string]bool{}
+	for _, tp := range pg.Types {
+		if tp.OnUpdate {
+			pgAllowed[tp.Name] = true
+		}
+	}
+	for _, name := range []string{"TIMESTAMP", "TIMESTAMPTZ"} {
+		if !pgAllowed[name] {
+			t.Errorf("PostgreSQL %s 에 자동 갱신을 붙일 수 없다고 표시돼 있습니다", name)
+		}
+	}
+	for _, name := range []string{"INTEGER", "TEXT", "DATE", "TIME"} {
+		if pgAllowed[name] {
+			t.Errorf("PostgreSQL %s 에 자동 갱신을 붙일 수 있다고 표시돼 있습니다", name)
+		}
+	}
+
 	// 이 기능이 없는 DB 는 라벨이 비어 있어야 한다. 화면은 그것으로 칸을 감춘다.
-	for _, d := range []string{"postgres", "mssql", "oracle", "sqlite"} {
+	for _, d := range []string{"mssql", "oracle", "sqlite"} {
 		if TypeCatalog(d).OnUpdateLabel != "" {
 			t.Errorf("%s 에 자동 갱신 칸이 생겼습니다", d)
 		}
