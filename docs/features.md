@@ -312,6 +312,11 @@
   소수 자릿수 0인 DECIMAL에도, SQLite는 INTEGER에만), 정수가 아닌 타입으로 바꾸면 함께 꺼진다.
   생성되는 DDL도 DB마다 다르다(AUTO_INCREMENT / IDENTITY / GENERATED AS IDENTITY /
   INTEGER PRIMARY KEY)
+- **자동 갱신(ON UPDATE)**도 타입 창 안에 있다 — 행을 고칠 때마다 시각을 다시 채운다(`updated_at`).
+  MySQL 은 컬럼의 `ON UPDATE CURRENT_TIMESTAMP`, PostgreSQL 은 표마다 트리거 함수
+  `<표>_on_update` 와 `BEFORE UPDATE` 트리거로 만든다. PostgreSQL 은 표를 만들 때뿐 아니라 이미
+  있는 표에서 켜고 끌 때도 트리거를 맞추고, DB 를 다시 읽을 때 그 트리거를 컬럼의 자동 갱신으로
+  되돌린다. 다른 DB 에는 칸이 없다
 - **도메인(타입 재사용)**: "email = VARCHAR(320)"처럼 이름을 붙여 두고 컬럼에서 골라 쓴다.
   정의를 고치면 그 도메인을 쓰는 컬럼이 함께 바뀌고, 컬럼에서 타입을 직접 고치면 그 컬럼은
   도메인에서 벗어난다. 상단 **도메인** 탭에서 모아 관리한다. **ENUM 도메인**은 같은 이름의
