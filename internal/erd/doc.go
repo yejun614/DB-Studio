@@ -161,7 +161,11 @@ type Domain struct {
 	Nullable *bool `json:"nullable,omitempty"`
 	// Default는 기본값 식이다. 비어 있으면 도메인이 관여하지 않는다.
 	Default string `json:"default,omitempty"`
-	Comment string `json:"comment,omitempty"`
+	// OnUpdate는 자동 갱신 식이다(updated_at 의 ON UPDATE CURRENT_TIMESTAMP).
+	// 비어 있으면 도메인이 관여하지 않는다 — 기본값과 같은 규칙이다. 다만 도메인에서
+	// 지우면 도메인이 채워 준 컬럼에서도 함께 지운다(applyDomainUpdate).
+	OnUpdate string `json:"onUpdate,omitempty"`
+	Comment  string `json:"comment,omitempty"`
 }
 
 // Key는 대소문자를 무시한 식별 키다. 타입 이름과 같은 규칙을 쓴다.

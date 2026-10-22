@@ -21,6 +21,7 @@ type domainAddPayload struct {
 	Type     string  `json:"type"`
 	Nullable *bool   `json:"nullable,omitempty"`
 	Default  *string `json:"default,omitempty"`
+	OnUpdate *string `json:"onUpdate,omitempty"`
 	Comment  *string `json:"comment,omitempty"`
 }
 
@@ -47,8 +48,18 @@ func applyDomainAdd(doc *Document, op *Op) error {
 	if p.Default != nil {
 		d.Default = strings.TrimSpace(*p.Default)
 	}
+	if p.OnUpdate != nil {
+		expr, err := validateOnUpdate(*p.OnUpdate)
+		if err != nil {
+			return err
+		}
+		d.OnUpdate = expr
+	}
 	if p.Comment != nil {
 		d.Comment = strings.TrimSpace(*p.Comment)
+	}
+	if err := checkDomainOnUpdate(doc, d); err != nil {
+		return err
 	}
 	doc.Domains = append(doc.Domains, d)
 	// ENUM 도메인이면 타입을 만들거나, 같은 이름의 타입(실제 DB·SQL 에서 온 것)을
@@ -69,7 +80,9 @@ type domainUpdatePayload struct {
 	// 값을 비우는 것(NULL 불가, 기본값 없음)과 관여하지 않는 것은 다른 뜻이다.
 	ClearNullable bool    `json:"clearNullable,omitempty"`
 	Default       *string `json:"default,omitempty"`
-	Comment       *string `json:"comment,omitempty"`
+	// OnUpdate는 빈 문자열이면 도메인이 자동 갱신에서 손을 뗀다.
+	OnUpdate *string `json:"onUpdate,omitempty"`
+	Comment  *string `json:"comment,omitempty"`
 }
 
 func applyDomainUpdate(doc *Document, op *Op) error {
@@ -81,7 +94,7 @@ func applyDomainUpdate(doc *Document, op *Op) error {
 	if d == nil {
 		return notFound("도메인 %s 을(를) 찾을 수 없습니다", p.Name)
 	}
-	oldName := d.Name
+	oldName, oldOnUpdate := d.Name, d.OnUpdate
 
 	if p.NewName != nil {
 		name, err := validateIdent("도메인", *p.NewName)
@@ -111,8 +124,32 @@ func applyDomainUpdate(doc *Document, op *Op) error {
 	if p.Default != nil {
 		d.Default = strings.TrimSpace(*p.Default)
 	}
+	if p.OnUpdate != nil {
+		expr, err := validateOnUpdate(*p.OnUpdate)
+		if err != nil {
+			return err
+		}
+		d.OnUpdate = expr
+	}
 	if p.Comment != nil {
 		d.Comment = strings.TrimSpace(*p.Comment)
+	}
+	if err := checkDomainOnUpdate(doc, d); err != nil {
+		return err
+	}
+
+	// 도메인이 자동 갱신에서 손을 떼면, 도메인이 채워 준 컬럼에서도 지운다.
+	//
+	// 기본값처럼 컬럼에 남겨 두지 않는 이유: 자동 갱신은 고칠 때마다 값을 조용히 덮어쓰는
+	// 동작이라, 도메인에서 껐는데 컬럼에서 계속 돌면 그 차이가 데이터로만 드러난다. 그리고
+	// 도메인을 쓰는 컬럼은 타입 창이 자동 갱신 칸을 감추므로, 남은 것을 지우려면 도메인
+	// 연결부터 끊어야 했다. 도메인과 다른 값(연결하기 전부터 컬럼에 있던 것)은 둔다.
+	if oldOnUpdate != "" && d.OnUpdate == "" {
+		forDomainColumns(doc, oldName, func(c *schema.Column) {
+			if strings.EqualFold(c.OnUpdate, oldOnUpdate) {
+				c.OnUpdate = ""
+			}
+		})
 	}
 
 	// 이 도메인을 쓰는 컬럼에 새 정의를 흘려보낸다. 이것이 도메인의 존재 이유다 —
@@ -183,22 +220,51 @@ func (d *Document) findDomain(name string) *Domain {
 
 // applyDomainToColumns는 도메인을 쓰는 모든 컬럼을 도메인의 정의에 맞춘다.
 func applyDomainToColumns(doc *Document, oldName string, d *Domain) error {
+	var err error
+	forDomainColumns(doc, oldName, func(c *schema.Column) {
+		if err == nil {
+			err = setColumnDomain(doc, c, d)
+		}
+	})
+	return err
+}
+
+// forDomainColumns는 이름이 name 인 도메인을 쓰는 컬럼마다 fn 을 부른다.
+func forDomainColumns(doc *Document, name string, fn func(*schema.Column)) {
 	for _, t := range doc.Schema.Tables {
 		for _, c := range t.Columns {
-			if !strings.EqualFold(c.Domain, oldName) {
-				continue
-			}
-			if err := setColumnDomain(doc, c, d); err != nil {
-				return err
+			if strings.EqualFold(c.Domain, name) {
+				fn(c)
 			}
 		}
 	}
-	return nil
+}
+
+// checkDomainOnUpdate는 자동 갱신을 붙인 도메인의 타입이 시각 타입인지 본다.
+//
+// 화면은 시각 타입을 골랐을 때만 칸을 보이지만, 어시스턴트·MCP 길은 아무 조합이나
+// 보낼 수 있다. VARCHAR 도메인에 붙이면 그 도메인을 쓰는 컬럼마다 ON UPDATE 가 퍼지고,
+// ERD 에서는 멀쩡해 보이다가 마이그레이션에서 거부된다. 읽지 못한 타입(unknown)은
+// 막지 않는다 — 모르는 것과 안 되는 것은 다르다.
+func checkDomainOnUpdate(doc *Document, d *Domain) error {
+	if d.OnUpdate == "" {
+		return nil
+	}
+	lt, _, err := parseColumnType(doc, d.Type)
+	if err != nil {
+		return err
+	}
+	switch lt.Base {
+	case schema.TypeTimestamp, schema.TypeTimestampTZ, schema.TypeUnknown:
+		return nil
+	}
+	return invalid("자동 갱신은 날짜+시각 타입 도메인에만 붙일 수 있습니다 (%s 은(는) %s) — 타입을 바꾸려면 자동 갱신을 함께 비우세요",
+		d.Name, d.Type)
 }
 
 // setColumnDomain은 컬럼에 도메인을 입힌다.
 //
-// 타입은 언제나 덮어쓰고, NULL 허용과 기본값은 도메인이 정한 경우에만 덮어쓴다.
+// 타입은 언제나 덮어쓰고, NULL 허용·기본값·자동 갱신은 도메인이 정한 경우에만 덮어쓴다.
 // 이 구분이 필요한 이유: "이메일" 도메인은 타입은 정해 주지만, 어떤 표에서는 필수이고
 // 어떤 표에서는 선택일 수 있다.
 func setColumnDomain(doc *Document, col *schema.Column, d *Domain) error {
@@ -219,6 +285,9 @@ func setColumnDomain(doc *Document, col *schema.Column, d *Domain) error {
 	if d.Default != "" {
 		col.HasDefault = true
 		col.Default = d.Default
+	}
+	if d.OnUpdate != "" {
+		col.OnUpdate = d.OnUpdate
 	}
 	return nil
 }

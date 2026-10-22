@@ -158,3 +158,104 @@ func TestDomainUndoRoundTrip(t *testing.T) {
 		t.Errorf("컬럼 타입 = %q, 함께 되돌아가야 합니다", got)
 	}
 }
+
+// 자동 갱신도 도메인이 정할 수 있다. "수정 시각" 도메인 하나로 표마다 같은 updated_at 을
+// 만들려는 것이 이 기능의 쓰임이다.
+func TestDomainOnUpdatePropagates(t *testing.T) {
+	doc := twoTables(t)
+	apply(t, doc, OpDomainAdd,
+		`{"name":"modified","type":"timestamptz","default":"CURRENT_TIMESTAMP","onUpdate":"CURRENT_TIMESTAMP"}`)
+	apply(t, doc, OpColumnAdd, `{"table":"users","name":"updated_at","domain":"modified"}`)
+	apply(t, doc, OpColumnAdd, `{"table":"orders","name":"updated_at","type":"timestamptz"}`)
+	apply(t, doc, OpColumnUpdate, `{"table":"orders","name":"updated_at","domain":"modified"}`)
+
+	for _, tbl := range []string{"users", "orders"} {
+		if got := doc.findTable(tbl).Column("updated_at").OnUpdate; got != "CURRENT_TIMESTAMP" {
+			t.Errorf("%s.updated_at 자동 갱신 = %q, 도메인의 값이어야 합니다", tbl, got)
+		}
+	}
+
+	// 고치면 따라 바뀐다.
+	apply(t, doc, OpDomainUpdate, `{"name":"modified","onUpdate":"CURRENT_TIMESTAMP(3)"}`)
+	if got := doc.findTable("users").Column("updated_at").OnUpdate; got != "CURRENT_TIMESTAMP(3)" {
+		t.Errorf("자동 갱신 = %q, 새 정의가 전파되지 않았습니다", got)
+	}
+
+	// 관여하지 않는 도메인은 컬럼의 자동 갱신을 건드리지 않는다.
+	apply(t, doc, OpDomainAdd, `{"name":"stamp","type":"timestamptz"}`)
+	apply(t, doc, OpColumnAdd, `{"table":"orders","name":"seen_at","type":"timestamptz"}`)
+	apply(t, doc, OpColumnUpdate, `{"table":"orders","name":"seen_at","onUpdate":"CURRENT_TIMESTAMP"}`)
+	apply(t, doc, OpColumnUpdate, `{"table":"orders","name":"seen_at","domain":"stamp"}`)
+	if got := doc.findTable("orders").Column("seen_at").OnUpdate; got != "CURRENT_TIMESTAMP" {
+		t.Errorf("관여하지 않는 도메인이 자동 갱신을 지웠습니다: %q", got)
+	}
+}
+
+// 도메인에서 자동 갱신을 끄면 도메인이 채워 준 컬럼에서도 꺼진다. 남겨 두면 도메인을
+// 쓰는 컬럼의 타입 창에는 그 칸이 없어, 지우려면 도메인 연결부터 끊어야 했다.
+func TestDomainOnUpdateClearFollows(t *testing.T) {
+	doc := twoTables(t)
+	apply(t, doc, OpDomainAdd, `{"name":"modified","type":"timestamptz","onUpdate":"CURRENT_TIMESTAMP"}`)
+	apply(t, doc, OpColumnAdd, `{"table":"users","name":"updated_at","domain":"modified"}`)
+	// 연결하기 전부터 다른 값을 가진 컬럼. 도메인이 준 것이 아니므로 남는다.
+	apply(t, doc, OpColumnAdd, `{"table":"orders","name":"updated_at","type":"timestamptz"}`)
+	apply(t, doc, OpColumnUpdate, `{"table":"orders","name":"updated_at","onUpdate":"CURRENT_TIMESTAMP(6)"}`)
+	doc.findTable("orders").Column("updated_at").Domain = "modified"
+
+	apply(t, doc, OpDomainUpdate, `{"name":"modified","newName":"changed","onUpdate":""}`)
+	if got := doc.findDomain("changed").OnUpdate; got != "" {
+		t.Errorf("도메인 자동 갱신 = %q", got)
+	}
+	if got := doc.findTable("users").Column("updated_at").OnUpdate; got != "" {
+		t.Errorf("도메인이 준 자동 갱신이 남았습니다: %q", got)
+	}
+	if got := doc.findTable("orders").Column("updated_at").OnUpdate; got != "CURRENT_TIMESTAMP(6)" {
+		t.Errorf("도메인과 다른 컬럼의 값을 지웠습니다: %q", got)
+	}
+	// 이름을 같이 바꿔도 연결은 따라간다(지우는 일은 옛 이름으로 찾는다).
+	if got := doc.findTable("users").Column("updated_at").Domain; got != "changed" {
+		t.Errorf("연결 = %q", got)
+	}
+}
+
+// 시각 타입이 아닌 도메인에는 붙지 않는다. 어시스턴트·MCP 길은 아무 조합이나 보낼 수 있다.
+func TestDomainOnUpdateValidation(t *testing.T) {
+	doc := twoTables(t)
+	applyErr(t, doc, OpDomainAdd, `{"name":"code","type":"varchar(20)","onUpdate":"CURRENT_TIMESTAMP"}`,
+		"invalid", "날짜+시각")
+	applyErr(t, doc, OpDomainAdd, `{"name":"stamp","type":"timestamptz","onUpdate":"my_func()"}`,
+		"invalid", "CURRENT_TIMESTAMP")
+
+	apply(t, doc, OpDomainAdd, `{"name":"stamp","type":"timestamptz","onUpdate":"CURRENT_TIMESTAMP"}`)
+	// 타입만 바꾸면 거절한다. 자동 갱신을 함께 비우면 된다.
+	applyErr(t, doc, OpDomainUpdate, `{"name":"stamp","type":"date"}`, "invalid", "함께 비우")
+	apply(t, doc, OpDomainUpdate, `{"name":"stamp","type":"date","onUpdate":""}`)
+
+	// MySQL 의 DATETIME 도 시각 타입이다.
+	my := NewDocument("doc2", "테스트", "conn1", "mysql")
+	apply(t, my, OpDomainAdd, `{"name":"modified","type":"datetime(3)","onUpdate":"CURRENT_TIMESTAMP(3)"}`)
+}
+
+// 되돌리기는 도메인의 자동 갱신과 그것이 바꾼 컬럼을 함께 되돌려야 한다. 새 칸이 깊은
+// 복사에서 빠지면 사본까지 함께 바뀌어 "되돌릴 것이 없다"고 판단한다.
+func TestDomainOnUpdateUndo(t *testing.T) {
+	doc := twoTables(t)
+	apply(t, doc, OpDomainAdd, `{"name":"modified","type":"timestamptz"}`)
+	apply(t, doc, OpColumnAdd, `{"table":"users","name":"updated_at","domain":"modified"}`)
+	before := doc.Clone()
+	apply(t, doc, OpDomainUpdate, `{"name":"modified","onUpdate":"CURRENT_TIMESTAMP"}`)
+
+	undo := Diff(doc, before)
+	if undo == nil {
+		t.Fatal("되돌릴 것이 없다고 판단했습니다")
+	}
+	if err := Apply(doc, undo); err != nil {
+		t.Fatalf("되돌리기 실패: %v", err)
+	}
+	if got := doc.findDomain("modified").OnUpdate; got != "" {
+		t.Errorf("도메인 자동 갱신 = %q", got)
+	}
+	if got := doc.findTable("users").Column("updated_at").OnUpdate; got != "" {
+		t.Errorf("컬럼 자동 갱신 = %q, 함께 되돌아가야 합니다", got)
+	}
+}
