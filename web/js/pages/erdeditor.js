@@ -4779,6 +4779,7 @@ class Editor {
         domain.nullable === false ? badge('NOT NULL', 'neutral') : null,
         domain.nullable === true ? badge('NULL 허용', 'neutral') : null,
         domain.default ? badge(`기본값 ${truncate(domain.default, 20)}`, 'neutral') : null,
+        domain.onUpdate ? badge(`자동 갱신 ${truncate(domain.onUpdate, 24)}`, 'neutral') : null,
         users.length
           ? h('span.muted', {}, `${users.length}개 컬럼에서 사용`)
           : h('span.muted', {}, '사용 중인 컬럼 없음'),
@@ -4828,11 +4829,35 @@ class Editor {
         ? field(paramLabel(def), input({
           value: def.default ?? '',
           placeholder: paramPlaceholder(def),
-          oninput: (e) => { typeInput.value = buildType(def, { arg: e.target.value }); },
+          oninput: (e) => {
+            typeInput.value = buildType(def, { arg: e.target.value });
+            syncOnUpdate();
+          },
         }))
         : null);
       if (def) typeInput.value = buildType(def, { arg: def.default ?? '' });
+      syncOnUpdate();
     };
+
+    // 자동 갱신(ON UPDATE). 컬럼의 타입 창과 같은 규칙으로 보인다 — 이 DB 에 기능이
+    // 있고, 고른 타입이 시각 타입이거나 우리가 읽지 못하는 타입일 때. 도메인을 쓰는
+    // 컬럼의 타입 창은 이 칸을 감추므로, 도메인 컬럼의 자동 갱신은 여기서만 정한다.
+    const onUpdatePick = suggestInput({
+      items: (cat.onUpdateExprs ?? []).map((d) => ({
+        value: d.expr, label: d.expr, hint: d.label,
+      })),
+      value: domain?.onUpdate ?? '',
+      placeholder: '비우면 도메인이 자동 갱신에 관여하지 않음',
+    });
+    const onUpdateWrap = field(`${cat.onUpdateLabel ?? 'ON UPDATE'} (자동 갱신)`, onUpdatePick.node,
+      `${cat.onUpdateNote ?? ''} 도메인에서 비우면 이 도메인이 채워 준 컬럼에서도 함께 지워집니다.`);
+    const syncOnUpdate = () => {
+      const raw = typeInput.value.trim();
+      const parsed = parseType(raw, cat);
+      const fits = parsed ? Boolean(parsed.def.onUpdate) : Boolean(raw);
+      onUpdateWrap.style.display = cat.onUpdateLabel && fits ? '' : 'none';
+    };
+    typeInput.addEventListener('input', syncOnUpdate);
     const save = h('button.btn.btn-primary', { type: 'button' }, domain ? '저장' : '추가');
     const close = openModal({
       title: domain ? `도메인 ${domain.name}` : '도메인 추가',
@@ -4844,6 +4869,7 @@ class Editor {
         field('타입', typeInput, '고르개로 채우거나 직접 적을 수 있습니다.'),
         field('NULL 여부', nullSelect),
         field('기본값', defaultInput, '비워 두면 도메인이 기본값에 관여하지 않습니다.'),
+        onUpdateWrap,
         field('설명', commentInput),
       ],
       footer: (dismiss) => [
@@ -4851,6 +4877,7 @@ class Editor {
         save,
       ],
     });
+    syncOnUpdate();
 
     save.addEventListener('click', () => {
       const name = nameInput.value.trim();
@@ -4860,6 +4887,9 @@ class Editor {
         return;
       }
       const nullable = nullSelect.value === '' ? null : nullSelect.value === 'yes';
+      // 칸이 감춰졌으면(시각이 아닌 타입) 비워 보낸다. 서버는 시각이 아닌 타입의
+      // 도메인에 자동 갱신이 남는 것을 거절한다.
+      const onUpdate = onUpdateWrap.style.display !== 'none' ? onUpdatePick.value.trim() : '';
       if (domain) {
         this.send('domain.update', {
           name: domain.name,
@@ -4868,6 +4898,7 @@ class Editor {
           nullable: nullable === null ? undefined : nullable,
           clearNullable: nullable === null,
           default: defaultInput.value.trim(),
+          onUpdate,
           comment: commentInput.value.trim(),
         });
       } else {
@@ -4876,6 +4907,7 @@ class Editor {
           type,
           nullable: nullable === null ? undefined : nullable,
           default: defaultInput.value.trim(),
+          onUpdate,
           comment: commentInput.value.trim(),
         });
       }
@@ -5091,6 +5123,7 @@ class Editor {
       const dom = domains.find((d) => d.name === domainPick.value);
       mount(noteLine, usingDomain
         ? `도메인 "${dom?.name}" 의 정의를 씁니다: ${dom?.type}`
+          + (dom?.onUpdate ? ` · 자동 갱신 ${dom.onUpdate}` : '')
         : (def?.note ?? ''));
       preview.textContent = usingDomain ? (dom?.type ?? '') : (compose() || '(타입을 고르세요)');
     };
