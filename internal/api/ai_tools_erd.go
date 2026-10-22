@@ -112,13 +112,15 @@ func erdTools() map[string]*erdTool {
 				"type":     str("DB 타입 (예: VARCHAR(320), DECIMAL(18,2))"),
 				"nullable": boolp("이 도메인을 쓰는 컬럼의 NULL 허용 (생략하면 컬럼마다 다르게 둔다)"),
 				"default":  str("기본값 식 (선택)"),
-				"comment":  str("설명 (선택)"),
+				"onUpdate": str("자동 갱신 식 (선택, 예: CURRENT_TIMESTAMP). 행을 고칠 때마다 다시 채운다 — " +
+					"updated_at 용. 날짜+시각 타입에만 붙고, MySQL 은 컬럼의 ON UPDATE, PostgreSQL 은 표마다 트리거가 된다"),
+				"comment": str("설명 (선택)"),
 			}, "name", "type"),
 			Run: erdAddDomain,
 		},
 		{
 			Name: "update_domain",
-			Description: "도메인의 이름·타입·NULL 허용·기본값·설명을 바꾼다. 바꿀 것만 넘긴다. " +
+			Description: "도메인의 이름·타입·NULL 허용·기본값·자동 갱신·설명을 바꾼다. 바꿀 것만 넘긴다. " +
 				"**이 도메인을 쓰는 컬럼들도 함께 바뀐다** — 그것이 도메인을 두는 이유다.",
 			Schema: objectSchema(map[string]any{
 				"name":     str("지금 도메인 이름"),
@@ -128,6 +130,8 @@ func erdTools() map[string]*erdTool {
 				"clearNullable": boolp(
 					"true면 NULL 허용을 도메인이 정하지 않게 되돌린다 (컬럼마다 다르게)"),
 				"default": str("기본값 식 (선택)"),
+				"onUpdate": str("자동 갱신 식 (선택). 빈 문자열이면 도메인이 자동 갱신에서 손을 떼고, " +
+					"도메인이 채워 준 컬럼에서도 함께 지워진다. 시각이 아닌 타입으로 바꿀 때는 함께 비운다"),
 				"comment": str("설명 (선택)"),
 			}, "name"),
 			Run: erdUpdateDomain,
@@ -970,6 +974,7 @@ type erdDomainOut struct {
 	Type     string `json:"type"`
 	Nullable *bool  `json:"nullable,omitempty"`
 	Default  string `json:"default,omitempty"`
+	OnUpdate string `json:"onUpdate,omitempty"`
 	Comment  string `json:"comment,omitempty"`
 	// UsedBy는 이 도메인을 쓰는 컬럼들이다("orders.total" 꼴).
 	//
@@ -982,7 +987,7 @@ func domainsOut(doc *erd.Document) []erdDomainOut {
 	out := make([]erdDomainOut, 0, len(doc.Domains))
 	for _, d := range doc.Domains {
 		item := erdDomainOut{
-			Name: d.Name, Type: d.Type, Default: d.Default, Comment: d.Comment,
+			Name: d.Name, Type: d.Type, Default: d.Default, OnUpdate: d.OnUpdate, Comment: d.Comment,
 		}
 		if d.Nullable != nil {
 			v := *d.Nullable
@@ -1016,6 +1021,7 @@ func erdAddDomain(ec *erdToolContext, args json.RawMessage) (string, error) {
 		Type     string  `json:"type"`
 		Nullable *bool   `json:"nullable"`
 		Default  *string `json:"default"`
+		OnUpdate *string `json:"onUpdate"`
 		Comment  *string `json:"comment"`
 	}
 	if err := parseArgs(args, &in); err != nil {
@@ -1027,6 +1033,9 @@ func erdAddDomain(ec *erdToolContext, args json.RawMessage) (string, error) {
 	}
 	if in.Default != nil {
 		payload["default"] = *in.Default
+	}
+	if in.OnUpdate != nil {
+		payload["onUpdate"] = *in.OnUpdate
 	}
 	if in.Comment != nil {
 		payload["comment"] = *in.Comment
@@ -1049,6 +1058,7 @@ func erdUpdateDomain(ec *erdToolContext, args json.RawMessage) (string, error) {
 		Nullable      *bool   `json:"nullable"`
 		ClearNullable *bool   `json:"clearNullable"`
 		Default       *string `json:"default"`
+		OnUpdate      *string `json:"onUpdate"`
 		Comment       *string `json:"comment"`
 	}
 	if err := parseArgs(args, &in); err != nil {
@@ -1080,6 +1090,9 @@ func erdUpdateDomain(ec *erdToolContext, args json.RawMessage) (string, error) {
 	}
 	if in.Default != nil {
 		payload["default"] = *in.Default
+	}
+	if in.OnUpdate != nil {
+		payload["onUpdate"] = *in.OnUpdate
 	}
 	if in.Comment != nil {
 		payload["comment"] = *in.Comment

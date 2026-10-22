@@ -147,3 +147,54 @@ func TestUpdateColumnDomain(t *testing.T) {
 		t.Errorf("연결이 안 끊겼습니다: %q", d)
 	}
 }
+
+// 도메인의 자동 갱신도 툴로 정할 수 있어야 하고, 저장했다가 다시 읽어도 남아야 한다.
+// 도메인은 JSON 으로 저장되므로 새 칸이 빠지면 오류 없이 사라진다.
+func TestDomainToolsOnUpdate(t *testing.T) {
+	e := newTestEnv(t)
+	c := login(t, e, "alice")
+	docID := createStandalone(t, e, c, "수정 시각", "postgres")
+
+	registry := aiTools()
+	tc := &toolContext{ctx: context.Background(), srv: e.srv, user: e.user}
+	run := func(name, args string) (string, error) {
+		return registry[name].Run(tc, json.RawMessage(args))
+	}
+	const doc = `"document":"수정 시각"`
+	mustRun := func(name, args string) string {
+		t.Helper()
+		out, err := run(name, args)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		return out
+	}
+
+	mustRun("erd_add_domain", `{`+doc+`,"name":"modified","type":"timestamptz","onUpdate":"CURRENT_TIMESTAMP"}`)
+	mustRun("erd_add_table", `{`+doc+`,"name":"posts"}`)
+	mustRun("erd_add_column", `{`+doc+`,"table":"posts","name":"updated_at","domain":"modified"}`)
+
+	got, _ := e.st.GetERDDocument(context.Background(), docID)
+	if d := got.Domains[0].OnUpdate; d != "CURRENT_TIMESTAMP" {
+		t.Errorf("저장된 도메인 자동 갱신 = %q", d)
+	}
+	if v := got.Schema.Tables[0].Column("updated_at").OnUpdate; v != "CURRENT_TIMESTAMP" {
+		t.Errorf("컬럼 자동 갱신 = %q, 도메인을 따라야 합니다", v)
+	}
+	// 목록에 보이지 않으면 모델은 이미 켜진 것을 모르고 다시 켜려 든다.
+	if out := mustRun("erd_list_domains", `{`+doc+`}`); !strings.Contains(out, `"onUpdate": "CURRENT_TIMESTAMP"`) {
+		t.Errorf("list_domains 에 자동 갱신이 없습니다: %s", out)
+	}
+
+	// 시각이 아닌 타입에는 붙지 않는다.
+	if _, err := run("erd_add_domain", `{`+doc+`,"name":"code","type":"varchar(20)","onUpdate":"CURRENT_TIMESTAMP"}`); err == nil {
+		t.Error("varchar 도메인에 자동 갱신이 붙었습니다")
+	}
+
+	// 비우면 도메인이 채워 준 컬럼에서도 지운다.
+	mustRun("erd_update_domain", `{`+doc+`,"name":"modified","onUpdate":""}`)
+	got, _ = e.st.GetERDDocument(context.Background(), docID)
+	if v := got.Schema.Tables[0].Column("updated_at").OnUpdate; v != "" {
+		t.Errorf("도메인에서 비웠는데 컬럼 자동 갱신 = %q", v)
+	}
+}
