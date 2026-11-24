@@ -312,9 +312,9 @@ func TestERDDocumentList(t *testing.T) {
 	}
 }
 
-// 커넥션을 지우면 그 커넥션의 초안도 함께 사라져야 한다.
-// 대상이 없는 초안은 dialect도 권한도 판정할 수 없다.
-func TestERDDocumentCascadesWithConnection(t *testing.T) {
+// 커넥션을 지워도 그 커넥션의 초안은 보존된다 — 커넥션 연결만 끊기고 독립 초안으로
+// 남는다. 그 자리에서 지워졌다고 생각하면 한참 그린 설계가 조용히 사라진다.
+func TestERDDocumentKeptOnConnectionDelete(t *testing.T) {
 	ctx, st, connID := erdFixture(t)
 	doc := erd.NewDocument("d1", "d", connID, "postgres")
 	if err := st.CreateERDDocument(ctx, doc, "", "", nil); err != nil {
@@ -323,8 +323,12 @@ func TestERDDocumentCascadesWithConnection(t *testing.T) {
 	if err := st.DeleteConnection(ctx, connID); err != nil {
 		t.Fatalf("delete connection: %v", err)
 	}
-	if _, err := st.GetERDDocument(ctx, "d1"); !errors.Is(err, ErrNotFound) {
-		t.Errorf("커넥션 삭제 후 문서 조회 = %v, 기대값 ErrNotFound", err)
+	got, err := st.GetERDDocument(ctx, "d1")
+	if err != nil {
+		t.Fatalf("커넥션 삭제 후 문서 조회 = %v, 보존되어야 합니다", err)
+	}
+	if got.ConnectionID != "" {
+		t.Errorf("ConnectionID = %q, 비워져야 합니다", got.ConnectionID)
 	}
 }
 
@@ -492,15 +496,15 @@ func TestStandaloneMigrationKeepsOpsAndChat(t *testing.T) {
 		t.Fatalf("독립 초안을 넣지 못했습니다: %v", err)
 	}
 
-	// 커넥션을 지우면 그 커넥션의 초안만 사라지고 독립 초안은 남아야 한다.
+	// 커넥션을 지워도 그 커넥션의 초안은 보존되고, 독립 초안도 그대로 남아야 한다.
 	if _, err := db.ExecContext(ctx, `DELETE FROM connections WHERE id = 'c1'`); err != nil {
 		t.Fatalf("delete connection: %v", err)
 	}
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM erd_documents`).Scan(&docs); err != nil {
 		t.Fatalf("count after delete: %v", err)
 	}
-	if docs != 1 {
-		t.Fatalf("커넥션 삭제 후 남은 문서 수가 %d 입니다 (독립 초안 1개여야 합니다)", docs)
+	if docs != 2 {
+		t.Fatalf("커넥션 삭제 후 남은 문서 수가 %d 입니다 (두 문서 모두 보존되어야 합니다)", docs)
 	}
 }
 

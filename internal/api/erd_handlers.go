@@ -1021,7 +1021,8 @@ func (s *Server) resolveERDDocument(c *fiber.Ctx, docID string, need model.Level
 	}
 	conn, err := s.st.GetConnection(c.Context(), doc.ConnectionID)
 	if errors.Is(err, store.ErrNotFound) {
-		// erd_documents.connection_id는 ON DELETE CASCADE이므로 정상적으로는 없는 상황이다.
+		// 커넥션이 사라질 때 문서는 ON DELETE SET NULL로 보존되므로, 이 자리는
+		// 실제 DB에서 행이 없어진 경우에만 도달한다.
 		return nil, nil, false, fiber.NewError(fiber.StatusNotFound, "문서의 대상 커넥션이 없습니다")
 	}
 	if err != nil {

@@ -232,7 +232,7 @@ var impactSources = []struct {
 	table string
 	kept  bool
 }{
-	{"erd", "erd_documents", false},
+	{"erd", "erd_documents", true},
 	{"migration", "migrations", false},
 	{"version", "schema_versions", false},
 	{"snapshot", "schema_snapshots", false},
